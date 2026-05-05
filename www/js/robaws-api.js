@@ -629,24 +629,88 @@ const RobawsAPI = {
     async uploadEmployeePhoto(employeeId, file, fileName = 'Foto.jpg') {
         return await this.uploadFile(`employees/${employeeId}/documents`, file, fileName);
     },
+    /**
+     * Haal de profielfoto-blob op voor een werknemer.
+     *
+     * Returns:
+     *   - Blob       → foto succesvol opgehaald
+     *   - null       → werknemer heeft GEEN profielfoto in Robaws (documents-
+     *                  lijst is bereikbaar maar bevat geen foto/photo/avatar)
+     *   - throws     → kon documents-lijst of bestand niet ophalen (offline,
+     *                  redirect, fout). Caller MOET de bestaande cache
+     *                  behouden, NIET wissen.
+     *
+     * BUG-fix: voorheen was er geen onderscheid tussen "geen foto" en "fout",
+     * waardoor `refreshAvatarFromRobaws` de cache wiste bij elke netwerkfout.
+     * Bovendien gebruiken we nu de native Java-bridge voor de download omdat
+     * de directe fetch naar /documents/{id} in de WebView een redirect naar
+     * de Robaws login-pagina krijgt.
+     */
     async getEmployeePhotoBlob(employeeId) {
-        try {
-            const res = await this.get(`employees/${employeeId}/documents`);
-            if (res.code !== 200 || !res.data) return null;
-            const items = res.data.items || res.data || [];
-            // Zoek meest recente document met "foto" of "photo" in de naam
-            const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
-            if (!photos.length) return null;
-            photos.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-            const doc = photos[0];
-            if (!doc.id) return null;
-            // Download de inhoud via /documents/{id}/preview of /documents/{id}
-            const url = this.BASE_URL + '/documents/' + doc.id;
-            const dlRes = await fetch(url, { headers: this.getHeaders() });
-            if (!dlRes.ok) return null;
-            const blob = await dlRes.blob();
-            return blob;
-        } catch(e) { return null; }
+        // Stap 1: documents-lijst ophalen
+        const res = await this.get(`employees/${employeeId}/documents`);
+        if (res.code !== 200 || !res.data) {
+            const e = new Error('Documents-lijst niet bereikbaar (code ' + res.code + ')');
+            e.code = 'DOCS_UNREACHABLE';
+            throw e;
+        }
+        const items = res.data.items || res.data || [];
+        // Zoek alle documents met "foto/photo/profile/avatar" in de naam
+        const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
+        if (!photos.length) return null;  // explicit: geen foto in Robaws
+
+        // Sorteer op createdAt desc (nieuwste eerst). Bij gelijke createdAt:
+        // sorteer op naam desc (zodat Foto_2026-05-05_... vóór Foto_2026-04-01_... komt).
+        photos.sort((a, b) => {
+            const dateCmp = (b.createdAt || '').localeCompare(a.createdAt || '');
+            if (dateCmp !== 0) return dateCmp;
+            return (b.name || '').localeCompare(a.name || '');
+        });
+        const doc = photos[0];
+        if (!doc.id) return null;
+
+        // Stap 2: download het bestand. Eerst native bridge (omzeilt redirect),
+        // anders directe fetch als laatste poging.
+        if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
+            try {
+                const result = QEBridge.downloadRobawsDocument(
+                    String(doc.id), this.API_KEY, this.API_SECRET, this.TENANT
+                );
+                if (result && result.length > 0) {
+                    const pipeIdx = result.indexOf('|');
+                    const contentType = pipeIdx > 0 ? result.substring(0, pipeIdx) : 'image/jpeg';
+                    const base64 = pipeIdx > 0 ? result.substring(pipeIdx + 1) : result;
+                    const binary = atob(base64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    return new Blob([bytes], { type: contentType });
+                }
+                // Native bridge gaf lege string → throw (fout, geen "geen foto")
+                const e = new Error('Native download gaf lege response');
+                e.code = 'DOWNLOAD_EMPTY';
+                throw e;
+            } catch(e) {
+                // Native bridge faalde — val terug op fetch
+                console.warn('[RobawsAPI] Native photo-download mislukt, val terug op fetch:', e.message);
+            }
+        }
+
+        // Fallback: directe fetch (werkt in een browser/PWA-context)
+        const url = this.BASE_URL + '/documents/' + doc.id;
+        const dlRes = await fetch(url, { headers: this.getHeaders() });
+        if (!dlRes.ok) {
+            const e = new Error('Document download faalde (HTTP ' + dlRes.status + ')');
+            e.code = 'DOWNLOAD_FAILED';
+            throw e;
+        }
+        const blob = await dlRes.blob();
+        // Sanity check: WebView krijgt soms HTML-redirect terug met content-type text/html
+        if (blob.type && blob.type.startsWith('text/html')) {
+            const e = new Error('Document download gaf HTML terug (redirect naar login?)');
+            e.code = 'DOWNLOAD_REDIRECTED';
+            throw e;
+        }
+        return blob;
     },
     setLocalAvatar(email, dataUrl) {
         try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl); } catch(e){}
@@ -665,19 +729,30 @@ const RobawsAPI = {
      * Tijdens normaal app-gebruik gebruikt de app gewoon de lokale cache —
      * geen Robaws-call meer per app-start.
      *
-     * Foutbestendig: als Robaws onbereikbaar is of de werknemer geen foto
-     * heeft, blijft de lokale cache ongewijzigd staan.
+     * Belangrijke semantiek (zie getEmployeePhotoBlob):
+     *   - blob       → foto opgehaald, cache vervangen
+     *   - null       → Robaws bereikbaar maar werknemer heeft geen foto;
+     *                  cache wissen zodat de fallback-initiaal verschijnt
+     *   - throws     → ophalen mislukt (offline, redirect, fout); cache
+     *                  ABSOLUUT NIET wissen, want we weten niet zeker of
+     *                  er een foto is.
      */
     async refreshAvatarFromRobaws(email, employeeId) {
         if (!employeeId) return;
+        let blob;
         try {
-            const blob = await this.getEmployeePhotoBlob(employeeId);
-            if (!blob) {
-                // Geen foto (meer) in Robaws → wis lokale cache zodat de
-                // fallback-initiaal verschijnt i.p.v. een verouderde foto.
-                this.clearLocalAvatar(email);
-                return;
-            }
+            blob = await this.getEmployeePhotoBlob(employeeId);
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar refresh mislukt, lokale cache behouden:', e.message);
+            return;
+        }
+        if (blob === null) {
+            // Robaws is bereikbaar én heeft echt geen foto bij deze werknemer
+            this.clearLocalAvatar(email);
+            console.log('[RobawsAPI] Geen foto in Robaws — lokale cache gewist');
+            return;
+        }
+        try {
             const dataUrl = await new Promise(res => {
                 const r = new FileReader();
                 r.onload = () => res(r.result);
@@ -686,7 +761,7 @@ const RobawsAPI = {
             this.setLocalAvatar(email, dataUrl);
             console.log('[RobawsAPI] Avatar verfrist vanuit Robaws bij login');
         } catch(e) {
-            console.warn('[RobawsAPI] Avatar refresh mislukt:', e.message);
+            console.warn('[RobawsAPI] Avatar omzetten naar dataUrl mislukt:', e.message);
         }
     },
 

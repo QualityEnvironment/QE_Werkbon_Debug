@@ -325,13 +325,24 @@ const APIBridge = {
                 const ct = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
                 const ext = ct === 'image/png' ? 'png' : 'jpg';
                 const blob = new Blob([bytes], { type: ct });
-                const file = new File([blob], `Foto.${ext}`, { type: ct });
-                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, `Foto.${ext}`);
+
+                // BUG-fix: vroeger heetten alle uploads 'Foto.jpg', waardoor
+                // je in Robaws niet kon zien welke de nieuwste was. Nu zetten
+                // we een ISO-timestamp in de filename (sorteert chronologisch).
+                // Format: Foto_2026-05-05_15-30-45.jpg
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}` +
+                           `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+                const fileName = `Foto_${ts}.${ext}`;
+
+                const file = new File([blob], fileName, { type: ct });
+                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, fileName);
                 const ok = upRes && (upRes.code === 200 || upRes.code === 201);
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
                 }
-                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: dataUrl, dataUrl });
+                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: dataUrl, dataUrl, fileName });
             } catch(e) {
                 return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: dataUrl });
             }
