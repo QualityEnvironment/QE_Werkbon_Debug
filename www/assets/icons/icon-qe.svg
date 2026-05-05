@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Orange square background -->
+  <rect x="2" y="2" width="96" height="96" rx="18" fill="#F99D3E"/>
+  <!-- Purple circle (outer) -->
+  <circle cx="46" cy="44" r="30" fill="#6A2C91"/>
+  <!-- Orange circle (inner) -->
+  <circle cx="46" cy="44" r="15" fill="#F99D3E"/>
+  <!-- Purple wave/tail -->
+  <path d="M18 82 C33 72, 53 72, 68 79 C78 84, 88 86, 98 82" stroke="#6A2C91" stroke-width="7" fill="none" stroke-linecap="round"/>
+</svg>

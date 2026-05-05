@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#001E45">
+    <title>QE Werkbon</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ========== LOGIN SCREEN ========== -->
+<div id="loginScreen" class="login-screen">
+    <img class="login-logo" src="assets/icons/logo-login.png" alt="Quality Environment">
+    <p class="login-subtitle">Werkbon App</p>
+    <div class="login-card">
+        <h2 id="loginCardTitle">Inloggen</h2>
+
+        <!-- STAP 1: e-mail -->
+        <div id="loginStepEmail">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" class="form-input" id="loginEmail" placeholder="naam@qe.be"
+                       autocomplete="email" autocapitalize="none"
+                       onkeydown="if(event.key==='Enter') app.loginCheckEmail()">
+            </div>
+            <div id="loginError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
+            <button class="btn btn-primary btn-full btn-lg" id="loginBtn" onclick="app.loginCheckEmail()">Volgende</button>
+        </div>
+
+        <!-- STAP 2: PIN invoeren -->
+        <div id="loginStepPin" style="display:none">
+            <div style="text-align:center;margin-bottom:12px;color:var(--qe-grey);font-size:13px">
+                <span id="loginPinSubtitle">Voer je PIN in</span><br>
+                <span id="loginEmailDisplay" style="color:var(--qe-darkblue);font-weight:500"></span>
+            </div>
+            <div class="form-group">
+                <label id="loginPinLabel">PIN (4–6 cijfers)</label>
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
+                       id="loginPin" placeholder="••••" autocomplete="off"
+                       style="text-align:center;font-size:24px;letter-spacing:8px"
+                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+            </div>
+            <div id="loginPinConfirmGroup" class="form-group" style="display:none">
+                <label>Bevestig PIN</label>
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
+                       id="loginPinConfirm" placeholder="••••" autocomplete="off"
+                       style="text-align:center;font-size:24px;letter-spacing:8px"
+                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+            </div>
+            <div id="loginPinError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
+            <button class="btn btn-primary btn-full btn-lg" id="loginPinBtn" onclick="app.loginSubmitPin()">Inloggen</button>
+            <button class="btn btn-outline btn-full btn-sm" style="margin-top:8px" onclick="app.loginBack()">Terug</button>
+        </div>
+    </div>
+</div>
+
+<!-- ========== APP HEADER ========== -->
+<header class="app-header" id="appHeader">
+    <button class="header-back" id="headerBack" onclick="app.goBack()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <span class="header-title" id="headerTitle">Dagplanning</span>
+    <span class="header-date" id="headerDate"></span>
+
+    <!-- Profielblok rechts: foto + naam, klikbaar om profielscherm te openen -->
+    <button class="header-profile" id="headerProfile" onclick="app.openProfile()" title="Mijn profiel">
+        <span class="header-user-text" id="headerUser"></span>
+        <span class="header-avatar" id="headerAvatar">
+            <img id="headerAvatarImg" alt="" style="display:none">
+            <span id="headerAvatarFallback" class="header-avatar-fallback">?</span>
+        </span>
+    </button>
+
+    <button class="header-action" onclick="app.logout()" title="Uitloggen">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
+</header>
+
+<!-- ========== OFFLINE BAR ========== -->
+<div class="offline-bar" id="offlineBar">Geen internetverbinding - offline modus</div>
+
+<!-- ========== SCREEN: PLANNING ========== -->
+<div class="screen active" id="screenPlanning">
+    <!-- Clock-in/out status bar -->
+    <div id="clockStatusBar" style="display:none;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer" onclick="app.navigate('screenClock')">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:10px">
+                <span id="clockStatusIcon" style="font-size:20px">⏰</span>
+                <div>
+                    <div id="clockStatusText" style="font-size:14px;font-weight:600"></div>
+                    <div id="clockStatusSub" style="font-size:12px;opacity:0.7"></div>
+                </div>
+            </div>
+            <div id="clockStatusAction" style="font-size:12px;opacity:0.6">Tik voor details →</div>
+        </div>
+    </div>
+
+    <div class="date-strip" id="dateStrip">
+        <!-- Gevuld door JS -->
+    </div>
+
+    <div id="pendingPaymentsBanner"></div>
+
+    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:8px">
+            <h2>Werkorders</h2>
+            <span class="badge" id="woCount">0</span>
+        </div>
+        <button id="routePlanBtn" class="btn btn-outline btn-sm" onclick="app.openRoutePlanning()" style="display:none;font-size:12px;padding:4px 10px">
+            🗺️ Plan route
+        </button>
+    </div>
+
+    <div id="workorderList">
+        <div class="empty-state">
+            <div class="empty-icon">📋</div>
+            <h3>Geen werkorders</h3>
+            <p>Er zijn geen werkorders voor deze dag</p>
+        </div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: WERKORDER DETAIL ========== -->
+<div class="screen" id="screenDetail">
+    <div class="card mb-16" id="detailHeader" style="padding:12px 16px">
+        <div id="detailTitle" style="font-size:15px;font-weight:600;color:var(--qe-darkblue)"></div>
+        <div id="detailSubtitle" style="font-size:13px;color:var(--qe-grey);margin-top:2px"></div>
+    </div>
+
+    <div class="tabs" id="detailTabs">
+        <button class="tab-btn active" data-tab="tabInfo" onclick="app.switchTab(this)">Info</button>
+        <button class="tab-btn" data-tab="tabUren" onclick="app.switchTab(this)">Uren</button>
+        <button class="tab-btn" data-tab="tabMaterial" onclick="app.switchTab(this)">Materiaal</button>
+        <button class="tab-btn" data-tab="tabFotos" onclick="app.switchTab(this)">Foto's</button>
+    </div>
+
+    <!-- TAB: Info -->
+    <div class="tab-content active" id="tabInfo">
+        <div class="detail-section">
+            <h3>Klantgegevens</h3>
+            <div class="card" id="clientInfo">
+                <!-- Gevuld door JS -->
+            </div>
+        </div>
+        <div class="detail-section">
+            <h3>Installatie</h3>
+            <div id="installationInfo">
+                <!-- Gevuld door JS -->
+            </div>
+        </div>
+        <!-- Taakomschrijving (detail van dagplanning — HTML uit Robaws) -->
+        <div class="detail-section" id="planDescriptionSection" style="display:none">
+            <h3>📋 Taakomschrijving</h3>
+            <div class="card plan-description" id="planDescriptionCard" onclick="app.openFullDescription()" style="cursor:pointer">
+            </div>
+        </div>
+
+        <!-- Mee te nemen items — knop naar apart scherm -->
+        <div class="detail-section" id="planLineItemsSection" style="display:none">
+            <button id="planItemsBtn" onclick="app.openPlanItems()"
+                style="width:100%;padding:14px 16px;border:2px solid var(--qe-purple);border-radius:12px;
+                background:rgba(106,44,145,0.06);color:var(--qe-darkblue);font-size:15px;font-weight:600;
+                cursor:pointer;display:flex;align-items:center;gap:12px">
+                <span style="font-size:22px">📦</span>
+                <div style="flex:1;text-align:left">
+                    <div>Mee te nemen</div>
+                    <div id="planItemsCount" style="font-size:12px;color:var(--qe-purple);font-weight:500"></div>
+                </div>
+                <span style="font-size:18px;color:var(--qe-purple)">→</span>
+            </button>
+        </div>
+
+        <!-- Bestanden uit dagplanning -->
+        <div class="detail-section" id="planDocumentsSection" style="display:none">
+            <h3>📎 Bestanden</h3>
+            <div id="planDocumentsList">
+            </div>
+        </div>
+
+        <div class="detail-section">
+            <h3>Documenten</h3>
+            <div id="documentList">
+                <p class="text-grey text-sm">Geen documenten beschikbaar</p>
+            </div>
+        </div>
+        <!-- Onderhoudschecklist (automatisch op basis van jobtype) -->
+        <div class="detail-section" id="checklistSection" style="display:none">
+            <h3 id="checklistTitle">Checklist</h3>
+            <div class="card" id="checklistContainer" style="padding:12px">
+                <!-- Gevuld door JS -->
+            </div>
+        </div>
+
+        <div class="form-group mt-16" id="workNotesGroup">
+            <label>Opmerkingen</label>
+            <div id="noteTemplatesBar" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+                <!-- Gevuld door JS -->
+            </div>
+            <textarea class="form-input" id="workNotes" placeholder="Typ hier je opmerkingen..." oninput="app.syncWorkNotes(this.value)"></textarea>
+        </div>
+    </div>
+
+    <!-- TAB: Uren -->
+    <div class="tab-content" id="tabUren">
+        <!-- Uurcode selectie -->
+        <div class="card mb-16" id="urcodeSection">
+            <div style="font-size:14px;font-weight:500;margin-bottom:8px">Uurcode</div>
+            <select class="form-input" id="urcodeSelect" onchange="app.selectUurcode(this.value)">
+                <option value="">Laden...</option>
+            </select>
+            <div id="urcodeInfo" style="font-size:12px;color:var(--qe-grey);margin-top:4px"></div>
+        </div>
+
+        <!-- Onderhoud checkbox -->
+        <div class="card mb-16" id="onderhoudSection" style="display:flex;align-items:center;gap:12px;padding:12px 16px">
+            <span style="font-size:16px">🔧</span>
+            <label for="onderhoudCheckbox" style="font-size:14px;font-weight:500;flex:1;cursor:pointer">Onderhoud</label>
+            <div style="display:flex;align-items:center;gap:6px">
+                <input type="checkbox" id="onderhoudCheckbox" onchange="app.toggleOnderhoud(this.checked)"
+                       style="width:20px;height:20px;cursor:pointer;accent-color:var(--qe-purple)">
+                <span style="font-size:12px;color:var(--qe-grey)" id="onderhoudLabel">Werkuren worden gefactureerd</span>
+            </div>
+        </div>
+
+        <!-- Timer -->
+        <div class="timer-display">
+            <div class="timer-label" id="timerLabel">Werkuren</div>
+            <div class="timer-value" id="timerValue">00:00:00</div>
+            <div class="timer-controls">
+                <button class="btn btn-success btn-round" id="btnTimerStart" onclick="app.toggleTimer('klant')" title="Werkuren starten">
+                    🔧
+                </button>
+                <!-- Verplaatsing gedeactiveerd (badgesysteem vervangt dit) -->
+                <button class="btn btn-outline btn-round" id="btnTimerVerplaatsing" onclick="app.toggleTimer('verplaatsing')" title="Verplaatsing starten" style="font-size:16px;display:none">
+                    🚗
+                </button>
+                <button class="btn btn-secondary btn-round" id="btnTimerPause" onclick="app.toggleTimer('pauze')" style="display:none">
+                    ⏸
+                </button>
+                <button class="btn btn-danger btn-round" id="btnTimerStop" onclick="app.stopTimer()" style="display:none">
+                    ⏹
+                </button>
+            </div>
+        </div>
+
+        <!-- Handmatige uren invoer -->
+        <div style="display:flex;gap:6px;margin-bottom:12px">
+            <button class="btn btn-primary btn-sm" style="flex:1" onclick="app.addManualHours('klant')">+ Uren toevoegen</button>
+            <!-- Verplaatsing gedeactiveerd (badgesysteem) — knop bewaard voor reactivatie -->
+            <button class="btn btn-outline btn-sm" style="flex:1" id="btnAddVerplaatsing" onclick="app.addManualHours('verplaatsing')">+ Verplaatsing</button>
+        </div>
+
+        <!-- Opmerkingen (wat heb je gedaan?) -->
+        <div class="card mb-16" style="padding:12px">
+            <label style="font-size:13px;font-weight:500;margin-bottom:6px;display:block">📝 Wat heb je gedaan?</label>
+            <textarea class="form-input" id="workNotesUren" placeholder="Beschrijf kort de uitgevoerde werkzaamheden..."
+                      rows="3" oninput="app.syncWorkNotes(this.value)"></textarea>
+        </div>
+
+        <!-- Geregistreerde uren -->
+        <div class="section-header">
+            <h3 style="font-size:14px">Geregistreerde uren</h3>
+        </div>
+        <div id="hoursList">
+            <p class="text-grey text-sm text-center">Nog geen uren geregistreerd</p>
+        </div>
+
+        <!-- Dag samenvatting -->
+        <div class="day-hours-summary mt-16" id="dayHoursSummary" style="display:none">
+            <div style="font-size:14px;font-weight:500;margin-bottom:8px">Dagoverzicht</div>
+            <div class="day-hours-row">
+                <span>Werkuren</span>
+                <span id="totalKlantUren">0:00</span>
+            </div>
+            <!-- Verplaatsing verborgen (gedeactiveerd) -->
+            <div class="day-hours-row" id="rowVerplaatsing" style="display:none">
+                <span>Verplaatsing</span>
+                <span id="totalVerplaatsing">0:00</span>
+            </div>
+            <div class="day-hours-row">
+                <span>Pauze</span>
+                <span id="totalPauze">0:00</span>
+            </div>
+            <div class="day-hours-row total">
+                <span>Totaal gewerkt (excl. pauze)</span>
+                <span id="totalGewerkt">0:00</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB: Materiaal -->
+    <div class="tab-content" id="tabMaterial">
+
+        <!-- ONDERHOUD PICKER — 3 stappen: categorie → vermogen → zone -->
+        <div class="card mb-16" id="onderhoudPicker" style="padding:12px">
+            <div style="font-size:14px;font-weight:600;margin-bottom:10px">🔧 Onderhoud toevoegen</div>
+
+            <!-- Stap 1: categorie knoppen -->
+            <div id="onderhoudStep1">
+                <div style="font-size:12px;color:var(--qe-grey);margin-bottom:6px">Wat voor onderhoud?</div>
+                <div id="onderhoudCategories" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                    <!-- Gevuld door JS -->
+                </div>
+            </div>
+
+            <!-- Stap 2: vermogen kiezen -->
+            <div id="onderhoudStep2" style="display:none">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudBack(1)" style="padding:4px 8px;font-size:12px">← Terug</button>
+                    <span id="onderhoudCatLabel" style="font-size:13px;font-weight:500"></span>
+                </div>
+                <div style="font-size:12px;color:var(--qe-grey);margin-bottom:6px">Welk vermogen?</div>
+                <div id="onderhoudSizes" style="display:flex;flex-direction:column;gap:4px">
+                    <!-- Gevuld door JS -->
+                </div>
+            </div>
+
+            <!-- Stap 3: zone (auto-detectie + manueel zoeken) -->
+            <div id="onderhoudStep3" style="display:none">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudBack(2)" style="padding:4px 8px;font-size:12px">← Terug</button>
+                    <span id="onderhoudSizeLabel" style="font-size:13px;font-weight:500"></span>
+                </div>
+
+                <!-- Auto-suggestie banner -->
+                <div id="onderhoudAutoZone" style="display:none;padding:10px 12px;background:linear-gradient(135deg,rgba(106,44,145,0.08),rgba(232,119,34,0.08));border-radius:8px;margin-bottom:8px;cursor:pointer" onclick="app.onderhoudAcceptAutoZone()">
+                    <div style="font-size:12px;color:var(--qe-grey);margin-bottom:2px">Suggestie op basis van adres</div>
+                    <div id="onderhoudAutoZoneText" style="font-size:14px;font-weight:600"></div>
+                    <div style="font-size:12px;color:var(--qe-purple);margin-top:2px">Tik om te selecteren</div>
+                </div>
+
+                <div style="font-size:12px;color:var(--qe-grey);margin-bottom:6px">Of zoek gemeente:</div>
+                <input type="text" class="form-input" id="onderhoudGemeente" placeholder="Typ gemeente..." oninput="app.onderhoudSearchGemeente(this.value)" autocomplete="off" style="margin-bottom:4px">
+                <div id="onderhoudGemeenteResults" style="display:none;max-height:160px;overflow-y:auto;margin-bottom:6px"></div>
+
+                <!-- Zone knoppen 1-9 -->
+                <div style="font-size:12px;color:var(--qe-grey);margin-bottom:4px;margin-top:4px">Of kies zone handmatig:</div>
+                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:8px">
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(1)" style="padding:6px 0">1</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(2)" style="padding:6px 0">2</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(3)" style="padding:6px 0">3</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(4)" style="padding:6px 0">4</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(5)" style="padding:6px 0">5</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(6)" style="padding:6px 0">6</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(7)" style="padding:6px 0">7</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(8)" style="padding:6px 0">8</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudSelectZone(9)" style="padding:6px 0">9</button>
+                </div>
+            </div>
+
+            <!-- Resultaat + toevoegen knop -->
+            <div id="onderhoudResult" style="display:none">
+                <div id="onderhoudResultInfo" style="padding:10px 12px;background:var(--qe-light);border-radius:8px;margin-bottom:8px;font-size:13px;border-left:3px solid var(--qe-green)"></div>
+                <button class="btn btn-primary btn-full btn-sm" onclick="app.onderhoudAddToMaterials()">✓ Toevoegen aan materialen</button>
+            </div>
+        </div>
+
+        <!-- VERPLAATSINGSKOSTEN PICKER — zone selectie voor regie jobs -->
+        <div class="card mb-16" id="verplaatsingPicker" style="padding:12px">
+            <div style="font-size:14px;font-weight:600;margin-bottom:10px">🚗 Verplaatsingskosten (regie)</div>
+
+            <!-- Auto-suggestie banner -->
+            <div id="verplAutoZone" style="display:none;padding:10px 12px;background:linear-gradient(135deg,rgba(106,44,145,0.08),rgba(232,119,34,0.08));border-radius:8px;margin-bottom:8px;cursor:pointer" onclick="app.verplAcceptAutoZone()">
+                <div style="font-size:12px;color:var(--qe-grey);margin-bottom:2px">Suggestie op basis van adres</div>
+                <div id="verplAutoZoneText" style="font-size:14px;font-weight:600"></div>
+                <div style="font-size:12px;color:var(--qe-purple);margin-top:2px">Tik om toe te voegen</div>
+            </div>
+
+            <div style="font-size:12px;color:var(--qe-grey);margin-bottom:6px">Zoek gemeente:</div>
+            <input type="text" class="form-input" id="verplGemeente" placeholder="Typ gemeente..." oninput="app.verplSearchGemeente(this.value)" autocomplete="off" style="margin-bottom:4px">
+            <div id="verplGemeenteResults" style="display:none;max-height:160px;overflow-y:auto;margin-bottom:6px"></div>
+
+            <!-- Zone knoppen 1-9 -->
+            <div style="font-size:12px;color:var(--qe-grey);margin-bottom:4px;margin-top:4px">Of kies zone handmatig:</div>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:4px">
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(1)" style="padding:6px 0">1</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(2)" style="padding:6px 0">2</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(3)" style="padding:6px 0">3</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(4)" style="padding:6px 0">4</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(5)" style="padding:6px 0">5</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(6)" style="padding:6px 0">6</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(7)" style="padding:6px 0">7</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(8)" style="padding:6px 0">8</button>
+                <button class="btn btn-outline btn-sm" onclick="app.verplSelectZone(9)" style="padding:6px 0">9</button>
+            </div>
+        </div>
+
+        <div class="search-box mb-16">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="form-input" id="materialSearch" placeholder="Zoek artikel..." oninput="app.searchMaterials(this.value)">
+        </div>
+
+        <div id="materialSearchResults" style="display:none">
+            <!-- Zoekresultaten -->
+        </div>
+
+        <!-- Artikelgroepen knop -->
+        <button class="btn btn-outline btn-sm btn-full mb-16" onclick="app.showArticleGroups()" style="border-color:var(--qe-purple);color:var(--qe-purple)">
+            📂 Zoek op artikelgroep
+        </button>
+
+        <!-- Artikelgroepen browser -->
+        <div id="articleGroupBrowser" class="card mb-16" style="display:none;padding:12px">
+            <!-- Gevuld door JS -->
+        </div>
+
+        <!-- Veelgebruikte materialen (snelkeuze) -->
+        <div id="favoriteMaterials" style="display:none;margin-bottom:12px">
+            <div style="font-size:12px;color:var(--qe-grey);margin-bottom:6px">⭐ Veelgebruikt</div>
+            <div id="favoriteMaterialsList" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+        </div>
+
+        <div class="section-header">
+            <h3 style="font-size:14px">Gekozen materialen</h3>
+            <span class="badge" id="materialCount">0</span>
+        </div>
+        <div id="selectedMaterials">
+            <p class="text-grey text-sm text-center">Nog geen materialen toegevoegd</p>
+        </div>
+
+        <!-- Materiaal ontbreekt melding -->
+        <button class="btn btn-outline btn-full" style="margin-top:16px;border-color:var(--qe-orange);color:var(--qe-orange);font-size:13px" onclick="app.openMissingMaterialReport()">
+            ⚠️ Materiaal ontbreekt — meld aan kantoor
+        </button>
+    </div>
+
+    <!-- TAB: Foto's -->
+    <div class="tab-content" id="tabFotos">
+        <div id="photoCount" style="font-size:13px;color:var(--qe-grey);margin-bottom:8px"></div>
+        <div class="photo-grid" id="photoGrid">
+            <button class="photo-add" onclick="app.takePhoto()">
+                <span class="plus">+</span>
+                Foto nemen
+            </button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn btn-primary btn-sm" onclick="app.takePhoto()" style="flex:1">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:4px"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Camera
+            </button>
+            <button class="btn btn-sm" onclick="app.pickPhoto()" style="flex:1;background:var(--qe-purple);color:#fff">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;margin-right:4px"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                Galerij
+            </button>
+        </div>
+        <!-- Camera input (opent camera direct) -->
+        <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" onchange="app.handlePhotos(this)">
+        <!-- Galerij input (opent bestandskiezer, meerdere bestanden) -->
+        <input type="file" id="galleryInput" accept="image/*" multiple style="display:none" onchange="app.handlePhotos(this)">
+    </div>
+
+    <!-- Werkbon knop -->
+    <div style="padding:16px 0">
+        <button class="btn btn-primary btn-lg btn-full" onclick="app.showWerkbonPreview()">
+            📋 Werkbon bekijken
+        </button>
+    </div>
+</div>
+
+<!-- ========== SCREEN: TAAKOMSCHRIJVING FULLSCREEN ========== -->
+<div class="screen" id="screenFullDescription">
+    <div class="card mb-16" style="padding:14px 16px">
+        <div style="font-size:16px;font-weight:700;color:var(--qe-darkblue)">📋 Taakomschrijving</div>
+        <div id="fullDescSubtitle" style="font-size:13px;color:var(--qe-grey);margin-top:2px"></div>
+    </div>
+    <div class="card plan-description" id="fullDescContent" style="padding:16px">
+        <!-- Gevuld door JS -->
+    </div>
+</div>
+
+<!-- ========== SCREEN: PLANNING ITEMS (Mee te nemen) ========== -->
+<div class="screen" id="screenPlanItems">
+    <div class="card mb-16" style="padding:14px 16px">
+        <div style="font-size:16px;font-weight:700;color:var(--qe-darkblue)">📦 Mee te nemen</div>
+        <div id="planItemsSubtitle" style="font-size:13px;color:var(--qe-grey);margin-top:2px"></div>
+    </div>
+    <div id="planItemsContent">
+        <!-- Gevuld door JS -->
+    </div>
+</div>
+
+<!-- ========== SCREEN: WERKBON OVERZICHT ========== -->
+<div class="screen" id="screenWerkbon">
+    <!-- Ordernummer banner -->
+    <div id="wbOrderBanner" style="background:var(--qe-purple);color:#fff;border-radius:12px;padding:16px 20px;margin-bottom:16px;text-align:center">
+        <div style="font-size:12px;opacity:0.8;text-transform:uppercase;letter-spacing:1px">Ordernummer</div>
+        <div style="font-size:28px;font-weight:700;margin:4px 0;letter-spacing:1px" id="wbOrderNr">—</div>
+        <div style="font-size:16px;font-weight:500" id="wbClientName">-</div>
+        <div style="font-size:13px;opacity:0.7;margin-top:4px" id="wbDate">-</div>
+        <div id="wbBtwBadge" style="display:inline-block;margin-top:8px;padding:4px 14px;border-radius:20px;background:rgba(255,255,255,0.2);font-size:13px;font-weight:500"></div>
+    </div>
+
+    <!-- Uren samenvatting -->
+    <div class="werkbon-summary mb-16">
+        <div class="ws-header">Uren</div>
+        <div style="padding:12px 16px" id="wbHoursContent">
+            <!-- Gevuld door JS -->
+        </div>
+    </div>
+
+    <!-- Materialen tabel -->
+    <div class="werkbon-summary mb-16">
+        <div class="ws-header">Materialen</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Artikel</th>
+                    <th class="text-right">Aantal</th>
+                    <th class="text-right">Prijs</th>
+                    <th class="text-right">Totaal</th>
+                </tr>
+            </thead>
+            <tbody id="wbMaterialRows">
+                <!-- Gevuld door JS -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Totalen -->
+    <div class="totals-card" id="wbTotals">
+        <div class="total-row">
+            <span>Subtotaal excl. BTW</span>
+            <span id="wbSubtotal">-</span>
+        </div>
+        <!-- Klant BTW indicatie -->
+        <div id="wbClientBtwInfo" style="padding:8px 16px;margin:4px 0;border-radius:8px;font-size:13px"></div>
+        <!-- BTW rij (dynamisch: alleen juiste tarief of beide als onbekend) -->
+        <div id="wbBtwRows">
+            <!-- Gevuld door JS -->
+        </div>
+    </div>
+
+    <!-- Opmerkingen -->
+    <div class="card mb-16" id="wbNotesCard" style="display:none">
+        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:4px">Opmerkingen</div>
+        <div id="wbNotes" style="font-size:14px"></div>
+    </div>
+
+    <!-- Foto's -->
+    <div id="wbPhotos" style="display:none" class="mb-16">
+        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:8px">Foto's (<span id="wbPhotoCount">0</span>)</div>
+        <div class="photo-grid" id="wbPhotoGrid"></div>
+    </div>
+
+    <!-- Handtekening klant -->
+    <div id="wbSignatureSection" class="werkbon-summary mb-16" style="display:none">
+        <div class="ws-header">Handtekening klant</div>
+        <div style="padding:12px 16px">
+            <div style="margin-bottom:8px">
+                <input type="text" id="wbSignatureName" placeholder="Naam ondertekenaar"
+                    style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+            </div>
+            <div style="position:relative;border:2px dashed #ccc;border-radius:10px;background:#fafafa;overflow:hidden">
+                <canvas id="signatureCanvas" width="340" height="160" style="width:100%;touch-action:none;cursor:crosshair"></canvas>
+                <button onclick="app.clearSignature()" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.5);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">Wis</button>
+            </div>
+            <div style="text-align:center;font-size:11px;color:var(--qe-grey);margin-top:4px">Teken met uw vinger of stylus</div>
+        </div>
+    </div>
+
+    <!-- Betaalmethode keuze -->
+    <div id="wbPaymentMethodSection" class="werkbon-summary mb-16">
+        <div class="ws-header">Betaalmethode</div>
+        <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px" id="paymentMethodBtns">
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Viva wallet"
+                onclick="app.selectPaymentMethod('Viva wallet')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                💳 Viva Wallet (terminal)
+            </button>
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Cash"
+                onclick="app.selectPaymentMethod('Cash')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                💵 Cash
+            </button>
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Overschrijving ter plaatse"
+                onclick="app.selectPaymentMethod('Overschrijving ter plaatse')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                🏦 Overschrijving ter plaatse
+            </button>
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Niet Ontvangen"
+                onclick="app.selectPaymentMethod('Niet Ontvangen')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                📋 Niet ontvangen (enkel factuur)
+            </button>
+        </div>
+    </div>
+
+    <!-- E-mail voor overschrijving -->
+    <div id="wbOverschrijvingEmail" class="werkbon-summary mb-16" style="display:none">
+        <div class="ws-header">Factuur e-mailen</div>
+        <div style="padding:12px 16px">
+            <input type="email" id="overschrijvingEmail" placeholder="E-mailadres voor factuur PDF"
+                style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+        </div>
+    </div>
+
+    <!-- Verstuur knop -->
+    <div style="padding:16px 0">
+        <button class="btn btn-success btn-lg btn-full" onclick="app.startSubmitFlow()" id="btnSubmitWerkbon">
+            ✍️ Ondertekenen & Versturen
+        </button>
+    </div>
+</div>
+
+<!-- ========== SCREEN: BETALING ========== -->
+<div class="screen" id="screenPayment">
+    <div style="text-align:center;padding:20px 16px">
+        <div id="paymentContent">
+            <!-- Gevuld door JS -->
+        </div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: OVERSCHRIJVING BETAALSCHERM ========== -->
+<div class="screen" id="screenOverschrijving">
+    <div id="overschrijvingContent">
+        <!-- Gevuld door EPCQR.showPaymentScreen() -->
+    </div>
+</div>
+
+<!-- ========== SCREEN: KLOK (inclocken) ========== -->
+<div class="screen" id="screenClock">
+    <div style="text-align:center;padding:20px 16px 0">
+        <div id="clockBigStatus" style="font-size:64px;margin-bottom:8px">⏰</div>
+        <div id="clockBigText" style="font-size:22px;font-weight:700;color:var(--qe-darkblue);margin-bottom:4px"></div>
+        <div id="clockBigTime" style="font-size:16px;color:var(--qe-grey);margin-bottom:20px"></div>
+    </div>
+
+    <!-- NFC instructie (verborgen als al ingeclockt) -->
+    <div class="card mb-16" id="clockNfcCard" style="text-align:center;padding:20px">
+        <div style="font-size:32px;margin-bottom:8px">📱</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
+        <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
+    </div>
+
+    <!-- Actieve sessie info (verschijnt na inclocken) -->
+    <div class="card mb-16" id="clockActiveSession" style="display:none;padding:16px">
+        <div id="clockActiveContent"></div>
+    </div>
+
+    <!-- Voltooide sessies vandaag -->
+    <div id="clockCompletedSection" style="display:none">
+        <div class="section-header">
+            <h3 style="font-size:14px">Registraties vandaag</h3>
+        </div>
+        <div id="clockCompletedList" class="mb-16"></div>
+    </div>
+
+    <!-- Sync knop -->
+    <div class="card mb-16" id="clockSyncCard" style="padding:12px;text-align:center">
+        <button class="btn btn-full" onclick="QEClock.syncPending()"
+            style="padding:10px;font-size:13px;font-weight:500;background:var(--qe-grey-light);color:var(--qe-dark);border:1px solid #ddd;border-radius:8px">
+            🔄 Offline registraties synchroniseren
+        </button>
+        <div style="font-size:11px;color:var(--qe-grey);margin-top:4px" id="clockPendingCount">
+            Synchroniseert niet-geüploade registraties naar Robaws
+        </div>
+    </div>
+
+    <!-- Mijn week (laatste 7 dagen) -->
+    <div class="section-header">
+        <h3 style="font-size:14px">Mijn week</h3>
+    </div>
+    <div id="clockHistory" class="mb-16">
+        <p class="text-grey text-sm text-center">Laden...</p>
+    </div>
+
+    <!-- NFC Tag beheer (alleen voor kantoor) -->
+    <div id="clockTagAdmin" style="display:none">
+        <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+            <h3 style="font-size:14px">NFC Tags beheren</h3>
+            <button class="btn btn-outline btn-sm" onclick="app.refreshTagAdmin()" style="font-size:12px;padding:4px 10px">
+                🔄
+            </button>
+        </div>
+        <div class="card mb-16" style="padding:14px">
+            <div id="clockTagList">
+                <div class="spinner"></div>
+            </div>
+            <div style="font-size:11px;color:var(--qe-grey);margin-top:8px;text-align:center">
+                Kies een locatie en druk op 📱 Scan om een tag toe te wijzen
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin: overzicht alle werknemers (alleen voor kantoor) -->
+    <div id="clockAdminSection" style="display:none">
+        <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+            <h3 style="font-size:14px">Team aanwezigheid vandaag</h3>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-outline btn-sm" onclick="app.loadClockAdmin()" style="font-size:12px;padding:4px 10px">
+                    🔄
+                </button>
+            </div>
+        </div>
+        <div id="clockAdminList">
+            <div class="spinner"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: INSTALLATIE HISTORIEK ========== -->
+<div class="screen" id="screenInstHistory">
+    <div class="section-header">
+        <h2 id="instHistoryTitle">Installatie historiek</h2>
+    </div>
+    <div id="instHistoryInfo" style="padding:0 16px 8px">
+        <!-- Installatie details -->
+    </div>
+    <div id="instHistoryList">
+        <div class="spinner"></div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: ORDER DETAIL (historiek) ========== -->
+<div class="screen" id="screenOrderDetail">
+    <div class="section-header">
+        <h2 id="orderDetailTitle">Order detail</h2>
+    </div>
+    <div id="orderDetailContent">
+        <div class="spinner"></div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: UITGEVOERDE WERKEN ========== -->
+<div class="screen" id="screenUitgevoerd">
+    <div class="section-header">
+        <h2>Uitgevoerd</h2>
+        <span class="badge" id="uitgevoerdCount">0</span>
+    </div>
+    <div id="uitgevoerdList">
+        <div class="spinner"></div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: PROFIEL ========== -->
+<div class="screen" id="screenProfile">
+    <div class="section-header"><h2>Mijn profiel</h2></div>
+
+    <!-- Foto -->
+    <div class="card" style="margin-bottom:12px;text-align:center;padding:20px">
+        <div style="position:relative;display:inline-block;margin-bottom:12px">
+            <div class="profile-photo" id="profilePhotoWrap">
+                <img id="profilePhotoImg" alt="" style="display:none">
+                <span id="profilePhotoFallback" class="profile-photo-fallback">?</span>
+            </div>
+        </div>
+        <div style="font-size:18px;font-weight:600" id="profileName"></div>
+        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px" id="profileMeta"></div>
+        <div style="display:flex;gap:8px;justify-content:center">
+            <button class="btn btn-primary btn-sm" onclick="app.profilePickPhoto('camera')">📷 Camera</button>
+            <button class="btn btn-outline btn-sm" onclick="app.profilePickPhoto('gallery')">🖼 Galerij</button>
+        </div>
+        <input type="file" id="profilePhotoInputCamera" accept="image/*" capture="user" style="display:none" onchange="app.profileHandlePhoto(this)">
+        <input type="file" id="profilePhotoInputGallery" accept="image/*" style="display:none" onchange="app.profileHandlePhoto(this)">
+    </div>
+
+    <!-- Dark mode toggle -->
+    <div class="card" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:16px">
+        <div>
+            <div style="font-size:14px;font-weight:600">🌙 Donker thema</div>
+            <div style="font-size:12px;color:var(--qe-grey)">Minder verblinding in donkere ruimtes</div>
+        </div>
+        <label class="toggle-switch">
+            <input type="checkbox" id="darkModeToggle" onchange="app.toggleDarkMode(this.checked)">
+            <span class="toggle-slider"></span>
+        </label>
+    </div>
+
+    <!-- App update -->
+    <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+                <div style="font-size:14px;font-weight:600">🔄 App bijwerken</div>
+                <div style="font-size:12px;color:var(--qe-grey)" id="appVersionInfo" onclick="window._toggleDebug && _toggleDebug()">Versie laden...</div>
+            </div>
+            <button class="btn btn-primary btn-sm" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
+        </div>
+        <div id="updateStatus" style="font-size:13px;text-align:center;margin-top:8px;display:none"></div>
+    </div>
+
+    <!-- PIN wijzigen -->
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">PIN wijzigen</div>
+        <div class="form-group">
+            <label>Huidige PIN</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="form-input" id="profileOldPin" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
+        </div>
+        <div class="form-group">
+            <label>Nieuwe PIN (4–6 cijfers)</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="form-input" id="profileNewPin" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
+        </div>
+        <div class="form-group">
+            <label>Bevestig nieuwe PIN</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="form-input" id="profileNewPinConfirm" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
+        </div>
+        <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
+        <button class="btn btn-primary btn-full" onclick="app.profileChangePin()">PIN wijzigen</button>
+    </div>
+</div>
+
+<!-- ========== SCREEN: CORRECTIE ========== -->
+<div class="screen" id="screenCorrectie">
+    <div class="section-header"><h2>Werkbon corrigeren</h2></div>
+    <div class="card" id="correctieKlantInfo" style="margin-bottom:12px"></div>
+
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">Uren (totaal in werkbon)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="form-group" style="margin:0">
+                <label style="font-size:12px;color:var(--qe-grey)">Klant (min)</label>
+                <input type="number" id="correctieKlantMin" class="form-input" value="0" oninput="app.setCorrectieKlantMin(this.value)">
+            </div>
+            <div class="form-group" style="margin:0">
+                <label style="font-size:12px;color:var(--qe-grey)">Verplaatsing (min)</label>
+                <input type="number" id="correctieVerplMin" class="form-input" value="0" oninput="app.setCorrectieVerplMin(this.value)">
+            </div>
+        </div>
+        <div id="correctieDelta" style="margin-top:10px;padding:8px;background:rgba(0,0,0,0.03);border-radius:6px"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:14px;font-weight:600">Materialen (totaal in werkbon)</div>
+            <button class="btn btn-outline btn-sm" onclick="app.addCorrectieMaterial()">+ Toevoegen</button>
+        </div>
+        <div id="correctieMaterialen"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">Opmerkingen</div>
+        <textarea id="correctieNotes" class="form-input" rows="3" oninput="app.setCorrectieNotes(this.value)"></textarea>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-outline" style="flex:1" onclick="app.cancelCorrectie()">Annuleren</button>
+        <button class="btn btn-primary" id="correctieSubmitBtn" style="flex:2" onclick="app.saveCorrectie()">Correctie versturen</button>
+    </div>
+</div>
+
+<!-- ========== SCREEN: TIJDSREGISTRATIES OVERZICHT ========== -->
+<div class="screen" id="screenDagoverzicht">
+    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h2>Mijn registraties</h2>
+        <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht()" style="font-size:12px;padding:4px 10px">🔄</button>
+    </div>
+    <div id="dagoverzichtContent">
+        <div class="spinner"></div>
+    </div>
+</div>
+
+<!-- ========== SCREEN: AANPASSING AANVRAGEN ========== -->
+<div class="screen" id="screenAanpassing">
+    <div class="section-header"><h2>Aanpassing aanvragen</h2></div>
+    <div id="aanpassingContent"></div>
+</div>
+
+<!-- ========== BOTTOM NAV ========== -->
+<nav class="bottom-nav" id="bottomNav">
+    <button class="nav-item active" data-screen="screenPlanning" onclick="app.navigate('screenPlanning')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        Planning
+    </button>
+    <button class="nav-item" data-screen="screenClock" onclick="app.navigate('screenClock')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Klok
+    </button>
+    <button class="nav-item" data-screen="screenDagoverzicht" onclick="app.navigate('screenDagoverzicht')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Uren
+    </button>
+    <button class="nav-item" data-screen="screenUitgevoerd" onclick="app.navigate('screenUitgevoerd')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+        </svg>
+        Uitgevoerd
+    </button>
+</nav>
+
+<!-- ========== MODALS ========== -->
+<div class="modal-overlay" id="modalOverlay" onclick="app.closeModal()">
+    <div class="modal-sheet" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div id="modalContent"></div>
+    </div>
+</div>
+
+<!-- ========== TOAST ========== -->
+<div class="toast" id="toast"></div>
+
+<!-- ========== DEBUG CONSOLE (tik 5x op versienr) ========== -->
+<div id="debugConsole" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:rgba(0,0,0,0.95);color:#0f0;font-family:monospace;font-size:11px;overflow-y:auto;padding:12px;padding-top:40px">
+    <button onclick="document.getElementById('debugConsole').style.display='none'" style="position:fixed;top:8px;right:12px;background:#f33;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:14px;z-index:100000">✕ Sluiten</button>
+    <button onclick="document.getElementById('debugLog').textContent=''" style="position:fixed;top:8px;right:100px;background:#555;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:14px;z-index:100000">Wissen</button>
+    <pre id="debugLog" style="white-space:pre-wrap;word-break:break-all"></pre>
+</div>
+<script>
+(function() {
+    // Override console.log/warn/error om naar debug console te schrijven
+    var origLog = console.log, origWarn = console.warn, origError = console.error;
+    var _write = function(prefix, color, args) {
+        try {
+            var el = document.getElementById('debugLog');
+            if (!el) return;
+            var time = new Date().toTimeString().slice(0,8);
+            var parts = [];
+            for (var i = 0; i < args.length; i++) {
+                try {
+                    parts.push(typeof args[i] === 'object' && args[i] !== null ? JSON.stringify(args[i]).slice(0, 500) : String(args[i]));
+                } catch(e) { parts.push('[Object]'); }
+            }
+            el.textContent += '[' + time + '] ' + prefix + ' ' + parts.join(' ') + '\n';
+            el.scrollTop = el.scrollHeight;
+        } catch(e) { /* debug console mag nooit de app breken */ }
+    };
+    console.log = function() { origLog.apply(console, arguments); _write('LOG', '#0f0', arguments); };
+    console.warn = function() { origWarn.apply(console, arguments); _write('WRN', '#ff0', arguments); };
+    console.error = function() { origError.apply(console, arguments); _write('ERR', '#f44', arguments); };
+    window.addEventListener('error', function(e) { _write('ERR', '#f44', [e.message + ' (' + e.filename + ':' + e.lineno + ')']); });
+    window.addEventListener('unhandledrejection', function(e) { _write('ERR', '#f44', ['Promise: ' + e.reason]); });
+
+    // Open debug console door 5x op versienummer te tikken
+    var _debugTaps = 0, _debugTimer = null;
+    window._toggleDebug = function() {
+        _debugTaps++;
+        clearTimeout(_debugTimer);
+        _debugTimer = setTimeout(function() { _debugTaps = 0; }, 2000);
+        if (_debugTaps >= 5) {
+            document.getElementById('debugConsole').style.display = 'block';
+            _debugTaps = 0;
+        }
+    };
+})();
+</script>
+
+<!-- API modules (moeten VOOR app.js geladen worden) -->
+<script src="js/robaws-api.js"></script>
+<script src="js/viva-api.js"></script>
+<script src="js/api-bridge.js"></script>
+<!-- Onderhoud data (zone/gemeente mapping + artikelcatalogus) -->
+<script src="js/onderhoud-data.js"></script>
+<!-- EPC QR code generator voor overschrijvingen -->
+<script src="js/qrcode-epc.js"></script>
+<!-- Clock-in/out systeem (NFC + GPS) -->
+<script src="js/clock.js"></script>
+<!-- Hoofdapplicatie -->
+<script src="js/app.js"></script>
+<script>
+    // Service Worker (alleen als beschikbaar — niet op file://)
+    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
+        navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('SW registered:', reg.scope))
+            .catch(err => console.log('SW failed:', err));
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 120">
+  <!-- Orange square background -->
+  <rect x="5" y="5" width="95" height="95" rx="8" fill="#F99D3E"/>
+  <!-- Purple circle (outer) -->
+  <circle cx="48" cy="48" r="32" fill="#6A2C91"/>
+  <!-- Orange circle (inner) -->
+  <circle cx="48" cy="48" r="16" fill="#F99D3E"/>
+  <!-- Purple wave/tail -->
+  <path d="M20 88 C35 78, 55 78, 70 85 C80 90, 90 92, 100 88" stroke="#6A2C91" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <!-- Text: Quality -->
+  <text x="115" y="52" font-family="Roboto, Arial, sans-serif" font-weight="500" font-size="38" fill="#001E45">Quality</text>
+  <!-- Text: Environment -->
+  <text x="115" y="90" font-family="Roboto, Arial, sans-serif" font-weight="500" font-size="38" fill="#001E45">Environment</text>
+  <!-- Tagline -->
+  <text x="115" y="112" font-family="Roboto, Arial, sans-serif" font-weight="400" font-size="13" fill="#6B7A8D">Breng warmte in uw leven</text>
+</svg>
