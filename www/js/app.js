@@ -390,26 +390,41 @@ const app = {
             if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
             return;
         }
-        fetch('debug-nfc.html', { method: 'HEAD' }).then(r => {
+        // BUG-fix: HEAD werkt niet betrouwbaar in Android WebView op file://
+        // URLs (response.ok is dan false). We gebruiken nu GET en kijken of
+        // de body niet-leeg en niet-een-foutpagina is.
+        fetch('debug-nfc.html').then(r => r.text()).then(text => {
+            const exists = !!(text && text.length > 100 && text.indexOf('NFC Security Tester') !== -1);
             this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = r.ok;
-            if (!r.ok) return;
-            const profile = document.getElementById('screenProfile');
-            if (!profile || document.getElementById('btnDebugNfcTester')) return;
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
-            card.innerHTML = `
-                <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
-                <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
-                <button id="btnDebugNfcTester" class="btn btn-full"
-                    style="background:#C62828;color:#fff;padding:12px"
-                    onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
-            `;
-            const pinCard = profile.querySelector('.card:has(input#profileOldPin)');
-            if (pinCard) profile.insertBefore(card, pinCard);
-            else profile.appendChild(card);
-        }).catch(() => { this._nfcTesterChecked = true; this._nfcTesterAvailable = false; });
+            this._nfcTesterAvailable = exists;
+            if (!exists) return;
+            this._injectNfcTesterButton();
+        }).catch(() => {
+            this._nfcTesterChecked = true;
+            this._nfcTesterAvailable = false;
+        });
+    },
+    _injectNfcTesterButton() {
+        const profile = document.getElementById('screenProfile');
+        if (!profile || document.getElementById('btnDebugNfcTester')) return;
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
+        card.innerHTML = `
+            <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
+            <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
+            <button id="btnDebugNfcTester" class="btn btn-full"
+                style="background:#C62828;color:#fff;padding:12px"
+                onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
+        `;
+        // Zoek de PIN-card via een loop (.card:has() werkt niet in oudere WebViews)
+        let pinCard = null;
+        const cards = profile.querySelectorAll('.card');
+        for (const c of cards) {
+            if (c.querySelector('#profileOldPin')) { pinCard = c; break; }
+        }
+        if (pinCard) profile.insertBefore(card, pinCard);
+        else profile.appendChild(card);
     },
     // === EINDE DEBUG NFC TESTER ===
 
