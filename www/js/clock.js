@@ -186,16 +186,11 @@ window.QEClock = {
             return config;
         } catch (e) {
             console.warn('[Clock] Kon NFC tags niet ophalen:', e.message);
-            // Gebruik cache (BUG-fix: JSON.parse zonder try crashte clock-flow)
-            try {
-                const cached = localStorage.getItem('qe_nfc_tags');
-                if (cached) {
-                    this._tagConfig = JSON.parse(cached);
-                    return this._tagConfig;
-                }
-            } catch(_) {
-                console.warn('[Clock] NFC tags cache corrupt — wissen');
-                try { localStorage.removeItem('qe_nfc_tags'); } catch(__) {}
+            // Gebruik cache
+            const cached = localStorage.getItem('qe_nfc_tags');
+            if (cached) {
+                this._tagConfig = JSON.parse(cached);
+                return this._tagConfig;
             }
             return null;
         }
@@ -204,15 +199,10 @@ window.QEClock = {
     /** Haal gecachte tag config op */
     getTagConfig() {
         if (this._tagConfig) return this._tagConfig;
-        try {
-            const cached = localStorage.getItem('qe_nfc_tags');
-            if (cached) {
-                this._tagConfig = JSON.parse(cached);
-                return this._tagConfig;
-            }
-        } catch(e) {
-            console.warn('[Clock] NFC tags cache corrupt — wissen');
-            try { localStorage.removeItem('qe_nfc_tags'); } catch(_) {}
+        const cached = localStorage.getItem('qe_nfc_tags');
+        if (cached) {
+            this._tagConfig = JSON.parse(cached);
+            return this._tagConfig;
         }
         return null;
     },
@@ -225,25 +215,19 @@ window.QEClock = {
         const config = this.getTagConfig();
         if (!config) return null;
 
-        // BUG-fix: case-insensitive vergelijking. Android levert tag-id soms
-        // in uppercase, Robaws cache kan in lowercase zitten — strict ===
-        // gaf onterecht "Onbekende tag".
-        const norm = (v) => String(v || '').trim().toLowerCase();
-        const target = norm(tagId);
-
         // Bureau tag
-        if (config.bureau && norm(config.bureau.tagId) === target) {
+        if (config.bureau && config.bureau.tagId === tagId) {
             return { type: 'bureau', name: 'Bureau' };
         }
 
         // Laden & Lossen tag
-        if (config.ladenLossen && norm(config.ladenLossen.tagId) === target) {
+        if (config.ladenLossen && config.ladenLossen.tagId === tagId) {
             return { type: 'laden_lossen', name: 'Laden & Lossen' };
         }
 
         // Camionet tags
         for (const cam of (config.camionetten || [])) {
-            if (norm(cam.tagId) === target) {
+            if (cam.tagId === tagId) {
                 return { type: 'camionet', name: cam.name };
             }
         }
@@ -316,23 +300,16 @@ window.QEClock = {
         const key = this._getSessionKey();
         if (!key) return null;
         const stored = localStorage.getItem(key);
-        if (!stored) return null;
-        // BUG-fix: JSON.parse zonder try/catch deed hele clock-flow crashen
-        // bij corrupte localStorage (bv. partial write na crash).
-        let session;
-        try {
-            session = JSON.parse(stored);
-        } catch(e) {
-            console.warn('[Clock] sessie corrupt — wissen:', e.message);
-            try { localStorage.removeItem(key); } catch(_) {}
-            return null;
+        if (stored) {
+            const session = JSON.parse(stored);
+            // Controleer of het vandaag is
+            if (session.date !== this._localDate()) {
+                localStorage.removeItem(key);
+                return null;
+            }
+            return session;
         }
-        // Controleer of het vandaag is
-        if (session.date !== this._localDate()) {
-            localStorage.removeItem(key);
-            return null;
-        }
-        return session;
+        return null;
     },
 
     _saveSession(session) {
@@ -378,90 +355,71 @@ window.QEClock = {
     _scanLock: false,
 
     async onNfcScan(tagId) {
-        // BUG-fix: tagId normaliseren (lowercase + trim) zodat hex-casing
-        // verschillen tussen Android en Robaws-cache geen mismatch geven.
-        const normalizedTagId = String(tagId || '').trim().toLowerCase();
-        if (!normalizedTagId) return;
-        console.log('[Clock] NFC scan:', normalizedTagId);
+        console.log('[Clock] NFC scan:', tagId);
 
-        // Debounce: voorkom dubbele scans binnen 3 seconden.
-        // BUG-fix: vroeger werd de lock alleen via setTimeout vrijgegeven —
-        // bij langzame Robaws-call kon een tweede scan starten terwijl de
-        // eerste flow nog liep. Nu wikkelen we alles in try/finally en
-        // geven de lock pas vrij na afronding (met max 8s safety-timeout).
+        // Debounce: voorkom dubbele scans binnen 3 seconden
         if (this._scanLock) {
             console.log('[Clock] Scan genegeerd (debounce)');
             return;
         }
         this._scanLock = true;
-        const lockTimeoutId = setTimeout(() => { this._scanLock = false; }, 8000);
+        setTimeout(() => { this._scanLock = false; }, 3000);
 
-        try {
-            const user = RobawsAPI.getLoggedInUser();
-            if (!user) {
-                if (window.app) app.toast('Log eerst in om te clocken');
-                return;
-            }
-
-            // ── TOEWIJZINGSMODUS: tag wordt toegewezen aan gekozen locatie ──
-            if (this._pendingAssignment) {
-                await this._handleAssignmentScan(normalizedTagId);
-                return;
-            }
-
-            // Zorg dat tag config geladen is
-            if (!this.getTagConfig()) {
-                await this.loadTagConfig();
-            }
-
-            // Identificeer de tag (probeer gewone én lowercase variant)
-            let tag = this.identifyTag(normalizedTagId);
-            if (!tag) tag = this.identifyTag(tagId); // raw fallback
-            if (!tag) {
-                // Tag-config nog niet zichtbaar? Forceer 1 reload + retry
-                await this.loadTagConfig();
-                tag = this.identifyTag(normalizedTagId) || this.identifyTag(tagId);
-            }
-
-            if (!tag) {
-                if (window.app) app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
-                return;
-            }
-
-            // Haal of maak sessie — controleer dat employeeId klopt met ingelogde user
-            let session = this.getSession() || this._newSession();
-            if (session.employeeId && String(session.employeeId) !== String(user.robawsEmployeeId)) {
-                console.warn('[Clock] Sessie van andere werknemer gevonden, nieuwe sessie aanmaken');
-                session = this._newSession();
-            }
-
-            // ── LADEN & LOSSEN ──
-            if (tag.type === 'laden_lossen') {
-                await this._handleLadenLossen(session, tag);
-                return;
-            }
-
-            // ── ACTIEVE SESSIE → UITCLOCKEN ──
-            if (session.active) {
-                // Bevestiging vragen om fouten te voorkomen (bijv. verkeerde user ingelogd)
-                const userName = user.name || user.email;
-                const startTime = session.startTime || '?';
-                const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
-                if (!confirmed) {
-                    console.log('[Clock] Uitklokken geannuleerd door gebruiker');
-                    return;
-                }
-                await this._clockOut(session, tag);
-                return;
-            }
-
-            // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
-            await this._clockIn(session, tag);
-        } finally {
-            // Lock altijd vrijgeven, ook bij errors
-            clearTimeout(lockTimeoutId);
-            this._scanLock = false;
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user) {
+            if (window.app) app.toast('Log eerst in om te clocken');
+            return;
         }
+
+        // ── TOEWIJZINGSMODUS: tag wordt toegewezen aan gekozen locatie ──
+        if (this._pendingAssignment) {
+            await this._handleAssignmentScan(tagId);
+            return;
+        }
+
+        // Zorg dat tag config geladen is
+        if (!this.getTagConfig()) {
+            await this.loadTagConfig();
+        }
+
+        // Identificeer de tag
+        const tag = this.identifyTag(tagId);
+
+        if (!tag) {
+            // Onbekende tag
+            if (window.app) app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
+            return;
+        }
+
+        // Haal of maak sessie — controleer dat employeeId klopt met ingelogde user
+        let session = this.getSession() || this._newSession();
+        if (session.employeeId && String(session.employeeId) !== String(user.robawsEmployeeId)) {
+            console.warn('[Clock] Sessie van andere werknemer gevonden, nieuwe sessie aanmaken');
+            session = this._newSession();
+        }
+
+        // ── LADEN & LOSSEN ──
+        if (tag.type === 'laden_lossen') {
+            await this._handleLadenLossen(session, tag);
+            return;
+        }
+
+        // ── ACTIEVE SESSIE → UITCLOCKEN ──
+        if (session.active) {
+            // Bevestiging vragen om fouten te voorkomen (bijv. verkeerde user ingelogd)
+            const userName = user.name || user.email;
+            const startTime = session.startTime || '?';
+            const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
+            if (!confirmed) {
+                console.log('[Clock] Uitklokken geannuleerd door gebruiker');
+                return;
+            }
+            await this._clockOut(session, tag);
+            return;
+        }
+
+        // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
+        await this._clockIn(session, tag);
     },
 
     // =============================================
@@ -503,20 +461,8 @@ window.QEClock = {
                 }
             }
             const expectedStart = this.getExpectedStartTime();
-            // BUG-fix: vroeger werd HH:MM als string vergeleken — "7:00" > "09:00"
-            // gaf true (lex-vergelijking op '7' vs '0'). Nu numerieke vergelijking
-            // in minuten met een grace-period van 5 min, zodat 07:00:30 niet
-            // direct als "te laat" telt.
-            const toMinutes = (hhmm) => {
-                if (!hhmm) return 0;
-                const m = String(hhmm).match(/^(\d{1,2}):(\d{1,2})/);
-                if (!m) return 0;
-                return (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
-            };
-            const GRACE_MIN = 5;
-            const isLate = toMinutes(time) > toMinutes(expectedStart) + GRACE_MIN;
-            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart, '(grace ' + GRACE_MIN + 'min) →', isLate ? 'TE LAAT' : 'OP TIJD');
-            type = isLate ? 'Te laat' : 'Op tijd';
+            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart, '→', time > expectedStart ? 'TE LAAT' : 'OP TIJD');
+            type = time > expectedStart ? 'Te laat' : 'Op tijd';
         }
 
         // GPS ophalen
@@ -566,33 +512,10 @@ window.QEClock = {
                 console.log('[Clock] Registratie aangemaakt in Robaws, ID:', session.robawsId);
             } else {
                 console.warn('[Clock] Robaws registratie aanmaken mislukt:', result.code);
-                // BUG-fix: niet-2xx response → wel pending-sync zetten zodat
-                // de sessie niet stilzwijgend in Robaws ontbreekt.
-                this._addPendingSync({
-                    action: 'create_open',
-                    employeeId: empId,
-                    startISO: session.startISO,
-                    type: type,
-                    remarks: remarks,
-                    sessionStartedAt: session.startedAt,
-                });
             }
         } catch (e) {
             console.warn('[Clock] Robaws niet bereikbaar bij inclocken:', e.message);
-            // BUG-fix: vroeger werd er bij offline-fout helemaal NIETS in
-            // de pending-sync queue gezet → de hele inclock-sessie verdween
-            // en bereikte Robaws nooit. Nu queue-en we hem zodat syncPending()
-            // hem later kan aanmaken.
-            try {
-                this._addPendingSync({
-                    action: 'create_open',
-                    employeeId: empId,
-                    startISO: session.startISO,
-                    type: type,
-                    remarks: remarks,
-                    sessionStartedAt: session.startedAt,
-                });
-            } catch(_) {}
+            // Sessie blijft lokaal, wordt later gesynchroniseerd
         }
 
         // UI feedback
@@ -887,33 +810,13 @@ window.QEClock = {
     // =============================================
 
     _addPendingSync(item) {
-        // BUG-fix: parse zonder try/catch crashte bij corrupte storage.
-        let pending = [];
-        try {
-            const raw = localStorage.getItem('qe_clock_pending');
-            if (raw) pending = JSON.parse(raw);
-            if (!Array.isArray(pending)) pending = [];
-        } catch(e) {
-            console.warn('[Clock] qe_clock_pending corrupt — opnieuw beginnen');
-            pending = [];
-        }
+        const pending = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]');
         pending.push({ ...item, timestamp: this._now().toISOString() });
-        try { localStorage.setItem('qe_clock_pending', JSON.stringify(pending)); } catch(e) {
-            console.warn('[Clock] localStorage vol bij pending-sync:', e.message);
-        }
+        localStorage.setItem('qe_clock_pending', JSON.stringify(pending));
     },
 
     async syncPending() {
-        let pending = [];
-        try {
-            const raw = localStorage.getItem('qe_clock_pending');
-            if (raw) pending = JSON.parse(raw);
-            if (!Array.isArray(pending)) pending = [];
-        } catch(e) {
-            console.warn('[Clock] qe_clock_pending corrupt — wissen en doorgaan');
-            try { localStorage.removeItem('qe_clock_pending'); } catch(_) {}
-            return;
-        }
+        const pending = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]');
         if (pending.length === 0) return;
 
         console.log('[Clock] Syncing', pending.length, 'pending items');
@@ -937,28 +840,6 @@ window.QEClock = {
                         remarks: item.remarks,
                     });
                     console.log('[Clock] Pending registratie gesynchroniseerd');
-                } else if (item.action === 'create_open') {
-                    // Open registratie zonder endDate — werknemer was offline
-                    // tijdens inclock. Maak hem nu alsnog aan en update lokale
-                    // sessie met de Robaws-id zodat clock-out hem kan vinden.
-                    const result = await RobawsAPI.createTimeRegistration({
-                        employeeId: item.employeeId,
-                        startDate: item.startISO,
-                        type: item.type,
-                        remarks: item.remarks,
-                    });
-                    if (result && (result.code === 200 || result.code === 201) && result.data) {
-                        const newId = String(result.data.id);
-                        // Probeer de bijbehorende lokale sessie te vinden en updaten
-                        const session = this.getSession();
-                        if (session && session.startISO === item.startISO && !session.robawsId) {
-                            session.robawsId = newId;
-                            this._saveSession(session);
-                        }
-                        console.log('[Clock] Pending open-registratie gesynchroniseerd, ID:', newId);
-                    } else {
-                        throw new Error('Robaws gaf code ' + (result && result.code));
-                    }
                 }
             } catch (e) {
                 console.warn('[Clock] Sync mislukt voor item:', e.message);
@@ -966,7 +847,7 @@ window.QEClock = {
             }
         }
 
-        try { localStorage.setItem('qe_clock_pending', JSON.stringify(remaining)); } catch(e) {}
+        localStorage.setItem('qe_clock_pending', JSON.stringify(remaining));
         if (remaining.length === 0) {
             console.log('[Clock] Alle pending items gesynchroniseerd ✓');
         } else {

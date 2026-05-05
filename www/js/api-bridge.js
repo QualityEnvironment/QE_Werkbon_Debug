@@ -165,18 +165,7 @@ const APIBridge = {
 
         if (action === 'check') {
             const user = RobawsAPI.getLoggedInUser();
-            if (user) {
-                // Als robawsUserId nog ontbreekt (oude sessies of login waarbij
-                // /users niet bereikbaar was), probeer hem alsnog op te halen
-                // zodat werkbonnen niet zonder verantwoordelijke ingediend worden.
-                if (!user.robawsUserId && user.robawsEmployeeId) {
-                    try {
-                        const resolved = await RobawsAPI.ensureUserId();
-                        if (resolved) user.robawsUserId = resolved;
-                    } catch(e) { /* offline → laat null staan, submit-tijd doet retry */ }
-                }
-                return this.jsonResponse({ loggedIn: true, user });
-            }
+            if (user) return this.jsonResponse({ loggedIn: true, user });
             return this.jsonResponse({ loggedIn: false });
         }
 
@@ -314,11 +303,8 @@ const APIBridge = {
             const body = await this.parseBody(options);
             const dataUrl = body.dataUrl || '';
             if (!dataUrl) return this.jsonResponse({ success: false, error: 'Geen foto' }, 400);
-            // Lokaal direct cachen als 256x256 thumbnail (past gegarandeerd
-            // in localStorage; voorkomt quota-fouten bij grote foto's).
-            // De Robaws-upload hieronder krijgt de oorspronkelijke dataUrl.
+            // Lokaal cachen als 256x256 thumbnail (voorkomt quota-issues)
             const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
-            // Naar Robaws sturen
             try {
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
                 const binary = atob(base64);
@@ -328,10 +314,7 @@ const APIBridge = {
                 const ext = ct === 'image/png' ? 'png' : 'jpg';
                 const blob = new Blob([bytes], { type: ct });
 
-                // BUG-fix: vroeger heetten alle uploads 'Foto.jpg', waardoor
-                // je in Robaws niet kon zien welke de nieuwste was. Nu zetten
-                // we een ISO-timestamp in de filename (sorteert chronologisch).
-                // Format: Foto_2026-05-05_15-30-45.jpg
+                // Unieke filename met timestamp (sorteert chronologisch in Robaws)
                 const now = new Date();
                 const pad = n => String(n).padStart(2, '0');
                 const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}` +
@@ -344,8 +327,6 @@ const APIBridge = {
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
                 }
-                // Return de gecachete (kleinere) dataUrl zodat de UI de
-                // identieke foto toont als bij volgende refresh uit cache.
                 return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: cachedDataUrl, dataUrl: cachedDataUrl, fileName });
             } catch(e) {
                 return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: cachedDataUrl });
@@ -362,7 +343,7 @@ const APIBridge = {
         const user = RobawsAPI.getLoggedInUser();
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
-        const date = params.date || RobawsAPI._localDateStr();
+        const date = params.date || new Date().toISOString().split('T')[0];
         const result = await RobawsAPI.getPlanning(user.robawsEmployeeId, date, user.robawsUserId);
         return this.jsonResponse(result);
     },

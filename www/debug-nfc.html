@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<!--
+  ⚠️ DEBUG-ONLY: NFC Security Tester
+  Plaats deze file alleen in de debug-versie. Verwijder hem (samen met
+  het "DEBUG NFC TESTER"-blok in app.js openProfile) na je security audit.
+-->
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover,user-scalable=no">
+<title>NFC Security Tester (DEBUG)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif;
+    margin: 0; padding: 16px 16px 32px;
+    background: #0a1628; color: #e0e8f5;
+    min-height: 100vh;
+  }
+  h1 { color: #ff5252; margin: 0 0 4px; font-size: 22px; }
+  .badge {
+    display: inline-block; background: #C62828; color: #fff;
+    padding: 3px 10px; border-radius: 4px; font-size: 11px;
+    font-weight: 700; letter-spacing: 0.5px;
+  }
+  .card {
+    background: #1A2942; padding: 16px; border-radius: 12px;
+    margin-bottom: 12px; border: 1px solid #25334d;
+  }
+  .card h3 { margin: 0 0 10px; font-size: 16px; color: #fff; }
+  button {
+    background: #F99D3E; color: #fff; border: none;
+    padding: 14px 18px; border-radius: 10px; font-size: 15px;
+    font-weight: 600; cursor: pointer; width: 100%;
+    margin-top: 8px;
+  }
+  button.danger { background: #C62828; }
+  button.subtle { background: #2A3A55; color: #B0CFFF; }
+  button.small { padding: 6px 12px; width: auto; font-size: 12px; }
+  pre {
+    background: #0a1628; padding: 12px; border-radius: 8px;
+    overflow-x: auto; font-size: 12px; color: #B0CFFF;
+    border: 1px solid #25334d; margin: 0;
+  }
+  .scan-area {
+    border: 2px dashed #C62828; border-radius: 12px;
+    padding: 32px 16px; text-align: center; font-size: 14px;
+    color: #B0CFFF; background: rgba(198,40,40,0.05);
+  }
+  .scan-icon { font-size: 48px; display: block; margin-bottom: 8px; }
+  .info { font-size: 13px; color: #B0CFFF; line-height: 1.5; }
+  .saved-tag {
+    background: #2A3A55; padding: 10px 12px; border-radius: 8px;
+    margin-bottom: 6px; display: flex; justify-content: space-between;
+    align-items: center; gap: 8px;
+  }
+  .saved-tag .label { font-weight: 600; color: #fff; }
+  .saved-tag .uid {
+    font-family: monospace; font-size: 11px; color: #8DA5C9;
+    word-break: break-all;
+  }
+  .matched {
+    background: rgba(76,175,80,0.15); border: 1px solid #4CAF50;
+    color: #81C784; padding: 8px 12px; border-radius: 6px;
+    margin-top: 8px; font-size: 13px; font-weight: 600;
+  }
+  hr { border: 0; border-top: 1px solid #25334d; margin: 16px 0; }
+</style>
+</head>
+<body>
+
+<h1>🔓 NFC Security Tester</h1>
+<span class="badge">DEBUG · alleen voor eigen audits</span>
+
+<div class="card">
+  <p class="info" style="margin: 0">
+    Deze tool leest NFC-tags die je tegen de telefoon houdt en helpt je
+    inschatten of je deurtoegang kraakbaar is. <strong>Niet</strong> bedoeld
+    om in te breken bij anderen.
+  </p>
+</div>
+
+<div class="card">
+  <h3>1. Scan een tag</h3>
+  <div class="scan-area" id="scanArea">
+    <span class="scan-icon">📱</span>
+    Houd de NFC-tag tegen de achterkant van je telefoon
+  </div>
+  <p id="scanStatus" class="info" style="margin-top: 8px; min-height: 18px"></p>
+</div>
+
+<div class="card" id="lastScanCard" style="display: none">
+  <h3>Laatste scan</h3>
+  <pre id="lastScanInfo"></pre>
+  <div id="matchInfo"></div>
+  <button onclick="saveCurrentScan()">💾 Opslaan met label</button>
+  <button class="danger" onclick="tryEmulate()">📡 Probeer te emuleren</button>
+</div>
+
+<div class="card">
+  <h3>Opgeslagen tags</h3>
+  <div id="savedTags" class="info">(nog geen tags opgeslagen)</div>
+  <button class="subtle small" style="margin-top: 12px" onclick="clearAll()" id="clearAllBtn" hidden>Wis alles</button>
+</div>
+
+<hr>
+
+<div class="card info">
+  <h3 style="color: #ff5252">⚠️ Beoordeling van je deurtag</h3>
+
+  <p><strong>Hoe weet je welk type je hebt?</strong> Aan de UID-lengte:</p>
+  <ul style="padding-left: 18px; margin: 4px 0 12px">
+    <li><strong>4 bytes (8 hex chars):</strong> meestal MIFARE Classic / Ultralight — onveilig voor toegang</li>
+    <li><strong>7 bytes (14 hex chars):</strong> meestal MIFARE DESFire / NTAG — veiliger als correct gebruikt</li>
+    <li><strong>10 bytes (20 hex chars):</strong> ISO 14443-4 (paspoorten, bankkaarten) — robust crypto</li>
+  </ul>
+
+  <p><strong>MIFARE Classic 1K (4-byte UID, ATQA 0004, SAK 08)</strong></p>
+  <p style="margin-top: -8px">
+    Gekraakt sinds 2008 (DarkSide attack). Volledig kopiëerbaar in
+    seconden met een Proxmark3 of Flipper Zero. Als je deur enkel UID
+    checkt: dit is fundamenteel onveilig. Aanvaller heeft &lt;€60-€170
+    hardware nodig en geen technische skills.
+  </p>
+
+  <p><strong>MIFARE DESFire EV1/EV2/EV3</strong></p>
+  <p style="margin-top: -8px">
+    Veilig <em>als correct geconfigureerd</em>: secure messaging,
+    AES-128, mutual authentication. Vaak duurder maar het verschil
+    tussen een namaakbare en een degelijke deurtag.
+  </p>
+
+  <p><strong>Conclusie</strong></p>
+  <p style="margin-top: -8px">
+    Geef je gescande UID door aan een beveiligingsfirma of zoek het
+    UID-formaat op (4 vs 7 bytes). Als 4 bytes en alleen UID-check:
+    deurupgrade overwegen.
+  </p>
+</div>
+
+<div class="card info">
+  <h3>📡 Over emulatie via Android</h3>
+  <p>
+    Stock Android kan via <strong>Host Card Emulation (HCE)</strong>
+    APDU-commands beantwoorden of NDEF-data spelen, maar
+    <strong>kan de UID van een passive tag NIET spoofen</strong>. De UID
+    is hardware-gefixeerd in de chip van de telefoon.
+  </p>
+  <p>
+    Voor échte UID-spoofing van MIFARE/ISO-14443A tags heb je nodig:
+  </p>
+  <ul style="padding-left: 18px; margin: 4px 0">
+    <li><strong>Proxmark3</strong> (€100-300) — pro-tool</li>
+    <li><strong>Flipper Zero</strong> (~€170) — populair, eenvoudig</li>
+    <li>Een <strong>magic UID changeable card</strong> + Proxmark</li>
+    <li>Een <strong>gerooted</strong> Android-toestel met aangepaste firmware</li>
+  </ul>
+  <p>
+    Als je deur <strong>alleen</strong> de UID controleert, zijn al die
+    routes triviaal voor iemand met €60-200 budget en YouTube.
+  </p>
+</div>
+
+<button class="subtle" onclick="window.location='index.html'">← Terug naar app</button>
+
+<script>
+let lastScan = null;
+
+// QEClock.onNfcScan wordt door MainActivity aangeroepen bij elke NFC-scan.
+// We overschrijven hem voor deze pagina zodat alle scans hier worden opgevangen.
+window.QEClock = window.QEClock || {};
+window.QEClock.onNfcScan = function(tagId) {
+  const norm = String(tagId || '').trim();
+  lastScan = {
+    uid_hex: norm.toUpperCase(),
+    uid_hex_lower: norm.toLowerCase(),
+    bytes: Math.floor(norm.length / 2),
+    timestamp: new Date().toISOString(),
+  };
+  renderLastScan();
+  document.getElementById('scanStatus').innerHTML =
+    '✅ Tag gescand om ' + new Date().toLocaleTimeString();
+  if (navigator.vibrate) navigator.vibrate(100);
+};
+
+function renderLastScan() {
+  if (!lastScan) return;
+  document.getElementById('lastScanCard').style.display = '';
+  const info = {
+    'UID (hex, hoofdletters)': lastScan.uid_hex,
+    'UID (hex, kleine letters)': lastScan.uid_hex_lower,
+    'Aantal bytes': lastScan.bytes,
+    'Vermoedelijk type':
+      lastScan.bytes === 4 ? 'MIFARE Classic / Ultralight (4-byte UID)' :
+      lastScan.bytes === 7 ? 'MIFARE DESFire / NTAG (7-byte UID)' :
+      lastScan.bytes === 10 ? 'ISO 14443-4 (10-byte UID)' :
+      'Onbekend formaat',
+    'Tijd gescand': lastScan.timestamp,
+  };
+  document.getElementById('lastScanInfo').textContent =
+    Object.entries(info).map(([k, v]) => k.padEnd(30) + ' : ' + v).join('\n');
+
+  // Match check tegen opgeslagen tags
+  const all = loadSaved();
+  const match = all.find(t =>
+    (t.uid_hex_lower || t.tagId || '').toLowerCase() === lastScan.uid_hex_lower
+  );
+  const matchDiv = document.getElementById('matchInfo');
+  matchDiv.innerHTML = match
+    ? `<div class="matched">✓ Match: ${escapeHtml(match.label || '(naamloos)')}</div>`
+    : '';
+}
+
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem('qe_nfc_audit') || '[]'); }
+  catch(e) { return []; }
+}
+function storeSaved(all) {
+  try { localStorage.setItem('qe_nfc_audit', JSON.stringify(all)); }
+  catch(e) { alert('Opslaan mislukt: ' + e.message); }
+}
+
+function saveCurrentScan() {
+  if (!lastScan) return;
+  const label = prompt('Label voor deze tag (bv. "Voordeur kantoor", "Magazijn"):',
+                       'Tag ' + lastScan.uid_hex.substr(0, 8));
+  if (label === null) return;
+  const all = loadSaved();
+  all.push({ ...lastScan, label: label || '(naamloos)' });
+  storeSaved(all);
+  renderSaved();
+  document.getElementById('scanStatus').textContent = '💾 Opgeslagen als "' + label + '"';
+}
+
+function deleteSaved(i) {
+  const all = loadSaved();
+  all.splice(i, 1);
+  storeSaved(all);
+  renderSaved();
+}
+
+function clearAll() {
+  if (!confirm('Alle opgeslagen tags wissen?')) return;
+  storeSaved([]);
+  renderSaved();
+}
+
+function renderSaved() {
+  const all = loadSaved();
+  const div = document.getElementById('savedTags');
+  document.getElementById('clearAllBtn').hidden = all.length === 0;
+  if (!all.length) { div.textContent = '(nog geen tags opgeslagen)'; return; }
+  div.innerHTML = all.map((t, i) => `
+    <div class="saved-tag">
+      <div style="flex:1; min-width:0">
+        <div class="label">${escapeHtml(t.label || '(naamloos)')}</div>
+        <div class="uid">${escapeHtml(t.uid_hex || t.tagId || '')}</div>
+        <div style="font-size:10px;color:#5C7A99;margin-top:2px">
+          ${escapeHtml((t.bytes || Math.floor((t.uid_hex || t.tagId || '').length / 2)) + ' bytes · ' + (t.timestamp || '?'))}
+        </div>
+      </div>
+      <button class="small danger" onclick="deleteSaved(${i})">✕</button>
+    </div>
+  `).join('');
+}
+
+function tryEmulate() {
+  if (!lastScan) return;
+  const msg = [
+    '⚠️ Stock Android kan deze UID NIET spoofen.',
+    '',
+    'Wat dit knop wel kan: een korte HCE-emulatiepoging (alleen APDU-protocollen,',
+    'geen UID). Voor MIFARE Classic / NTAG-toegangstags heeft dit geen effect',
+    'omdat de deur alleen de UID checkt.',
+    '',
+    'Voor echte UID-spoofing van deze tag (' + lastScan.uid_hex + ') heb je nodig:',
+    '  • Proxmark3 (€100-300) — kan elke ISO 14443A UID overschrijven naar een "magic" UID-changeable card',
+    '  • Flipper Zero (~€170) — eenvoudige UI, ondersteunt MIFARE Classic clone',
+    '  • Een gerooted Android-toestel met NFC-firmware mods (zeldzaam)',
+    '',
+    'Conclusie: als je deur alleen de UID checkt, kan een aanvaller met €60-200',
+    'budget en een paar YouTube-tutorials je deur openen na 1 vluchtige scan.',
+  ].join('\n');
+  alert(msg);
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s == null ? '' : s);
+  return d.innerHTML;
+}
+
+renderSaved();
+</script>
+
+</body>
+</html>
