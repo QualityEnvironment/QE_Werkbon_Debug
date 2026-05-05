@@ -22,9 +22,9 @@ const RobawsAPI = {
     // Bron: auth.php user_mapping + Robaws gebruikersbeheer
     EMPLOYEES: {
         // Techniekers
-        'glycera@qe.be':             { employeeId: 7,  userId: null,  name: 'Glycera',    role: 'technieker' },
+        'glycera@qe.be':             { employeeId: 7,  userId: 10,    name: 'Glycera',    role: 'technieker' },
         'sascha@qe.be':              { employeeId: 9,  userId: 18,    name: 'Sascha',     role: 'technieker' },
-        'daxleekens@qe.be':          { employeeId: 10, userId: null,  name: 'Dax',        role: 'technieker' },
+        'daxleekens@qe.be':          { employeeId: 10, userId: 9,     name: 'Dax',        role: 'technieker' },
         'olivier.puchacz@qe.be':     { employeeId: 12, userId: 13,    name: 'Olivier',    role: 'technieker' },
         'yassine@qe.be':             { employeeId: 30, userId: 20,    name: 'Yassine',    role: 'technieker' },
         // Monteurs
@@ -33,16 +33,16 @@ const RobawsAPI = {
         'jelle@qe.be':               { employeeId: 3,  userId: 14,    name: 'Jelle',      role: 'monteur' },
         'wim@qe.be':                 { employeeId: 4,  userId: 22,    name: 'Wim',        role: 'monteur' },
         'jens@qe.be':                { employeeId: 5,  userId: 23,    name: 'Jens',       role: 'monteur' },
-        'herve@qe.be':               { employeeId: 8,  userId: null,  name: 'Herve',      role: 'monteur' },
+        'herve@qe.be':               { employeeId: 8,  userId: 15,    name: 'Herve',      role: 'monteur' },
         'keng@qe.be':                { employeeId: 11, userId: 17,    name: 'Keng',       role: 'monteur' },
         'joshua@qe.be':              { employeeId: 13, userId: 16,    name: 'Joshua',     role: 'monteur' },
         // Bureel / kantoor
         'vince@qe.be':               { employeeId: 16, userId: 5,     name: 'Vince',      role: 'bureel' },
         'bjorn@qe.be':               { employeeId: 19, userId: 4,     name: 'Bjorn',      role: 'bureel' },
         'bart@qe.be':                { employeeId: 20, userId: 7,     name: 'Bart',       role: 'bureel' },
-        'felicity@qe.be':            { employeeId: 21, userId: null,  name: 'Felicity',   role: 'bureel' },
+        'felicity@qe.be':            { employeeId: 21, userId: 6,     name: 'Felicity',   role: 'bureel' },
         'rolf@qe.be':                { employeeId: 22, userId: 2,     name: 'Rolf',       role: 'bureel' },
-        'els@qe.be':                 { employeeId: null, userId: null, name: 'Els',       role: 'bureel' },
+        'els@qe.be':                 { employeeId: 23, userId: 3,     name: 'Els',        role: 'bureel' },
     },
 
     // === AUTH HEADERS ===
