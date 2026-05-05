@@ -713,13 +713,83 @@ const RobawsAPI = {
         return blob;
     },
     setLocalAvatar(email, dataUrl) {
-        try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl); } catch(e){}
+        try {
+            localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl);
+            return true;
+        } catch(e) {
+            // BUG-fix: vroeger werd de quota-fout stilzwijgend geslikt → bij
+            // refresh was de cache leeg en verscheen de foto niet meer.
+            // Loggen zodat we het in de DevTools-console kunnen zien.
+            console.warn('[RobawsAPI] Avatar opslaan in localStorage mislukt (' + e.name +
+                '): mogelijk quota overschreden. dataUrl was ' +
+                (dataUrl ? dataUrl.length : 0) + ' tekens lang.');
+            return false;
+        }
     },
     getLocalAvatar(email) {
         return localStorage.getItem('qe_avatar_' + email.toLowerCase()) || null;
     },
     clearLocalAvatar(email) {
         try { localStorage.removeItem('qe_avatar_' + email.toLowerCase()); } catch(e){}
+    },
+
+    /**
+     * Schaal een dataUrl af naar maximaal NxN, JPEG met opgegeven quality.
+     * Wordt gebruikt om profielfoto's te thumbnaillen voor lokale cache.
+     * Resolved met de geresizede dataUrl, of bij fout met de originele
+     * dataUrl als fallback.
+     */
+    _resizeImageDataUrl(dataUrl, maxSize, quality) {
+        maxSize = maxSize || 256;
+        quality = quality || 0.85;
+        return new Promise((resolve) => {
+            try {
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        let w = img.naturalWidth || img.width;
+                        let h = img.naturalHeight || img.height;
+                        if (w > maxSize || h > maxSize) {
+                            if (w >= h) { h = Math.round(h * (maxSize / w)); w = maxSize; }
+                            else { w = Math.round(w * (maxSize / h)); h = maxSize; }
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, w, h);
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    } catch(e) {
+                        console.warn('[RobawsAPI] Image resize mislukt:', e.message);
+                        resolve(dataUrl);
+                    }
+                };
+                img.onerror = () => {
+                    console.warn('[RobawsAPI] Image load mislukt voor resize');
+                    resolve(dataUrl);
+                };
+                img.src = dataUrl;
+            } catch(e) {
+                resolve(dataUrl);
+            }
+        });
+    },
+
+    /**
+     * Cache een avatar in localStorage als kleine thumbnail (256x256).
+     * Voorkomt dat het quota wordt overschreden door grote profielfoto's.
+     * Returns de gecachete (geresizede) dataUrl, of null bij fout.
+     */
+    async cacheAvatarFromDataUrl(email, dataUrl) {
+        if (!dataUrl) return null;
+        let toCache = dataUrl;
+        try {
+            toCache = await this._resizeImageDataUrl(dataUrl, 256, 0.85);
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar resize mislukt, val terug op origineel:', e.message);
+        }
+        const ok = this.setLocalAvatar(email, toCache);
+        return ok ? toCache : null;
     },
 
     /**
@@ -758,7 +828,8 @@ const RobawsAPI = {
                 r.onload = () => res(r.result);
                 r.readAsDataURL(blob);
             });
-            this.setLocalAvatar(email, dataUrl);
+            // Resize naar thumbnail voor cache (anders quota-issue)
+            await this.cacheAvatarFromDataUrl(email, dataUrl);
             console.log('[RobawsAPI] Avatar verfrist vanuit Robaws bij login');
         } catch(e) {
             console.warn('[RobawsAPI] Avatar omzetten naar dataUrl mislukt:', e.message);

@@ -112,6 +112,44 @@ const app = {
             window._qeRejectionHandlerInstalled = true;
         }
 
+        // Android back-knop: bij elke navigate wordt window.history.pushState
+        // aangeroepen, waardoor de WebView weet dat er een back-stack is.
+        // De Java-laag (MainActivity.onBackPressed) doet dan webView.goBack()
+        // i.p.v. de app te sluiten — wat een popstate-event triggert in JS.
+        // Hier handelen we dat event af door de modal te sluiten of binnen
+        // de app naar het vorige scherm te navigeren.
+        if (!window._qeBackHandlerInstalled) {
+            window.addEventListener('popstate', () => {
+                // 1. Modal heeft prioriteit: sluit hem en compenseer de pop
+                const modal = document.getElementById('modalOverlay');
+                if (modal && modal.classList.contains('show')) {
+                    this.closeModal();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
+                // 2. Speciale schermen die niet via gewone goBack mogen (zelfde
+                //    logica als app.goBack — factuur is al aangemaakt)
+                if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
+                    this.screenHistory = [];
+                    try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    this.navigate('screenPlanning', false);
+                    this.loadPlanning();
+                    return;
+                }
+                // 3. Schermhistorie? Pop en navigeer (window.history is al gepop't door Android)
+                if (this.screenHistory.length > 0) {
+                    const prev = this.screenHistory.pop();
+                    this.navigate(prev, false);
+                    return;
+                }
+                // 4. Geen history meer: blijf op huidig scherm. Bij volgende
+                //    back is webView.canGoBack() false en sluit Java de app.
+            });
+            // Initiële history-entry zodat de eerste back-knop een entry heeft
+            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
+            window._qeBackHandlerInstalled = true;
+        }
+
         // Standaard PINs seeden (alleen als er nog geen PIN staat)
         if (typeof RobawsAPI !== 'undefined' && RobawsAPI.seedDefaultPins) {
             RobawsAPI.seedDefaultPins();
@@ -591,6 +629,9 @@ const app = {
     navigate(screenId, pushHistory = true) {
         if (pushHistory && this.currentScreen !== screenId) {
             this.screenHistory.push(this.currentScreen);
+            // Voeg ook een entry toe aan window.history zodat de Android
+            // back-knop deze stap kan terugzetten (zie popstate-handler in init).
+            try { history.pushState({ qeApp: true, screen: screenId }, '', location.pathname); } catch(_) {}
         }
 
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -639,13 +680,15 @@ const app = {
         // Vanaf betaalscherm/overschrijving: factuur is al aangemaakt, ga altijd naar planning
         if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
             this.screenHistory = [];
+            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
             this.navigate('screenPlanning', false);
             this.loadPlanning();
             return;
         }
+        // Trigger window.history.back() zodat zowel UI back-button als Android
+        // back-button via dezelfde popstate-handler lopen (alles in sync).
         if (this.screenHistory.length > 0) {
-            const prev = this.screenHistory.pop();
-            this.navigate(prev, false);
+            history.back();
         } else {
             this.navigate('screenPlanning', false);
         }
@@ -1278,7 +1321,7 @@ const app = {
             this.timer.elapsed = Date.now() - this.timer.startTime;
             this.timer.running = false;
             document.getElementById('btnTimerStart').style.display = '';
-            document.getElementById('btnTimerVerplaatsing').style.display = '';
+            // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
             document.getElementById('btnTimerPause').style.display = 'none';
             this._saveTimerState();
         } else {
@@ -1307,23 +1350,48 @@ const app = {
         }
     },
 
-    _showTimerCorrection() {
+    async _showTimerCorrection() {
         const startDate = new Date(this.timer.startTime);
         const endDate = new Date();
         const type = this.timer.type || 'klant';
         const label = this._timerLabels[type] || type;
 
-        const fmtH = (d) => String(d.getHours()).padStart(2, '0');
-        const fmtM = (d) => String(d.getMinutes()).padStart(2, '0');
+        // Toon eerst loading zodat de modal direct verschijnt
+        document.getElementById('modalContent').innerHTML =
+            `<h3>${label} — controleer tijden</h3><div class="spinner" style="margin:20px auto"></div>`;
+        this.openModal();
 
         const hourOpts = (sel) => Array.from({length: 24}, (_, i) =>
             `<option value="${i}" ${i === sel ? 'selected' : ''}>${String(i).padStart(2,'0')}</option>`).join('');
         const minOpts = (sel) => Array.from({length: 60}, (_, m) =>
             `<option value="${m}" ${m === sel ? 'selected' : ''}>${String(m).padStart(2,'0')}</option>`).join('');
+        const pauzeOpts = [0, 15, 30, 45, 60].map(m =>
+            `<option value="${m}" ${m === 0 ? 'selected' : ''}>${m} min</option>`).join('');
+
+        // Werknemers ophalen — zelfde flow als addManualHours, met fallback
+        // naar de ingelogde gebruiker als de dagplanning er geen heeft.
+        const empIds = this.currentWO ? (this.currentWO.employeeIds || []) : [];
+        let employees = [];
+        if (empIds.length > 0) {
+            try { employees = await this._getEmployeeNames(empIds); }
+            catch(e) { console.warn('[App] Werknemers ophalen voor timer-popup mislukt:', e); }
+        }
+        if (employees.length === 0 && this.currentUser) {
+            employees = [{ id: String(this.currentUser.robawsEmployeeId), name: this.currentUser.name || 'Ik' }];
+        }
+        const currentEmpId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : '';
+        const employeeSelect = employees.length > 0 ? `
+            <div class="form-group" style="margin-bottom:12px">
+                <label>👷 Werknemer</label>
+                <select class="form-input" id="tcEmployee">
+                    ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${this.escapeHtml(e.name)}</option>`).join('')}
+                </select>
+            </div>` : '';
 
         document.getElementById('modalContent').innerHTML = `
             <h3>${label} — controleer tijden</h3>
             <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Pas aan indien nodig</p>
+            ${employeeSelect}
             <div class="form-group" style="margin-bottom:10px">
                 <label>Van</label>
                 <div style="display:flex;gap:8px;align-items:center">
@@ -1332,7 +1400,7 @@ const app = {
                     <select class="form-input" id="tcFromM" style="flex:1">${minOpts(startDate.getMinutes())}</select>
                 </div>
             </div>
-            <div class="form-group" style="margin-bottom:12px">
+            <div class="form-group" style="margin-bottom:10px">
                 <label>Tot</label>
                 <div style="display:flex;gap:8px;align-items:center">
                     <select class="form-input" id="tcToH" style="flex:1">${hourOpts(endDate.getHours())}</select>
@@ -1340,10 +1408,13 @@ const app = {
                     <select class="form-input" id="tcToM" style="flex:1">${minOpts(endDate.getMinutes())}</select>
                 </div>
             </div>
+            <div class="form-group" style="margin-bottom:12px">
+                <label>☕ Pauze</label>
+                <select class="form-input" id="tcPauze">${pauzeOpts}</select>
+            </div>
             <button class="btn btn-primary btn-full" onclick="app._saveTimerCorrection('${type}')">✓ Opslaan</button>
             <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app._discardTimer()">Verwijderen</button>
         `;
-        this.openModal();
     },
 
     _saveTimerCorrection(type) {
@@ -1351,10 +1422,17 @@ const app = {
         const fm = parseInt(document.getElementById('tcFromM').value);
         const th = parseInt(document.getElementById('tcToH').value);
         const tm = parseInt(document.getElementById('tcToM').value);
+        const pauze = parseInt(document.getElementById('tcPauze')?.value || 0);
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
-        const duration = (th * 60 + tm) - (fh * 60 + fm);
-        if (duration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+        const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
+        if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+        const duration = Math.max(0, totalDuration - pauze);
+
+        // Werknemer ophalen (uit dropdown of ingelogde user)
+        const empSelect = document.getElementById('tcEmployee');
+        const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
+        const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
 
         // GPS check-out bij stop
         this._getGpsLocation(loc => {
@@ -1367,7 +1445,9 @@ const app = {
 
         if (this.currentWO) {
             this.woData[this.currentWO.id].hours.push({
-                id: Date.now(), type, startTime: from, endTime: to, duration,
+                id: Date.now(), type, startTime: from, endTime: to,
+                duration, pauze,
+                employeeId, employeeName,
                 gpsStart: this.timer.gpsStart || null,
             });
             this.renderHoursList();
@@ -1375,7 +1455,8 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
-        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}`);
+        const pauzeTxt = pauze > 0 ? ` (${pauze}min pauze)` : '';
+        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}`);
     },
 
     _discardTimer() {
@@ -1389,7 +1470,7 @@ const app = {
         document.getElementById('timerValue').textContent = '00:00:00';
         document.getElementById('timerLabel').textContent = 'Werkuren';
         document.getElementById('btnTimerStart').style.display = '';
-        document.getElementById('btnTimerVerplaatsing').style.display = '';
+        // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
         document.getElementById('btnTimerPause').style.display = 'none';
         document.getElementById('btnTimerStop').style.display = 'none';
     },

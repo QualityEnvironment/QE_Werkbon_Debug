@@ -273,8 +273,8 @@ const APIBridge = {
                         r.onload = () => res(r.result);
                         r.readAsDataURL(blob);
                     });
-                    RobawsAPI.setLocalAvatar(user.email, dataUrl);
-                    return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws' });
+                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
+                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws' });
                 }
             } catch(e) { /* offline of geen avatar in Robaws */ }
             return this.jsonResponse({ avatar: null, dataUrl: null });
@@ -292,8 +292,8 @@ const APIBridge = {
                         r.onload = () => res(r.result);
                         r.readAsDataURL(blob);
                     });
-                    RobawsAPI.setLocalAvatar(user.email, dataUrl);
-                    return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws', refreshed: true });
+                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
+                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws', refreshed: true });
                 }
                 // Geen foto meer in Robaws → wis ook lokale cache
                 RobawsAPI.clearLocalAvatar && RobawsAPI.clearLocalAvatar(user.email);
@@ -314,8 +314,10 @@ const APIBridge = {
             const body = await this.parseBody(options);
             const dataUrl = body.dataUrl || '';
             if (!dataUrl) return this.jsonResponse({ success: false, error: 'Geen foto' }, 400);
-            // Lokaal direct cachen
-            RobawsAPI.setLocalAvatar(user.email, dataUrl);
+            // Lokaal direct cachen als 256x256 thumbnail (past gegarandeerd
+            // in localStorage; voorkomt quota-fouten bij grote foto's).
+            // De Robaws-upload hieronder krijgt de oorspronkelijke dataUrl.
+            const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
             // Naar Robaws sturen
             try {
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -342,9 +344,11 @@ const APIBridge = {
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
                 }
-                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: dataUrl, dataUrl, fileName });
+                // Return de gecachete (kleinere) dataUrl zodat de UI de
+                // identieke foto toont als bij volgende refresh uit cache.
+                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: cachedDataUrl, dataUrl: cachedDataUrl, fileName });
             } catch(e) {
-                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: dataUrl });
+                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: cachedDataUrl });
             }
         }
 
