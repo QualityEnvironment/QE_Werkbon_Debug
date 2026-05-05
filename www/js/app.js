@@ -390,19 +390,33 @@ const app = {
             if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
             return;
         }
-        // BUG-fix: HEAD werkt niet betrouwbaar in Android WebView op file://
-        // URLs (response.ok is dan false). We gebruiken nu GET en kijken of
-        // de body niet-leeg en niet-een-foutpagina is.
-        fetch('debug-nfc.html').then(r => r.text()).then(text => {
-            const exists = !!(text && text.length > 100 && text.indexOf('NFC Security Tester') !== -1);
+        // BUG-fix: fetch() werkt niet altijd op file:// in Android WebView —
+        // soms krijg je een lege body. XMLHttpRequest is betrouwbaarder.
+        let done = false;
+        const finish = (exists, why) => {
+            if (done) return;
+            done = true;
             this._nfcTesterChecked = true;
             this._nfcTesterAvailable = exists;
-            if (!exists) return;
-            this._injectNfcTesterButton();
-        }).catch(() => {
-            this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = false;
-        });
+            console.log('[DebugNFC] available=' + exists + ' (' + why + ')');
+            if (exists) this._injectNfcTesterButton();
+        };
+        try {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', 'debug-nfc.html', true);
+            xhr.timeout = 5000;
+            xhr.onload = () => {
+                const text = xhr.responseText || '';
+                console.log('[DebugNFC] xhr.status=' + xhr.status + ' text.length=' + text.length);
+                const exists = text.length > 100 && text.indexOf('NFC Security Tester') !== -1;
+                finish(exists, exists ? 'xhr-found' : 'xhr-no-marker');
+            };
+            xhr.onerror = () => finish(false, 'xhr-error');
+            xhr.ontimeout = () => finish(false, 'xhr-timeout');
+            xhr.send();
+        } catch(e) {
+            finish(false, 'xhr-exception: ' + e.message);
+        }
     },
     _injectNfcTesterButton() {
         const profile = document.getElementById('screenProfile');
