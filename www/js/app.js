@@ -465,8 +465,48 @@ const app = {
         }
         const updateStatus = document.getElementById('updateStatus');
         if (updateStatus) updateStatus.style.display = 'none';
+
+        // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
+        // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
+        // In de productie-versie bestaat die file niet en gebeurt er niets.
+        this._maybeShowNfcTesterButton();
+        // === EINDE DEBUG NFC TESTER ===
+
         this.navigate('screenProfile');
     },
+
+    // === DEBUG NFC TESTER — verwijder deze methode na security audit ===
+    _maybeShowNfcTesterButton() {
+        if (this._nfcTesterChecked) {
+            // Eenmaal gecheckt — toon/verberg op basis van resultaat
+            const btn = document.getElementById('btnDebugNfcTester');
+            if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
+            return;
+        }
+        fetch('debug-nfc.html', { method: 'HEAD' }).then(r => {
+            this._nfcTesterChecked = true;
+            this._nfcTesterAvailable = r.ok;
+            if (!r.ok) return;
+            // Voeg knop toe aan profiel-scherm (na de "App bijwerken"-card)
+            const profile = document.getElementById('screenProfile');
+            if (!profile || document.getElementById('btnDebugNfcTester')) return;
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
+            card.innerHTML = `
+                <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
+                <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
+                <button id="btnDebugNfcTester" class="btn btn-full"
+                    style="background:#C62828;color:#fff;padding:12px"
+                    onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
+            `;
+            // Plaats vóór de PIN-wijzigen card
+            const pinCard = profile.querySelector('.card:has(input#profileOldPin)');
+            if (pinCard) profile.insertBefore(card, pinCard);
+            else profile.appendChild(card);
+        }).catch(() => { this._nfcTesterChecked = true; this._nfcTesterAvailable = false; });
+    },
+    // === EINDE DEBUG NFC TESTER ===
 
     checkForUpdate() {
         const btn = document.getElementById('btnCheckUpdate');
