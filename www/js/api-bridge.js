@@ -253,9 +253,18 @@ const APIBridge = {
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
         if (action === 'get-avatar') {
-            // Robaws is leidend: probeer altijd eerst Robaws zodat een wijziging
-            // op een ander toestel ook hier opduikt. Lokale cache is enkel
-            // fallback voor offline gebruik.
+            // Cache-first: voorheen werd ALTIJD Robaws aangeroepen wat traag is
+            // en onnodig data verbruikt. Nu gebruiken we de lokale cache als
+            // primaire bron. De cache wordt vernieuwd:
+            //   - bij elke succesvolle login (RobawsAPI.refreshAvatarFromRobaws)
+            //   - bij upload van een nieuwe foto via set-avatar
+            //   - bij expliciete refresh via action=force-refresh-avatar
+            const local = RobawsAPI.getLocalAvatar(user.email);
+            if (local) {
+                return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
+            }
+            // Geen lokale cache (eerste app-start of cache gewist) → eenmalig
+            // Robaws proberen om de cache te vullen.
             try {
                 const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
                 if (blob) {
@@ -267,10 +276,38 @@ const APIBridge = {
                     RobawsAPI.setLocalAvatar(user.email, dataUrl);
                     return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws' });
                 }
-            } catch(e) { /* val terug op lokale cache */ }
-            const local = RobawsAPI.getLocalAvatar(user.email);
-            if (local) return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
+            } catch(e) { /* offline of geen avatar in Robaws */ }
             return this.jsonResponse({ avatar: null, dataUrl: null });
+        }
+
+        if (action === 'force-refresh-avatar') {
+            // Expliciete refresh — gebruikt door RobawsAPI.refreshAvatarFromRobaws
+            // (na login) en kan ook gebruikt worden voor een handmatige
+            // "vernieuw foto"-knop in de profielpagina.
+            try {
+                const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
+                if (blob) {
+                    const dataUrl = await new Promise(res => {
+                        const r = new FileReader();
+                        r.onload = () => res(r.result);
+                        r.readAsDataURL(blob);
+                    });
+                    RobawsAPI.setLocalAvatar(user.email, dataUrl);
+                    return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws', refreshed: true });
+                }
+                // Geen foto meer in Robaws → wis ook lokale cache
+                RobawsAPI.clearLocalAvatar && RobawsAPI.clearLocalAvatar(user.email);
+                return this.jsonResponse({ avatar: null, dataUrl: null, refreshed: true });
+            } catch(e) {
+                // Bij netwerkfout: laat lokale cache staan, return wat we hebben
+                const local = RobawsAPI.getLocalAvatar(user.email);
+                return this.jsonResponse({
+                    avatar: local || null,
+                    dataUrl: local || null,
+                    source: local ? 'local' : null,
+                    error: 'refresh mislukt: ' + e.message,
+                });
+            }
         }
 
         if (action === 'set-avatar') {

@@ -462,6 +462,12 @@ const RobawsAPI = {
         };
         console.log('[RobawsAPI] Login OK:', empName, '→ employeeId:', employee.id, ', userId:', resolvedUserId || 'GEEN');
         localStorage.setItem('qe_user', JSON.stringify(user));
+
+        // Vernieuw de avatar-cache vanuit Robaws (achtergrond, niet awaited
+        // zodat de login-flow niet wacht op de download). Tijdens app-gebruik
+        // gebruikt get-avatar gewoon de lokale cache.
+        this.refreshAvatarFromRobaws(emailLower, employee.id).catch(() => {});
+
         return { success: true, user };
     },
 
@@ -647,6 +653,41 @@ const RobawsAPI = {
     },
     getLocalAvatar(email) {
         return localStorage.getItem('qe_avatar_' + email.toLowerCase()) || null;
+    },
+    clearLocalAvatar(email) {
+        try { localStorage.removeItem('qe_avatar_' + email.toLowerCase()); } catch(e){}
+    },
+
+    /**
+     * Vernieuw de lokaal gecachete avatar door hem opnieuw uit Robaws op te
+     * halen. Wordt aangeroepen ná een succesvolle login zodat een wijziging
+     * van profielfoto via de admin (of via een ander toestel) door komt.
+     * Tijdens normaal app-gebruik gebruikt de app gewoon de lokale cache —
+     * geen Robaws-call meer per app-start.
+     *
+     * Foutbestendig: als Robaws onbereikbaar is of de werknemer geen foto
+     * heeft, blijft de lokale cache ongewijzigd staan.
+     */
+    async refreshAvatarFromRobaws(email, employeeId) {
+        if (!employeeId) return;
+        try {
+            const blob = await this.getEmployeePhotoBlob(employeeId);
+            if (!blob) {
+                // Geen foto (meer) in Robaws → wis lokale cache zodat de
+                // fallback-initiaal verschijnt i.p.v. een verouderde foto.
+                this.clearLocalAvatar(email);
+                return;
+            }
+            const dataUrl = await new Promise(res => {
+                const r = new FileReader();
+                r.onload = () => res(r.result);
+                r.readAsDataURL(blob);
+            });
+            this.setLocalAvatar(email, dataUrl);
+            console.log('[RobawsAPI] Avatar verfrist vanuit Robaws bij login');
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar refresh mislukt:', e.message);
+        }
     },
 
     getLoggedInUser() {
