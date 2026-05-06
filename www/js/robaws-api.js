@@ -3138,12 +3138,17 @@ const RobawsAPI = {
      * enkel hun eigen kaarten zien.
      */
     async getMyTimeRegistrationWorkOrders(userId, monthPrefix) {
+        // v65: sort=id:desc i.p.v. date:desc — onze migratie-werkbonnen
+        // (id 1248+) zijn de meest recent aangemaakte en staan dus vooraan,
+        // ongeacht hun werkbon-datum. Bij sort=date:desc stonden toekomstige
+        // planning-werkbonnen vooraan en kwam onze 4/5 werkbon niet in de
+        // eerste 20 pagina's voor.
         let allItems = [];
         const seenIds = new Set();
         let page = 0;
-        const maxPages = 20;
+        const maxPages = 30;  // tot 3000 werkbonnen
         while (page < maxPages) {
-            const res = await this.get(`work-orders?limit=100&page=${page}&sort=date:desc`);
+            const res = await this.get(`work-orders?limit=100&page=${page}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Tijdsregistratie-werkbonnen fetch faalde (${res.code})`);
             }
@@ -3154,10 +3159,7 @@ const RobawsAPI = {
                     allItems.push(it);
                 }
             }
-            // Vroeg stoppen wanneer oudste item een datum heeft die voor de gevraagde maand ligt
-            const oldest = res.data.items[res.data.items.length - 1];
-            const oldestMonth = (oldest.date || '').substring(0, 7);
-            if (oldestMonth && oldestMonth < monthPrefix) break;
+            // Geen date-based early-stop meer; sort=id:desc heeft geen date-volgorde garantie
             page++;
             if (res.data.totalPages && page >= res.data.totalPages) break;
         }
