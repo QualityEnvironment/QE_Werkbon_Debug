@@ -900,12 +900,26 @@ window.QEClock = {
         const user = RobawsAPI.getLoggedInUser();
         if (!user) return;
 
+        // BUG-fix: vroeger werd bij een mislukte Robaws-fetch (timeout, 5xx,
+        // pagination-glitch) de lokale sessie GEWIST omdat getTimeRegistrations
+        // stilletjes [] terugaf. Volgende NFC scan dacht "niets ingeklokt" en
+        // maakte een 2e Robaws registratie aan → dubbele registraties.
+        // Fix: getTimeRegistrations gooit nu een fout bij niet-200 responses,
+        // wat hier door de catch wordt opgevangen. Alleen bij een SUCCESVOLLE
+        // fetch met écht 0 items wordt de lokale sessie gewist.
+        let robawsRegs;
         try {
             const today = this._localDate();
-            const robawsRegs = await RobawsAPI.getTimeRegistrations(user.robawsEmployeeId, today);
+            robawsRegs = await RobawsAPI.getTimeRegistrations(user.robawsEmployeeId, today);
             console.log('[Clock] Robaws sync: gevonden', robawsRegs.length, 'registraties voor vandaag');
+        } catch (e) {
+            console.warn('[Clock] Robaws sync mislukt — lokale sessie BEHOUDEN:', e.message);
+            return;
+        }
 
+        try {
             // Geen registraties in Robaws? Wis de lokale sessie volledig
+            // (alleen na bevestigde succesvolle fetch — zie boven)
             if (robawsRegs.length === 0) {
                 const session = this.getSession();
                 if (session && (session.active || (session.completedSessions || []).length > 0)) {

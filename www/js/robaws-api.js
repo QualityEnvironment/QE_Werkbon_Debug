@@ -691,12 +691,31 @@ const RobawsAPI = {
      * @param {string} date - YYYY-MM-DD
      */
     async getTimeRegistrations(employeeId, date) {
-        // Robaws filtert op employeeId, we filteren zelf op datum + dubbele employeeId check
-        const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100`);
-        if (res.code !== 200 || !res.data || !res.data.items) return [];
-        return res.data.items.filter(item => {
+        // BUG-fix: vroeger 1 pagina van 100 zonder sort. Robaws default sort is
+        // ascending op id (oudste eerst), dus hedendaagse registraties stonden
+        // op latere pagina's en verdwenen uit de respons. Resultaat: app dacht
+        // dat een werknemer niet ingeklokt was → maakte een 2e registratie aan.
+        // Fix: sort=id:desc (nieuwste eerst), paginate met early-stop, en GOOI
+        // een fout bij niet-200 zodat caller (syncWithRobaws) geen lokale
+        // sessie wist op basis van een mislukte fetch.
+        let allItems = [];
+        let page = 0;
+        const maxPages = 10;
+        while (page < maxPages) {
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            allItems.push(...res.data.items);
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
+            if (oldestDate && oldestDate < date) break;
+            page++;
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
+        return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
-            // Dubbele check: alleen registraties van deze werknemer
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
             const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
             return itemDate === date && empMatch;
@@ -710,14 +729,20 @@ const RobawsAPI = {
         const today = new Date().toISOString().split('T')[0];
         let allItems = [];
         let page = 0;
-        do {
-            const res = await this.get(`time-registrations?limit=100&page=${page}`);
-            if (res.code !== 200 || !res.data || !res.data.items) break;
+        const maxPages = 20;
+        while (page < maxPages) {
+            const res = await this.get(`time-registrations?limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
             allItems.push(...res.data.items);
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
+            if (oldestDate && oldestDate < today) break;
             page++;
-            if (page >= (res.data.totalPages || 1)) break;
-        } while (page < 10);
-        // Filter op vandaag
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
             return itemDate === today;

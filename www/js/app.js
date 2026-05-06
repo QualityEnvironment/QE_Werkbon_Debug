@@ -385,6 +385,15 @@ const app = {
 
     // === DEBUG NFC TESTER — verwijder deze methode na security audit ===
     _maybeShowNfcTesterButton() {
+        // Alleen voor Levi tonen — security audit is admin-only.
+        const email = (this.currentUser && this.currentUser.email || '').toLowerCase();
+        if (email !== 'levi@qe.be') {
+            const existing = document.getElementById('btnDebugNfcTester');
+            if (existing && existing.parentElement) existing.parentElement.remove();
+            this._nfcTesterChecked = true;
+            this._nfcTesterAvailable = false;
+            return;
+        }
         if (this._nfcTesterChecked) {
             const btn = document.getElementById('btnDebugNfcTester');
             if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
