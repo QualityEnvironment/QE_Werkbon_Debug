@@ -2,6 +2,7 @@
  * QE Clock v2 — Tijdsregistratie via Robaws
  */
 
+console.log("✅ [QEClock] v46 — scan-overlay actief, screen-guard aan");
 window.QEClock = {
 
     DEFAULT_START_TIME: '07:00',
