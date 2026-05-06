@@ -527,48 +527,42 @@ window.QEClock = {
     },
 
     // =============================================
-    // INCLOCKEN
+    // INCLOCKEN (v58: maakt Tijdsregistratie-werkbon aan)
     // =============================================
 
     async _clockIn(session, tag) {
         const now = await this._getNow();
         const time = this._localTime(now);
-        const isFirstOfDay = (session.completedSessions || []).length === 0;
 
-        // Bepaal type
-        let type;
-        if (!isFirstOfDay) {
-            type = 'Extra uren';
-        } else {
-            // ALTIJD startuur ophalen van Robaws voor de huidige user bij eerste scan van de dag
+        // Eerste scan van de dag = werkbon aanmaken. Daarna nog een bureau-scan?
+        // Dan starten we gewoon weer een sessie en posten op die werkbon een
+        // extra time-entry bij het volgende clock-out.
+        const isFirstScan = !session.workOrderId;
+
+        let onTimeLabel = 'Op tijd';
+        if (isFirstScan) {
+            // Bepaal Op tijd / Te laat o.b.v. startuur werknemer
             const clockUser = RobawsAPI.getLoggedInUser();
             const clockUserId = clockUser ? String(clockUser.robawsEmployeeId) : null;
             if (clockUserId && this._startuurLoadedForUser !== clockUserId) {
                 try {
                     const myRes = await RobawsAPI.get(`employees/${clockUserId}`);
                     if (myRes.code === 200 && myRes.data && myRes.data.extraFields) {
-                        for (const [name, data] of Object.entries(myRes.data.extraFields)) {
+                        for (const [name, fdata] of Object.entries(myRes.data.extraFields)) {
                             if (name.toLowerCase().includes('startuur')) {
-                                const val = data ? String(data.stringValue ?? data.value ?? '') : '';
+                                const val = fdata ? String(fdata.stringValue ?? fdata.value ?? '') : '';
                                 if (val) {
                                     this._personalStartuur = val;
                                     this._startuurLoadedForUser = clockUserId;
                                     localStorage.setItem(`qe_startuur_${clockUserId}`, val);
-                                    console.log('[Clock] Startuur opgehaald voor', clockUser.name, ':', val);
                                 }
                                 break;
                             }
                         }
                     }
-                } catch(e) {
-                    console.warn('[Clock] Kon startuur niet ophalen:', e.message);
-                }
+                } catch(e) { /* fallback default */ }
             }
             const expectedStart = this.getExpectedStartTime();
-            // BUG-fix: vroeger werd HH:MM als string vergeleken — "7:00" > "09:00"
-            // gaf true (lex-vergelijking op '7' vs '0'). Nu numerieke vergelijking
-            // in minuten met een grace-period van 5 min, zodat 07:00:30 niet
-            // direct als "te laat" telt.
             const toMinutes = (hhmm) => {
                 if (!hhmm) return 0;
                 const m = String(hhmm).match(/^(\d{1,2}):(\d{1,2})/);
@@ -577,11 +571,12 @@ window.QEClock = {
             };
             const GRACE_MIN = 5;
             const isLate = toMinutes(time) > toMinutes(expectedStart) + GRACE_MIN;
-            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart, '(grace ' + GRACE_MIN + 'min) →', isLate ? 'TE LAAT' : 'OP TIJD');
-            type = isLate ? 'Te laat' : 'Op tijd';
+            onTimeLabel = isLate ? 'Te laat' : 'Op tijd';
+            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart,
+                '(grace ' + GRACE_MIN + 'min) ->', onTimeLabel);
         }
 
-        // GPS ophalen
+        // GPS
         let gpsLat = null, gpsLng = null, gpsText = '';
         try {
             const pos = await this._getGPS();
@@ -593,271 +588,301 @@ window.QEClock = {
             gpsText = 'GPS niet beschikbaar';
         }
 
-        // Opmerkingen opbouwen
-        const remarks = `${tag.name} — ${gpsText} — ${time}`;
+        // Opmerking voor werkbon = tag-naam (bv. "Bureau" of nummerplaat) + GPS
+        const opmerking = `${tag.name} - ${gpsText}`;
 
         // Sessie bijwerken
+        const currentUser = RobawsAPI.getLoggedInUser();
+        const empId = currentUser ? String(currentUser.robawsEmployeeId) : session.employeeId;
+        const empName = currentUser ? currentUser.name : '';
+        const userId = currentUser ? currentUser.robawsUserId : null;
+
+        session.employeeId = empId;
+        session.employeeName = empName;
         session.active = true;
         session.startTime = time;
         session.startISO = now.toISOString();
         session.tagType = tag.type;
         session.tagName = tag.name;
-        session.registrationType = type;
-        session.robawsId = null;
+        session.gpsUrl = gpsText;
         session.gpsLat = gpsLat;
         session.gpsLng = gpsLng;
-        session.pendingRemarks = remarks;
-        this._saveSession(session);
 
-        // Upload naar Robaws — gebruik ALTIJD de huidige user, niet de sessie
-        const currentUser = RobawsAPI.getLoggedInUser();
-        const empId = currentUser ? String(currentUser.robawsEmployeeId) : session.employeeId;
-        session.employeeId = empId; // zorg dat sessie altijd juiste ID heeft
-        this._saveSession(session);
-
-        try {
-            const result = await RobawsAPI.createTimeRegistration({
-                employeeId: empId,
-                startDate: session.startISO,
-                type: type,
-                remarks: remarks,
-            });
-            if (result.code === 200 || result.code === 201) {
-                session.robawsId = result.data ? String(result.data.id) : null;
-                this._saveSession(session);
-                console.log('[Clock] Registratie aangemaakt in Robaws, ID:', session.robawsId);
-            } else {
-                console.warn('[Clock] Robaws registratie aanmaken mislukt:', result.code);
-                // BUG-fix: niet-2xx response → wel pending-sync zetten zodat
-                // de sessie niet stilzwijgend in Robaws ontbreekt.
-                this._addPendingSync({
-                    action: 'create_open',
-                    employeeId: empId,
-                    startISO: session.startISO,
-                    type: type,
-                    remarks: remarks,
-                    sessionStartedAt: session.startedAt,
-                });
-            }
-        } catch (e) {
-            console.warn('[Clock] Robaws niet bereikbaar bij inclocken:', e.message);
-            // BUG-fix: vroeger werd er bij offline-fout helemaal NIETS in
-            // de pending-sync queue gezet → de hele inclock-sessie verdween
-            // en bereikte Robaws nooit. Nu queue-en we hem zodat syncPending()
-            // hem later kan aanmaken.
+        // Eerste scan: werkbon aanmaken
+        if (isFirstScan) {
+            session.onTimeLabel = onTimeLabel;
+            session.dateStr = this._localDate();
             try {
-                this._addPendingSync({
-                    action: 'create_open',
+                const wo = await RobawsAPI.createTimeRegistrationWorkOrder({
                     employeeId: empId,
-                    startISO: session.startISO,
-                    type: type,
-                    remarks: remarks,
-                    sessionStartedAt: session.startedAt,
+                    employeeName: empName,
+                    userId: userId,
+                    dateStr: session.dateStr,
+                    ingeklokt: time,
+                    tijdLabel: onTimeLabel,
+                    opmerking: opmerking,
                 });
-            } catch(_) {}
+                session.workOrderId = wo.workOrderId;
+                console.log('[Clock] Tijdsregistratie-werkbon aangemaakt:', wo.workOrderId);
+            } catch (e) {
+                console.error('[Clock] Kon werkbon niet aanmaken:', e.message);
+                this._saveSession(session);
+                return {
+                    ok: false,
+                    message: 'Inklokken mislukt:\n' + (e.message || 'Robaws onbereikbaar'),
+                    refresh: false,
+                };
+            }
         }
+        this._saveSession(session);
 
-        // Resultaat voor SUCCES/MISLUKT overlay (onNfcScan toont hem)
-        // Belangrijk: we tracken niet de exacte Robaws-status hier — bij
-        // een Robaws-fout zou de fetch een fout gooien die in de catch
-        // hierboven afgehandeld wordt. Voor de overlay nemen we aan dat
-        // de scan zelf werkte (sessie is opgeslagen, registratie is in
-        // Robaws of de pending queue).
-        const lateMsg = type === 'Te laat' ? ' (te laat!)' : '';
-        const message = 'Ingeklokt om ' + time + ' — ' + tag.name + lateMsg;
+        const lateMsg = onTimeLabel === 'Te laat' ? ' (te laat!)' : '';
+        const message = isFirstScan
+            ? 'Ingeklokt om ' + time + ' - ' + tag.name + lateMsg
+            : 'Extra sessie gestart om ' + time + ' - ' + tag.name;
         return { ok: true, message, refresh: true };
     },
 
     // =============================================
-    // UITCLOCKEN
+    // UITCLOCKEN (v58: post time-entry + zet Uitgeklokt)
     // =============================================
 
     async _clockOut(session, tag) {
         const now = await this._getNow();
-        const endTime = this._localTime(now);
-        const endISO = now.toISOString();
-        const rawHours = this._calcHours(session.startISO, endISO);
+        const endTimeRaw = this._localTime(now);
 
-        // Pauze aftrekken: dynamisch uit Robaws extra veld "Pauze" (in minuten)
-        // Alleen bij normale registraties (niet bij Laden & Lossen of Extra uren)
-        let pauseHours = 0;
-        let pauseSource = 'geen-aftrek';
-        const isNormalShift = session.registrationType === 'Op tijd' || session.registrationType === 'Te laat';
-        if (isNormalShift) {
-            // Haal pauze op: eerst uit geladen config, dan localStorage cache
-            let pauseMinutes = this._personalPauze;
-            pauseSource = 'config';
-            if (!pauseMinutes && pauseMinutes !== 0) {
-                const user = RobawsAPI.getLoggedInUser();
-                const userId = user ? String(user.robawsEmployeeId) : null;
-                if (userId) {
-                    const cached = localStorage.getItem(`qe_pauze_${userId}`);
-                    if (cached) {
-                        pauseMinutes = parseInt(cached, 10);
-                        pauseSource = 'localStorage';
-                    }
+        if (!session.workOrderId) {
+            return {
+                ok: false,
+                message: 'Geen werkbon gevonden voor vandaag',
+                refresh: false,
+            };
+        }
+
+        // Pauze ophalen (v56 logica)
+        let pauseMinutes = this._personalPauze;
+        let pauseSource = 'config';
+        if (!pauseMinutes && pauseMinutes !== 0) {
+            const user = RobawsAPI.getLoggedInUser();
+            const userId = user ? String(user.robawsEmployeeId) : null;
+            if (userId) {
+                const cached = localStorage.getItem(`qe_pauze_${userId}`);
+                if (cached) {
+                    pauseMinutes = parseInt(cached, 10);
+                    pauseSource = 'localStorage';
                 }
             }
-            // Fallback v56: 60 min ipv 45 (QE-standaard). Als config en cache leeg
-            // zijn was er waarschijnlijk een Robaws-fetch fout - log dit duidelijk.
-            if (!pauseMinutes && pauseMinutes !== 0) {
-                pauseMinutes = 60;
-                pauseSource = 'fallback-60';
-                console.warn('[Clock] PAUZE NIET GEVONDEN voor user - fallback naar 60 min. ' +
-                    'Check Robaws extra-veld "Pauze" op de werknemerskaart.');
-            }
-            pauseHours = pauseMinutes / 60;
         }
-        const hours = Math.max(0, Math.round((rawHours - pauseHours) * 100) / 100);
-        console.log('[Clock] Uren berekend: rawHours', rawHours,
-            '- pauze', Math.round(pauseHours * 60), 'min (', pauseSource, ') =', hours);
+        if (!pauseMinutes && pauseMinutes !== 0) {
+            pauseMinutes = 60;
+            pauseSource = 'fallback-60';
+        }
 
-        // Sessie afronden
-        session.active = false;
-        const completedEntry = {
-            startTime: session.startTime,
-            endTime: endTime,
-            type: session.registrationType,
-            robawsId: session.robawsId,
-            tagName: session.tagName,
-            hours: hours,
+        // Bepaal start- en eindtijd voor time-entry
+        // - Start = MAX(actual scan-tijd, startuur werknemer); rond af op 5min indien te laat
+        // - Eind  = afgerond naar dichtsbijzeijnde 5 min
+        const expectedStart = this.getExpectedStartTime();
+        const toMinutes = (hhmm) => {
+            const m = String(hhmm || '').match(/^(\d{1,2}):(\d{1,2})/);
+            if (!m) return 0;
+            return (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
         };
+        const fromMinutes = (mins) => {
+            const h = Math.floor(mins / 60) % 24;
+            const m = mins % 60;
+            return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+        };
+        const round5 = (mins) => Math.round(mins / 5) * 5;
+
+        const actualStartMin = toMinutes(session.startTime);
+        const expectedStartMin = toMinutes(expectedStart);
+        let entryStartMin;
+        if (actualStartMin <= expectedStartMin) {
+            // Vroeg ingeklokt -> startuur werknemer gebruiken (geen rounding nodig)
+            entryStartMin = expectedStartMin;
+        } else {
+            // Te laat -> afgerond op 5 min
+            entryStartMin = round5(actualStartMin);
+        }
+        const entryEndMin = round5(toMinutes(endTimeRaw));
+        const entryStart = fromMinutes(entryStartMin);
+        const entryEnd = fromMinutes(entryEndMin);
+
+        console.log('[Clock] time-entry tijden:',
+            'startuur=' + expectedStart,
+            'actual=' + session.startTime + '/' + endTimeRaw,
+            '-> entry ' + entryStart + ' -> ' + entryEnd,
+            '(pauze ' + pauseMinutes + 'min, bron ' + pauseSource + ')');
+
+        // 1. Update Uitgeklokt op werkbon (afgerond eind)
+        try {
+            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, entryEnd);
+        } catch(e) {
+            console.warn('[Clock] Uitgeklokt update faalde:', e.message);
+        }
+
+        // 2. POST time-entry voor monteur-uren
+        try {
+            const r = await RobawsAPI.addWorkHoursTimeEntry({
+                workOrderId: session.workOrderId,
+                employeeId: session.employeeId,
+                startTime: entryStart,
+                endTime: entryEnd,
+                breakMinutes: pauseMinutes,
+                articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject,
+            });
+            if (r.code !== 200 && r.code !== 201) {
+                console.warn('[Clock] time-entry POST faalde:', r.code, r.data);
+                return {
+                    ok: false,
+                    message: 'Uitklokken mislukt:\nTime-entry POST faalde (' + r.code + ')',
+                    refresh: true,
+                };
+            }
+            console.log('[Clock] Werkuur monteur time-entry toegevoegd');
+        } catch(e) {
+            console.error('[Clock] time-entry POST exception:', e.message);
+            return {
+                ok: false,
+                message: 'Uitklokken mislukt:\n' + e.message,
+                refresh: false,
+            };
+        }
+
+        // Sessie bijwerken
+        session.active = false;
+        session.endTime = endTimeRaw;
+        session.endISO = now.toISOString();
         session.completedSessions = session.completedSessions || [];
-        session.completedSessions.push(completedEntry);
+        session.completedSessions.push({
+            startTime: session.startTime,
+            endTime: endTimeRaw,
+            entryStart: entryStart,
+            entryEnd: entryEnd,
+            pauseMinutes: pauseMinutes,
+            tagName: session.tagName,
+        });
         this._saveSession(session);
 
-        // Update in Robaws (endDate + hours + breakDuration toevoegen)
-        const breakMinutes = Math.round(pauseHours * 60);
-        if (session.robawsId) {
-            // SECURITY: pre-flight ownership-check — voorkomt dat we per
-            // ongeluk andermans registratie afsluiten als de lokale sessie
-            // ooit een verkeerde robawsId heeft opgevangen.
-            try {
-                const me = RobawsAPI.getLoggedInUser();
-                const existing = await RobawsAPI.get(`time-registrations/${session.robawsId}`);
-                const ownerId = existing.data && (existing.data.employeeId
-                    || (existing.data.employee && existing.data.employee.id));
-                if (me && ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
-                    console.error('[Clock] Sessie verwees naar andermans registratie',
-                        session.robawsId, '— sessie wordt gewist');
-                    const sessionKey = this._getSessionKey();
-                    if (sessionKey) localStorage.removeItem(sessionKey);
-                    if (window.app) {
-                        app.toast('Deze registratie hoort bij iemand anders — sessie gereset', true);
-                    }
-                    return {
-                        ok: false,
-                        message: 'Deze registratie hoort bij iemand anders\n(werknemer ' + ownerId + '). Sessie is gereset — scan opnieuw om correct in te klokken.',
-                        refresh: true,
-                    };
-                }
-            } catch(e) {
-                console.warn('[Clock] Pre-flight ownership-check mislukt:', e.message);
-            }
-            try {
-                const updateData = {
-                    endDate: endISO,
-                    hours: hours,
-                };
-                if (breakMinutes > 0) updateData.breakDuration = breakMinutes;
-                await RobawsAPI.updateTimeRegistration(session.robawsId, updateData);
-                console.log('[Clock] Registratie afgesloten in Robaws:', session.robawsId);
-            } catch (e) {
-                console.warn('[Clock] Robaws update mislukt:', e.message);
-                // Sla op als pending sync
-                this._addPendingSync({
-                    action: 'update',
-                    id: session.robawsId,
-                    endDate: endISO,
-                    hours: hours,
-                    breakDuration: breakMinutes,
-                });
-            }
-        } else {
-            // Was nooit geüpload → sla volledige registratie op als pending
-            this._addPendingSync({
-                action: 'create_complete',
-                employeeId: session.employeeId,
-                startDate: session.startISO,
-                endDate: endISO,
-                hours: hours,
-                type: session.registrationType,
-                remarks: session.pendingRemarks || '',
-            });
-        }
-
-        const pauseMin = Math.round(pauseHours * 60);
-        const pauseText = pauseMin > 0 ? ' (' + pauseMin + 'min pauze)' : '';
         return {
             ok: true,
-            message: 'Uitgeklokt om ' + endTime + ' — ' + hours + 'u gewerkt' + pauseText,
+            message: 'Uitgeklokt om ' + entryEnd + '\n' +
+                'Uren: ' + entryStart + ' - ' + entryEnd +
+                ' (' + pauseMinutes + 'min pauze)',
             refresh: true,
         };
     },
 
     // =============================================
-    // LADEN & LOSSEN
+    // LADEN & LOSSEN (v58: aparte time-entry op vandaag's werkbon)
     // =============================================
 
     async _handleLadenLossen(session, tag) {
-        // Check of er al een actieve L&L sessie loopt
-        if (session.active && session.registrationType === 'Laden & Lossen') {
-            // Stop de L&L sessie
-            await this._clockOut(session, tag);
-            return;
-        }
-
-        // Start nieuwe L&L sessie
         const now = await this._getNow();
         const time = this._localTime(now);
 
-        // GPS
-        let gpsLat = null, gpsLng = null, gpsText = '';
-        try {
-            const pos = await this._getGPS();
-            gpsLat = pos.latitude;
-            gpsLng = pos.longitude;
-            gpsText = `https://maps.google.com/?q=${gpsLat.toFixed(6)},${gpsLng.toFixed(6)}`;
-        } catch (e) {
-            gpsText = 'GPS niet beschikbaar';
-        }
+        // Geval 1: er is al een lopende L&L sub-sessie -> stop hem en post time-entry
+        if (session.llActive) {
+            const llStart = session.llStartTime;
+            // Eind: afgerond op 5 min
+            const round5 = (mins) => Math.round(mins / 5) * 5;
+            const toMinutes = (hhmm) => {
+                const m = String(hhmm || '').match(/^(\d{1,2}):(\d{1,2})/);
+                if (!m) return 0;
+                return (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
+            };
+            const fromMinutes = (mins) => {
+                const h = Math.floor(mins / 60) % 24;
+                const m = mins % 60;
+                return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+            };
+            const llEnd = fromMinutes(round5(toMinutes(time)));
+            // Start van L&L gebruiken we letterlijk (nooit voor verwacht startuur,
+            // want L&L is ad-hoc tijdens werkdag). Indien fractie van 5min, ook ronden.
+            const llStartRounded = fromMinutes(round5(toMinutes(llStart)));
 
-        const remarks = `Laden & Lossen — ${gpsText} — ${time}`;
-
-        // Als er een andere actieve sessie loopt, sluit die eerst
-        if (session.active) {
-            await this._clockOut(session, tag);
-            session = this.getSession() || this._newSession();
-        }
-
-        // Start L&L sessie
-        session.active = true;
-        session.startTime = time;
-        session.startISO = now.toISOString();
-        session.tagType = 'laden_lossen';
-        session.tagName = 'Laden & Lossen';
-        session.registrationType = 'Laden & Lossen';
-        session.robawsId = null;
-        session.gpsLat = gpsLat;
-        session.gpsLng = gpsLng;
-        session.pendingRemarks = remarks;
-        this._saveSession(session);
-
-        // Upload naar Robaws
-        try {
-            const result = await RobawsAPI.createTimeRegistration({
-                employeeId: session.employeeId,
-                startDate: session.startISO,
-                type: 'Laden & Lossen',
-                remarks: remarks,
-            });
-            if (result.code === 200 || result.code === 201) {
-                session.robawsId = result.data ? String(result.data.id) : null;
-                this._saveSession(session);
+            try {
+                const r = await RobawsAPI.addWorkHoursTimeEntry({
+                    workOrderId: session.workOrderId,
+                    employeeId: session.employeeId,
+                    startTime: llStartRounded,
+                    endTime: llEnd,
+                    breakMinutes: 0,
+                    articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen,
+                });
+                if (r.code !== 200 && r.code !== 201) {
+                    console.warn('[Clock] L&L time-entry POST faalde:', r.code, r.data);
+                    return {
+                        ok: false,
+                        message: 'L&L registreren mislukt (' + r.code + ')',
+                        refresh: true,
+                    };
+                }
+            } catch(e) {
+                console.error('[Clock] L&L POST exception:', e.message);
+                return {
+                    ok: false,
+                    message: 'L&L mislukt:\n' + e.message,
+                    refresh: false,
+                };
             }
-        } catch (e) {
-            console.warn('[Clock] Robaws L&L registratie mislukt:', e.message);
+
+            session.llActive = false;
+            session.llEntries = session.llEntries || [];
+            session.llEntries.push({ startTime: llStartRounded, endTime: llEnd });
+            session.llStartTime = null;
+            session.llStartISO = null;
+            this._saveSession(session);
+
+            return {
+                ok: true,
+                message: 'Laden & Lossen klaar\n' + llStartRounded + ' - ' + llEnd,
+                refresh: true,
+            };
         }
+
+        // Geval 2: nieuwe L&L sub-sessie starten. Vereist een werkbon — als er
+        // nog geen is voor vandaag (eerste scan v.d. dag is L&L) maken we hem aan.
+        if (!session.workOrderId) {
+            const currentUser = RobawsAPI.getLoggedInUser();
+            const empId = currentUser ? String(currentUser.robawsEmployeeId) : session.employeeId;
+            const empName = currentUser ? currentUser.name : '';
+            const userId = currentUser ? currentUser.robawsUserId : null;
+            let gpsText = '';
+            try {
+                const pos = await this._getGPS();
+                gpsText = `https://maps.google.com/?q=${pos.latitude.toFixed(6)},${pos.longitude.toFixed(6)}`;
+            } catch(_) { gpsText = 'GPS niet beschikbaar'; }
+            try {
+                const wo = await RobawsAPI.createTimeRegistrationWorkOrder({
+                    employeeId: empId,
+                    employeeName: empName,
+                    userId: userId,
+                    dateStr: this._localDate(),
+                    ingeklokt: time,
+                    tijdLabel: 'Op tijd',
+                    opmerking: `Laden & Lossen - ${gpsText}`,
+                });
+                session.workOrderId = wo.workOrderId;
+                session.employeeId = empId;
+                session.employeeName = empName;
+                session.dateStr = this._localDate();
+                session.tagType = 'laden_lossen';
+                session.tagName = 'Laden & Lossen';
+                session.onTimeLabel = 'Op tijd';
+            } catch(e) {
+                return {
+                    ok: false,
+                    message: 'Kon werkbon niet aanmaken:\n' + e.message,
+                    refresh: false,
+                };
+            }
+        }
+
+        session.llActive = true;
+        session.llStartTime = time;
+        session.llStartISO = now.toISOString();
+        this._saveSession(session);
 
         return {
             ok: true,
@@ -865,6 +890,7 @@ window.QEClock = {
             refresh: true,
         };
     },
+
 
     // =============================================
     // GPS

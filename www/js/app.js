@@ -5330,39 +5330,61 @@ const app = {
         }
 
         try {
-            // v56: huidige kalendermaand i.p.v. rolling 30 dagen
+            // v58: Tijdsregistratie-werkbonnen i.p.v. time-registrations
             const today = new Date();
             today.setHours(12, 0, 0, 0);
             const yyyy = today.getFullYear();
             const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const monthPrefix = `${yyyy}-${mm}`; // bv. "2026-05"
+            const monthPrefix = `${yyyy}-${mm}`;
             const monthNames = ['januari','februari','maart','april','mei','juni',
                 'juli','augustus','september','oktober','november','december'];
             const monthLabel = `${monthNames[today.getMonth()].toUpperCase()} ${yyyy}`;
 
-            // Fetch met ruime buffer (tot vandaag + 2 dagen) en filter daarna op maand
-            const fetchDays = today.getDate() + 2;
-            const allRegistrations = await RobawsAPI.getTimeRegistrationHistory(user.robawsEmployeeId, fetchDays);
-            const registrations = allRegistrations.filter(r =>
-                (r.startDate || '').substring(0, 7) === monthPrefix
-            );
+            const userId = user.robawsUserId || user.userId;
+            const workOrders = await RobawsAPI.getMyTimeRegistrationWorkOrders(userId, monthPrefix);
 
-            // Groepeer per datum (alleen items van huidige maand)
+            // Helper: extra-veld waarde uit werkbon
+            const getField = (wo, fieldName) => {
+                const ef = wo.extraFields || {};
+                return RobawsAPI._extractFieldVal(ef[fieldName]);
+            };
+
+            // Groepeer per datum (1 werkbon = 1 dag in dit nieuwe model)
             const byDate = {};
-            for (const reg of registrations) {
-                const date = reg.startDate.substring(0, 10);
+            for (const wo of workOrders) {
+                const date = (wo.date || '').substring(0, 10);
+                if (!date) continue;
                 if (!byDate[date]) byDate[date] = [];
-                byDate[date].push(reg);
+                byDate[date].push(wo);
             }
 
-            // Totalen berekenen (huidige maand)
-            const totalHours = registrations.reduce((sum, r) => sum + (r.hours || 0), 0);
+            // Totalen berekenen — uren komen uit time-entries op de werkbon
+            // (we lazy-loaden per dag bij rendering om N+1 te beperken)
             const totalDays = Object.keys(byDate).length;
-            const lateCount = registrations.filter(r => r.type === 'Te laat').length;
+            let lateCount = 0;
+            for (const wo of workOrders) {
+                if (getField(wo, 'Tijd') === 'Te laat') lateCount++;
+            }
+
+            // Som van uren = som van time-entries; we doen één extra request per
+            // werkbon. Voor een maand met ~22 werkdagen is dat behapbaar.
+            let totalHours = 0;
+            const teByWoId = {};
+            for (const wo of workOrders) {
+                try {
+                    const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
+                    if (teRes.code === 200 && teRes.data && teRes.data.items) {
+                        teByWoId[wo.id] = teRes.data.items;
+                        for (const te of teRes.data.items) {
+                            totalHours += parseFloat(te.hours || 0);
+                        }
+                    }
+                } catch(_) { /* skip */ }
+            }
 
             let html = '';
 
-            // Samenvatting kaart - toont nu maand-naam
+            // Samenvatting kaart
             html += `
                 <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
                     <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
@@ -5382,9 +5404,8 @@ const app = {
                     </div>
                 </div>`;
 
-            // Per datum groep - toon ALLE dagen van de huidige maand t/m vandaag
+            // Per dag: alle dagen van huidige maand t/m vandaag
             const days = ['Zo','Ma','Di','Wo','Do','Vr','Za'];
-            // Bouw lijst: vandaag t/m 1ste van de maand (recent eerst)
             const allDates = [];
             for (let day = today.getDate(); day >= 1; day--) {
                 const d = new Date(yyyy, today.getMonth(), day, 12, 0, 0);
@@ -5392,60 +5413,60 @@ const app = {
                 allDates.push(`${yyyy}-${mm}-${ddStr}`);
             }
 
-            // Edge-case: geen werkdag in deze maand en dag 1 nog niet bereikt
-            if (registrations.length === 0 && allDates.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state" style="margin-top:20px">
-                        <div class="empty-icon">⏰</div>
-                        <h3>Geen registraties</h3>
-                        <p>Scan een NFC tag om je eerste tijdsregistratie te starten</p>
-                    </div>`;
-                return;
-            }
-
             for (const date of allDates) {
-                const regs = byDate[date] || [];
+                const wos = byDate[date] || [];
                 const d = new Date(date + 'T12:00:00');
                 const dayName = days[d.getDay()];
                 const dateStr = d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' });
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                const dayTotal = regs.reduce((sum, r) => sum + (r.hours || 0), 0);
 
-                // Header per dag
-                if (regs.length > 0) {
+                if (wos.length > 0) {
+                    let dayTotal = 0;
+                    for (const wo of wos) {
+                        for (const te of (teByWoId[wo.id] || [])) {
+                            dayTotal += parseFloat(te.hours || 0);
+                        }
+                    }
                     html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
                         <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
                         <div style="font-size:12px;color:var(--qe-grey)">${dayTotal.toFixed(1)} uur</div>
                     </div>`;
 
-                    for (const reg of regs) {
-                        const startTime = new Date(reg.startDate).toTimeString().slice(0, 5);
-                        const endTime = reg.endDate ? new Date(reg.endDate).toTimeString().slice(0, 5) : '...';
-                        const hours = reg.hours ? `${reg.hours}u` : '';
+                    for (const wo of wos) {
+                        const tijd = getField(wo, 'Tijd') || 'Op tijd';
+                        const ingeklokt = getField(wo, 'Ingeklokt');
+                        const uitgeklokt = getField(wo, 'Uitgeklokt') || '...';
 
                         let typeIcon, typeBg, typeColor;
-                        switch (reg.type) {
+                        switch (tijd) {
                             case 'Te laat':
                                 typeIcon = '⚠️'; typeBg = '#fff8e1'; typeColor = '#e65100'; break;
-                            case 'Laden & Lossen':
-                                typeIcon = '📦'; typeBg = '#e3f2fd'; typeColor = '#1565c0'; break;
-                            case 'Extra uren':
-                                typeIcon = '🔄'; typeBg = '#f3e5f5'; typeColor = '#7b1fa2'; break;
+                            case 'Ziek':
+                                typeIcon = '🤒'; typeBg = '#ffebee'; typeColor = '#b71c1c'; break;
                             default:
                                 typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
                         }
 
-                        // GPS link uit opmerkingen halen
-                        const gpsMatch = (reg.remarks || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
-                        const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
+                        // L&L badge tonen als er een time-entry is met L&L articleId
+                        const teList = teByWoId[wo.id] || [];
+                        const hasLL = teList.some(te => {
+                            const aId = te.articleId || (te.article && te.article.id);
+                            return String(aId) === String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
+                        });
 
-                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${reg.id}')">
+                        // GPS link uit opmerkingen halen
+                        const gpsMatch = String(wo.remark || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
+                        const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
+                        const llBadge = hasLL ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 L&amp;L</span>' : '';
+
+                        const woUrl = `https://app.robaws.com/work-orders/${wo.id}`;
+                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="window.open('${woUrl}', '_blank')">
                             <div style="display:flex;align-items:center;justify-content:space-between">
                                 <div style="display:flex;align-items:center;gap:10px">
                                     <span style="font-size:18px">${typeIcon}</span>
                                     <div>
-                                        <div style="font-size:14px;font-weight:500">${startTime} → ${endTime} <span style="font-size:12px;font-weight:400;color:var(--qe-grey)">${hours}</span></div>
-                                        <div style="font-size:11px;color:${typeColor}">${reg.type} ${gpsLink}</div>
+                                        <div style="font-size:14px;font-weight:500">${ingeklokt || '?'} → ${uitgeklokt}${llBadge}</div>
+                                        <div style="font-size:11px;color:${typeColor}">${tijd} ${gpsLink}</div>
                                     </div>
                                 </div>
                                 <div style="font-size:18px;color:var(--qe-grey)">›</div>
@@ -5453,7 +5474,6 @@ const app = {
                         </div>`;
                     }
                 } else {
-                    // Lege dag: compacte rij
                     const opacity = isWeekend ? '0.4' : '0.6';
                     const label = isWeekend ? 'Weekend' : 'Geen registratie';
                     html += `<div style="margin-bottom:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:#fafafa;border-radius:8px;opacity:${opacity}">

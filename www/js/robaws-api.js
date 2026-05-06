@@ -2927,4 +2927,226 @@ const RobawsAPI = {
         // enkel nog zodat de app-flow kan doorgaan na een geslaagde terminal-betaling.
         return { success: true, code: 200, skipped: true };
     },
+    // =============================================
+    // TIJDSREGISTRATIE VIA WERKBONNEN (v58+)
+    // =============================================
+
+    /** Article-IDs voor uurcodes in Robaws (zie screenshot uurcodes-lijst). */
+    WERKUUR_ARTICLE_IDS: {
+        monteurProject: 185,    // "Werkuur monteur - Project" - €65 verkoop
+        ladenLossen: 19786,     // "Werkuur laden & lossen"     - €0 verkoop
+    },
+
+    /** YYYY-MM-DD -> DD/MM/YYYY voor titel */
+    _formatDateLabel(dateStr) {
+        if (!dateStr) return '';
+        const m = String(dateStr).substring(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return dateStr;
+        return `${m[3]}/${m[2]}/${m[1]}`;
+    },
+
+    /** Rond een HH:MM string af op de dichtsbijzeijnde 5 min. */
+    _roundTimeToNearest5(hhmm) {
+        if (!hhmm) return hhmm;
+        const m = String(hhmm).match(/^(\d{1,2}):(\d{1,2})/);
+        if (!m) return hhmm;
+        const h = parseInt(m[1], 10) || 0;
+        const min = parseInt(m[2], 10) || 0;
+        const total = h * 60 + min;
+        const rounded = Math.round(total / 5) * 5;
+        const rh = Math.floor(rounded / 60) % 24;
+        const rm = rounded % 60;
+        return `${String(rh).padStart(2,'0')}:${String(rm).padStart(2,'0')}`;
+    },
+
+    /** Lees een extraField waarde uit alle gangbare value-keys */
+    _extractFieldVal(field) {
+        if (!field) return '';
+        const raw = field.stringValue
+            ?? field.intValue
+            ?? field.integerValue
+            ?? field.numberValue
+            ?? field.decimalValue
+            ?? field.doubleValue
+            ?? field.longValue
+            ?? field.value
+            ?? '';
+        return raw === null || raw === undefined ? '' : String(raw).trim();
+    },
+
+    /**
+     * Maak een nieuwe Tijdsregistratie-werkbon aan voor de gescande werknemer.
+     * Returns { workOrderId, raw }.
+     * @param {Object} opts
+     * @param {string|number} opts.employeeId
+     * @param {string} opts.employeeName       Voor in titel
+     * @param {string|number} [opts.userId]    Voor "Verantwoordelijke"
+     * @param {string} opts.dateStr            YYYY-MM-DD (vandaag)
+     * @param {string} opts.ingeklokt          HH:MM
+     * @param {string} opts.tijdLabel          "Op tijd" | "Te laat"
+     * @param {string} opts.opmerking          Tag-naam + GPS URL
+     */
+    async createTimeRegistrationWorkOrder(opts) {
+        const { employeeId, employeeName, userId, dateStr, ingeklokt, tijdLabel, opmerking } = opts;
+
+        // Stap 1: lege werkbon
+        const woRes = await this.post('work-orders', {});
+        if (woRes.code !== 200 && woRes.code !== 201) {
+            throw new Error('Kon werkbon niet aanmaken (' + woRes.code + '): ' +
+                JSON.stringify(woRes.data).slice(0, 200));
+        }
+        const workOrderId = woRes.data.id;
+
+        // Stap 2: PUT met alle velden
+        const dateLabel = this._formatDateLabel(dateStr);
+        const body = {
+            title: `Tijdsregistratie ${employeeName || ''} - ${dateLabel}`.trim(),
+            date: dateStr,
+            status: 'Tijdsregistratie',
+            timeAndMaterial: false,
+            remark: opmerking || '',
+            extraFields: {
+                'Tijd': {
+                    type: 'CHOICE',
+                    group: 'Tijdsregistratie',
+                    stringValue: tijdLabel || 'Op tijd',
+                },
+                'Ingeklokt': {
+                    type: 'TEXT',
+                    group: 'Tijdsregistratie',
+                    stringValue: ingeklokt || '',
+                },
+                'Uitgeklokt': {
+                    type: 'TEXT',
+                    group: 'Tijdsregistratie',
+                    stringValue: '',
+                },
+            },
+        };
+        if (userId) body.assignedUserId = String(userId);
+
+        try {
+            const putRes = await this.put(`work-orders/${workOrderId}`, body);
+            if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) {
+                console.warn('[RobawsAPI] Tijdsregistratie-werkbon PUT mislukt:',
+                    putRes.code, JSON.stringify(putRes.data).slice(0, 200));
+            }
+        } catch(e) {
+            console.warn('[RobawsAPI] Tijdsregistratie-werkbon PUT exception:', e.message);
+        }
+
+        return { workOrderId, raw: woRes.data };
+    },
+
+    /** Update Uitgeklokt-tijd op een tijdsregistratie-werkbon (HH:MM string). */
+    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt) {
+        // Robaws PUT vereist het volledige extraFields-object niet meer; partial PUT volstaat.
+        const body = {
+            extraFields: {
+                'Uitgeklokt': {
+                    type: 'TEXT',
+                    group: 'Tijdsregistratie',
+                    stringValue: uitgeklokt || '',
+                },
+            },
+        };
+        return await this.put(`work-orders/${workOrderId}`, body);
+    },
+
+    /** Update Tijd-keuze (bv. naar "Ziek" of als startuur retroactief moet) */
+    async setTimeRegistrationTijd(workOrderId, tijdLabel) {
+        const body = {
+            extraFields: {
+                'Tijd': {
+                    type: 'CHOICE',
+                    group: 'Tijdsregistratie',
+                    stringValue: tijdLabel || 'Op tijd',
+                },
+            },
+        };
+        return await this.put(`work-orders/${workOrderId}`, body);
+    },
+
+    /**
+     * Voeg een werknemer-uren regel toe aan een tijdsregistratie-werkbon.
+     * @param {Object} opts
+     * @param {string|number} opts.workOrderId
+     * @param {string|number} opts.employeeId
+     * @param {string} opts.startTime       HH:MM
+     * @param {string} opts.endTime         HH:MM
+     * @param {number} [opts.breakMinutes]  Pauze in minuten
+     * @param {string|number} opts.articleId  Uurcode-id (185 of 19786)
+     */
+    async addWorkHoursTimeEntry(opts) {
+        const { workOrderId, employeeId, startTime, endTime, breakMinutes, articleId } = opts;
+        const te = {
+            employeeId: String(employeeId),
+            articleId: String(articleId),
+        };
+        if (startTime) {
+            const [sh, sm] = startTime.split(':').map(Number);
+            te.startTime = { hour: sh || 0, minute: sm || 0 };
+        }
+        if (endTime) {
+            const [eh, em] = endTime.split(':').map(Number);
+            te.endTime = { hour: eh || 0, minute: em || 0 };
+        }
+        if (breakMinutes && breakMinutes > 0) te.breakDuration = parseInt(breakMinutes, 10);
+        // Bereken hours uit start/end - pauze
+        if (startTime && endTime) {
+            const [sh, sm] = startTime.split(':').map(Number);
+            const [eh, em] = endTime.split(':').map(Number);
+            const minutes = ((eh || 0) * 60 + (em || 0)) - ((sh || 0) * 60 + (sm || 0)) - (parseInt(breakMinutes, 10) || 0);
+            const hrs = Math.max(0, Math.round(minutes / 60 * 100) / 100);
+            te.hours = hrs;
+            te.billableHours = this._roundUpHalfHour(hrs);
+        }
+        return await this.post(`work-orders/${workOrderId}/time-entries`, te);
+    },
+
+    /**
+     * Haal Tijdsregistratie-werkbonnen op voor de huidige user, voor een
+     * bepaalde maand (YYYY-MM). Filter op assignedUserId zodat techniekers
+     * enkel hun eigen kaarten zien.
+     */
+    async getMyTimeRegistrationWorkOrders(userId, monthPrefix) {
+        let allItems = [];
+        const seenIds = new Set();
+        let page = 0;
+        const maxPages = 20;
+        while (page < maxPages) {
+            const res = await this.get(`work-orders?limit=100&page=${page}&sort=date:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Tijdsregistratie-werkbonnen fetch faalde (${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            for (const it of res.data.items) {
+                if (it.id != null && !seenIds.has(String(it.id))) {
+                    seenIds.add(String(it.id));
+                    allItems.push(it);
+                }
+            }
+            // Vroeg stoppen wanneer oudste item een datum heeft die voor de gevraagde maand ligt
+            const oldest = res.data.items[res.data.items.length - 1];
+            const oldestMonth = (oldest.date || '').substring(0, 7);
+            if (oldestMonth && oldestMonth < monthPrefix) break;
+            page++;
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
+        // Filter: status=Tijdsregistratie EN assignedUser=ingelogde user EN maand klopt
+        const filtered = allItems.filter(item => {
+            const status = String(item.status || '').toLowerCase();
+            if (!status.includes('tijdsregistratie')) return false;
+            const dateMonth = (item.date || '').substring(0, 7);
+            if (dateMonth !== monthPrefix) return false;
+            const itemUserId = item.assignedUserId
+                || (item.assignedUser && item.assignedUser.id);
+            if (itemUserId && String(itemUserId) !== String(userId)) return false;
+            return true;
+        });
+        console.log('[RobawsAPI] Tijdsregistratie-werkbonnen: ' + allItems.length +
+            ' fetched, ' + filtered.length + ' voor user ' + userId + ' in ' + monthPrefix);
+        return filtered;
+    },
+
 };
