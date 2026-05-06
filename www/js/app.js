@@ -5469,8 +5469,8 @@ const app = {
                         const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
                         const llBadge = hasLL ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 L&amp;L</span>' : '';
 
-                        const woUrl = `https://app.robaws.com/work-orders/${wo.id}`;
-                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="window.open('${woUrl}', '_blank')">
+                        // v64: kaartje opent het aanpassing-aanvraag scherm
+                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
                             <div style="display:flex;align-items:center;justify-content:space-between">
                                 <div style="display:flex;align-items:center;gap:10px">
                                     <span style="font-size:18px">${typeIcon}</span>
@@ -5499,61 +5499,78 @@ const app = {
         }
     },
 
-    /** Open het aanpassing-aanvragen scherm voor een specifieke registratie */
-    async openAanpassing(regId) {
-        // Sla regId op voor gebruik in het scherm
-        this._aanpassingRegId = regId;
+    /**
+     * v64: Open het aanpassing-aanvragen scherm voor een specifieke
+     * Tijdsregistratie-werkbon (was vroeger time-registration).
+     */
+    async openAanpassing(workOrderId) {
+        this._aanpassingWoId = workOrderId;
         this.navigate('screenAanpassing');
 
         const content = document.getElementById('aanpassingContent');
         content.innerHTML = '<div class="spinner"></div>';
 
         try {
-            const res = await RobawsAPI.get(`time-registrations/${regId}`);
-            if (res.code !== 200 || !res.data) throw new Error('Registratie niet gevonden');
-            const reg = res.data;
+            const res = await RobawsAPI.get(`work-orders/${workOrderId}`);
+            if (res.code !== 200 || !res.data) throw new Error('Werkbon niet gevonden');
+            const wo = res.data;
+            const ef = wo.extraFields || {};
+            const tijd       = (ef.Tijd && ef.Tijd.stringValue)       || 'Op tijd';
+            const ingeklokt  = (ef.Ingeklokt && ef.Ingeklokt.stringValue)  || '';
+            const uitgeklokt = (ef.Uitgeklokt && ef.Uitgeklokt.stringValue) || '';
 
-            const startDt = new Date(reg.startDate);
-            const endDt = reg.endDate ? new Date(reg.endDate) : null;
-            const startTime = startDt.toTimeString().slice(0, 5);
-            const endTime = endDt ? endDt.toTimeString().slice(0, 5) : '';
-            const dateStr = startDt.toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' });
+            const dateOnly = (wo.date || '').substring(0, 10);
+            const dateStr = dateOnly
+                ? new Date(dateOnly + 'T12:00:00').toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' })
+                : '';
 
             let typeIcon;
-            switch (reg.type) {
+            switch (tijd) {
                 case 'Te laat': typeIcon = '⚠️'; break;
-                case 'Laden & Lossen': typeIcon = '📦'; break;
-                case 'Extra uren': typeIcon = '🔄'; break;
-                default: typeIcon = '✅'; break;
+                case 'Ziek':    typeIcon = '🤒'; break;
+                default:        typeIcon = '✅'; break;
             }
 
+            // Haal time-entries op voor totaal-uren weergave
+            let totalHours = 0;
+            try {
+                const teRes = await RobawsAPI.get(`work-orders/${workOrderId}/time-entries?limit=100`);
+                if (teRes.code === 200 && teRes.data && teRes.data.items) {
+                    for (const te of teRes.data.items) totalHours += parseFloat(te.hours || 0);
+                }
+            } catch(_) {}
+
             content.innerHTML = `
-                <!-- Huidige registratie -->
+                <!-- Huidige werkbon -->
                 <div class="card" style="padding:16px;margin-bottom:16px">
                     <div style="font-size:13px;color:var(--qe-grey);margin-bottom:8px">${dateStr}</div>
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                         <span style="font-size:24px">${typeIcon}</span>
                         <div>
-                            <div style="font-size:18px;font-weight:600">${startTime} → ${endTime || '...'}</div>
-                            <div style="font-size:13px;color:var(--qe-grey)">${reg.type} · ${reg.hours || 0} uur</div>
+                            <div style="font-size:18px;font-weight:600">${ingeklokt || '?'} → ${uitgeklokt || '...'}</div>
+                            <div style="font-size:13px;color:var(--qe-grey)">${tijd} · ${totalHours.toFixed(2)} uur</div>
                         </div>
                     </div>
-                    ${reg.remarks ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${reg.remarks}</div>` : ''}
+                    ${wo.remark ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${this.escapeHtml(wo.remark)}</div>` : ''}
+                    <div style="font-size:11px;color:var(--qe-grey);margin-top:8px">Werkbon #${wo.id}</div>
                 </div>
 
                 <!-- Aanpassing formulier -->
                 <div class="card" style="padding:16px">
                     <h3 style="font-size:16px;color:var(--qe-darkblue);margin-bottom:16px">Aanpassing aanvragen</h3>
+                    <p style="font-size:12px;color:var(--qe-grey);margin-bottom:14px">
+                        De aanvraag wordt als taak naar Vince gestuurd. Hij past de uren handmatig aan in Robaws.
+                    </p>
 
                     <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste startuur</label>
-                        <input type="time" id="aanpassingStart" value="${startTime}"
+                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste ingeklokt</label>
+                        <input type="time" id="aanpassingStart" value="${ingeklokt}"
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
                     </div>
 
                     <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste einduur</label>
-                        <input type="time" id="aanpassingEnd" value="${endTime}"
+                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste uitgeklokt</label>
+                        <input type="time" id="aanpassingEnd" value="${uitgeklokt}"
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
                     </div>
 
@@ -5563,7 +5580,7 @@ const app = {
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box"></textarea>
                     </div>
 
-                    <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${regId}')"
+                    <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${wo.id}')"
                         style="padding:14px;font-size:15px;font-weight:600" id="btnSubmitAanpassing">
                         📩 Aanpassing indienen
                     </button>
@@ -5574,8 +5591,8 @@ const app = {
         }
     },
 
-    /** Dien de aanpassing in als taak bij de tijdsregistratie */
-    async submitAanpassing(regId) {
+    /** v64: Dien de aanpassing in als taak gekoppeld aan de werkbon. */
+    async submitAanpassing(workOrderId) {
         const btn = document.getElementById('btnSubmitAanpassing');
         const startVal = document.getElementById('aanpassingStart').value;
         const endVal = document.getElementById('aanpassingEnd').value;
@@ -5591,15 +5608,19 @@ const app = {
 
         try {
             const user = RobawsAPI.getLoggedInUser();
-            const description = `Aanpassing aangevraagd door ${user ? user.name : 'onbekend'}:\n\nJuiste startuur: ${startVal || '(niet gewijzigd)'}\nJuiste einduur: ${endVal || '(niet gewijzigd)'}\n\nOpmerking: ${opmerking}`;
+            const description = `Aanpassing aangevraagd door ${user ? user.name : 'onbekend'} ` +
+                `voor werkbon #${workOrderId}:\n\n` +
+                `Juiste ingeklokt: ${startVal || '(niet gewijzigd)'}\n` +
+                `Juiste uitgeklokt: ${endVal || '(niet gewijzigd)'}\n\n` +
+                `Opmerking: ${opmerking}`;
 
-            await RobawsAPI.createTaskForTimeRegistration(regId, {
+            await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                 title: `Uren aanpassing — ${user ? user.name : 'onbekend'}`,
                 description: description,
-                assignedUserId: '5', // Vince van de Vliet (kantoor)
+                assignedUserId: '5', // Vince Van de Vliet (kantoor)
             });
 
-            this.toast('Aanpassing ingediend ✓');
+            this.toast('Aanpassing ingediend bij Vince ✓');
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {

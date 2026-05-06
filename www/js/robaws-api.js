@@ -1210,7 +1210,32 @@ const RobawsAPI = {
      * @param {string} timeRegId - ID van de tijdsregistratie
      * @param {Object} data - { title, description, assignedUserId }
      */
-    async createTaskForTimeRegistration(timeRegId, data) {
+    /**
+     * v64: Maak een taak aan gerelateerd aan een werkbon (Tijdsregistratie).
+     * Gebruikt voor "aanpassing aanvragen" — wordt toegewezen aan Vince (userId 5).
+     */
+    async createTaskForWorkOrder(workOrderId, data) {
+        const user = this.getLoggedInUser();
+        const body = {
+            title: data.title || 'Aanpassing aangevraagd',
+            description: data.description || '',
+            relatedResource: `/work-orders/${workOrderId}`,
+            status: 'Te doen',
+            reportingUserId: user ? String(user.robawsUserId) : null,
+        };
+        if (data.assignedUserId) {
+            body.assignedUserId = String(data.assignedUserId);
+        }
+        console.log('[RobawsAPI] Taak aanmaken bij werkbon:', workOrderId, JSON.stringify(body));
+        const res = await this.post('tasks', body);
+        if (res.code !== 201 && res.code !== 200) {
+            throw new Error('Taak aanmaken mislukt: ' + res.code + ' ' +
+                JSON.stringify(res.data).slice(0, 200));
+        }
+        return res;
+    },
+
+        async createTaskForTimeRegistration(timeRegId, data) {
         const user = this.getLoggedInUser();
         const body = {
             title: data.title || 'Aanpassing aangevraagd',
