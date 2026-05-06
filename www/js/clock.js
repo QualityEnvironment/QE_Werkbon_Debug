@@ -377,12 +377,76 @@ window.QEClock = {
 
     _scanLock: false,
 
+    /**
+     * Pluk de échte foutboodschap uit een Robaws response, ongeacht de shape.
+     */
+    _extractRobawsError(result) {
+        if (!result) return 'onbekende fout';
+        const code = result.code != null ? result.code : '?';
+        const d = result.data;
+        if (d == null) return 'code ' + code;
+        if (typeof d === 'string') {
+            const t = d.trim();
+            return t ? 'code ' + code + ': ' + t.slice(0, 200) : 'code ' + code;
+        }
+        if (typeof d !== 'object') return 'code ' + code + ': ' + String(d);
+        const direct = d.message || d.error || d.detail || d.title || d.reason || d.errorMessage;
+        if (direct && typeof direct === 'string') return code + ': ' + direct;
+        if (Array.isArray(d.errors) && d.errors.length) {
+            const parts = d.errors.map(e => {
+                if (!e) return '';
+                if (typeof e === 'string') return e;
+                return e.message || e.error || e.detail || e.field || JSON.stringify(e);
+            }).filter(Boolean);
+            if (parts.length) return code + ': ' + parts.join('; ').slice(0, 250);
+        }
+        if (d.errors && typeof d.errors === 'object') {
+            const parts = [];
+            for (const [field, val] of Object.entries(d.errors)) {
+                if (Array.isArray(val)) parts.push(field + ': ' + val.join(', '));
+                else if (val) parts.push(field + ': ' + val);
+            }
+            if (parts.length) return code + ': ' + parts.join('; ').slice(0, 250);
+        }
+        try { const j = JSON.stringify(d); if (j && j !== '{}') return code + ': ' + j.slice(0, 200); } catch(_) {}
+        return 'code ' + code;
+    },
+
     async onNfcScan(tagId) {
+        // 🔧 DEBUG v52: zichtbaar feedback dat de scan binnenkomt in JS,
+        // zodat we kunnen pinpoint-en waar het misloopt. Verwijder na test.
+        try {
+            const screen = (window.app && window.app.currentScreen) || '?';
+            const msg = '🔧 v52 SCAN: ' + String(tagId||'').slice(0,16) + ' op ' + screen;
+            if (window.app && window.app.toast) {
+                window.app.toast(msg);
+            } else {
+                // Fallback: alert (window.app nog niet ready)
+                console.error('🔧 [v52] window.app niet beschikbaar bij scan');
+                try { alert(msg + ' (geen app.toast)'); } catch(_) {}
+            }
+            console.log('🔧 [v52] onNfcScan binnengekomen:', tagId, 'scherm:', screen);
+        } catch(e) {
+            console.error('🔧 [v52] debug-trace fout:', e);
+        }
+
         // BUG-fix: tagId normaliseren (lowercase + trim) zodat hex-casing
         // verschillen tussen Android en Robaws-cache geen mismatch geven.
         const normalizedTagId = String(tagId || '').trim().toLowerCase();
         if (!normalizedTagId) return;
         console.log('[Clock] NFC scan:', normalizedTagId);
+
+        // ── SCREEN-GUARD: alleen scannen wanneer gebruiker op het Klok-scherm
+        // staat. Voorkomt onbedoelde inclock terwijl iemand een werkbon invult.
+        // Toewijzingsmodus is een uitzondering — die mag overal werken.
+        const onClockScreen = window.app && window.app.currentScreen === 'screenClock';
+        if (!onClockScreen && !this._pendingAssignment) {
+            if (window.app) {
+                app.toast('Open eerst het Klok-scherm om te scannen');
+                try { app.navigate('screenClock'); } catch(_) {}
+            }
+            return;
+        }
 
         // Debounce: voorkom dubbele scans binnen 3 seconden.
         // BUG-fix: vroeger werd de lock alleen via setTimeout vrijgegeven —
@@ -435,28 +499,43 @@ window.QEClock = {
                 session = this._newSession();
             }
 
-            // ── LADEN & LOSSEN ──
-            if (tag.type === 'laden_lossen') {
-                await this._handleLadenLossen(session, tag);
-                return;
-            }
+            // Resultaat van scan-flow voor SUCCES/MISLUKT overlay
+            let scanResult = null;
 
-            // ── ACTIEVE SESSIE → UITCLOCKEN ──
-            if (session.active) {
-                // Bevestiging vragen om fouten te voorkomen (bijv. verkeerde user ingelogd)
-                const userName = user.name || user.email;
-                const startTime = session.startTime || '?';
-                const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
-                if (!confirmed) {
-                    console.log('[Clock] Uitklokken geannuleerd door gebruiker');
+            try {
+                // ── LADEN & LOSSEN ──
+                if (tag.type === 'laden_lossen') {
+                    scanResult = await this._handleLadenLossen(session, tag);
                     return;
                 }
-                await this._clockOut(session, tag);
-                return;
-            }
 
-            // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
-            await this._clockIn(session, tag);
+                // ── ACTIEVE SESSIE → UITCLOCKEN ──
+                if (session.active) {
+                    const userName = user.name || user.email;
+                    const startTime = session.startTime || '?';
+                    const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
+                    if (!confirmed) {
+                        console.log('[Clock] Uitklokken geannuleerd door gebruiker');
+                        return;
+                    }
+                    scanResult = await this._clockOut(session, tag);
+                    return;
+                }
+
+                // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
+                scanResult = await this._clockIn(session, tag);
+            } finally {
+                // Toon SUCCES/MISLUKT overlay als de scan-flow iets opleverde
+                if (scanResult && window.app && typeof app.showScanResult === 'function') {
+                    const refresh = !!scanResult.refresh;
+                    app.showScanResult(scanResult.ok, scanResult.message, async () => {
+                        if (!refresh) return;
+                        try { await this.syncWithRobaws(); } catch(_) {}
+                        try { app.updateClockUI(); } catch(_) {}
+                        try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
+                    });
+                }
+            }
         } finally {
             // Lock altijd vrijgeven, ook bij errors
             clearTimeout(lockTimeoutId);
@@ -595,14 +674,15 @@ window.QEClock = {
             } catch(_) {}
         }
 
-        // UI feedback
-        const emoji = type === 'Op tijd' ? '✅' : (type === 'Te laat' ? '⚠️' : '🔄');
+        // Resultaat voor SUCCES/MISLUKT overlay (onNfcScan toont hem)
+        // Belangrijk: we tracken niet de exacte Robaws-status hier — bij
+        // een Robaws-fout zou de fetch een fout gooien die in de catch
+        // hierboven afgehandeld wordt. Voor de overlay nemen we aan dat
+        // de scan zelf werkte (sessie is opgeslagen, registratie is in
+        // Robaws of de pending queue).
         const lateMsg = type === 'Te laat' ? ' (te laat!)' : '';
-        if (window.app) {
-            app.toast(`${emoji} Ingeklokt om ${time} — ${tag.name}${lateMsg}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        const message = 'Ingeklokt om ' + time + ' — ' + tag.name + lateMsg;
+        return { ok: true, message, refresh: true };
     },
 
     // =============================================
@@ -686,14 +766,13 @@ window.QEClock = {
             });
         }
 
-        // UI feedback
         const pauseMin = Math.round(pauseHours * 60);
-        const pauseText = pauseMin > 0 ? ` (${pauseMin}min pauze afgetrokken)` : '';
-        if (window.app) {
-            app.toast(`🏁 Uitgeklokt om ${endTime} — ${hours} uur gewerkt${pauseText}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        const pauseText = pauseMin > 0 ? ' (' + pauseMin + 'min pauze)' : '';
+        return {
+            ok: true,
+            message: 'Uitgeklokt om ' + endTime + ' — ' + hours + 'u gewerkt' + pauseText,
+            refresh: true,
+        };
     },
 
     // =============================================
@@ -760,11 +839,11 @@ window.QEClock = {
             console.warn('[Clock] Robaws L&L registratie mislukt:', e.message);
         }
 
-        if (window.app) {
-            app.toast(`📦 Laden & Lossen gestart om ${time}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        return {
+            ok: true,
+            message: 'Laden & Lossen gestart om ' + time,
+            refresh: true,
+        };
     },
 
     // =============================================
