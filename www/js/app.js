@@ -4393,6 +4393,15 @@ const app = {
             const activeEl = document.getElementById('clockActiveSession');
             if (activeEl) {
                 activeEl.style.display = 'block';
+                // v63: L&L actief indicator. session.llActive = lopende laden&lossen sub-sessie
+                const llActiveBlock = session.llActive ? `
+                    <div style="margin-top:10px;padding:10px 12px;background:#e3f2fd;border-left:3px solid #1565c0;border-radius:6px;display:flex;align-items:center;gap:10px">
+                        <span style="font-size:18px">📦</span>
+                        <div>
+                            <div style="font-size:13px;font-weight:600;color:#1565c0">Laden &amp; Lossen actief</div>
+                            <div style="font-size:11px;color:#1565c0;opacity:0.8">Gestart om ${session.llStartTime || '?'} — scan L&amp;L tag opnieuw om te stoppen</div>
+                        </div>
+                    </div>` : '';
                 document.getElementById('clockActiveContent').innerHTML = `
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                         <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">🔄 Actieve registratie</h3>
@@ -4403,6 +4412,7 @@ const app = {
                         <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${session.tagName}</span></div>
                     </div>
                     <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
+                    ${llActiveBlock}
                 `;
             }
         } else {

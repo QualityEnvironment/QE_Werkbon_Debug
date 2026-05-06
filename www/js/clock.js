@@ -793,18 +793,26 @@ window.QEClock = {
             };
         }
 
+        // v63: bereken payable hours = (entry_eind - entry_start) - pauze
+        // Dit is wat de werknemer betaald krijgt — dus dat tonen we ook in de UI.
+        const payableMins = entryEndMin - entryStartMin - (pauseMinutes || 0);
+        const payableHours = Math.max(0, Math.round(payableMins / 60 * 100) / 100);
+
         // Sessie bijwerken
         session.active = false;
         session.endTime = endTimeRaw;
         session.endISO = now.toISOString();
         session.completedSessions = session.completedSessions || [];
         session.completedSessions.push({
-            startTime: session.startTime,
-            endTime: endTimeRaw,
+            startTime: entryStart,    // afgerond startuur (zo zien werknemers wat in time-entry staat)
+            endTime: entryEnd,        // afgerond einduur
             entryStart: entryStart,
             entryEnd: entryEnd,
             pauseMinutes: pauseMinutes,
             tagName: session.tagName,
+            type: session.onTimeLabel || 'Op tijd',
+            hours: payableHours,      // payable uren — niet klok-tijd
+            workOrderId: session.workOrderId,
         });
         this._saveSession(session);
 

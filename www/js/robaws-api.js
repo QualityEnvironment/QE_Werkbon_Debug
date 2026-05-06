@@ -3093,7 +3093,8 @@ const RobawsAPI = {
             const [eh, em] = endTime.split(':').map(Number);
             te.endTime = { hour: eh || 0, minute: em || 0 };
         }
-        if (breakMinutes && breakMinutes > 0) te.breakDuration = parseInt(breakMinutes, 10);
+        // v63: Robaws v2 wil 'breakMinutes' (we stuurden breakDuration en kreeg breakMinutes:0 terug)
+        if (breakMinutes && breakMinutes > 0) te.breakMinutes = parseInt(breakMinutes, 10);
         // Bereken hours uit start/end - pauze
         if (startTime && endTime) {
             const [sh, sm] = startTime.split(':').map(Number);
