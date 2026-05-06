@@ -670,13 +670,22 @@ const RobawsAPI = {
      * @param {Object} updates - velden om te updaten
      */
     async updateTimeRegistration(id, updates) {
-        // Haal eerst de volledige registratie op om niets te overschrijven
         const existing = await this.get(`time-registrations/${id}`);
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
+        // SECURITY: ownership-check — voorkom dat we per ongeluk een PUT
+        // doen op de registratie van een andere werknemer.
+        const me = this.getLoggedInUser();
+        if (me && me.robawsEmployeeId) {
+            const ownerId = existing.data.employeeId
+                || (existing.data.employee && existing.data.employee.id);
+            if (ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
+                console.error('[RobawsAPI] WEIGER update — registratie', id, 'is van werknemer', ownerId, 'niet van mij (', me.robawsEmployeeId, ')');
+                throw new Error(`Registratie ${id} hoort bij een andere werknemer (${ownerId})`);
+            }
+        }
         const body = { ...existing.data, ...updates };
-        // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
         delete body.logicId;
         delete body.createdAt;

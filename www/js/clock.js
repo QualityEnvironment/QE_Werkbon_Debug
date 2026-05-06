@@ -653,6 +653,25 @@ window.QEClock = {
         let robawsCode = null;
         let robawsError = null;
         if (session.robawsId) {
+            // SECURITY: pre-flight ownership-check voor we updaten
+            try {
+                const me = RobawsAPI.getLoggedInUser();
+                const existing = await RobawsAPI.get(`time-registrations/${session.robawsId}`);
+                const ownerId = existing.data && (existing.data.employeeId
+                    || (existing.data.employee && existing.data.employee.id));
+                if (me && ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
+                    console.error('[Clock] Sessie verwees naar andermans registratie', session.robawsId, '— sessie wordt gewist');
+                    const sessionKey = this._getSessionKey();
+                    if (sessionKey) localStorage.removeItem(sessionKey);
+                    return {
+                        ok: false,
+                        message: `Deze registratie hoort bij iemand anders\n(werknemer ${ownerId}). Sessie is gereset — scan opnieuw om correct in te klokken.`,
+                        refresh: true,
+                    };
+                }
+            } catch(e) {
+                console.warn('[Clock] Pre-flight check mislukt — doorgaan met ownership-check in update:', e.message);
+            }
             try {
                 const updateData = {
                     endDate: endISO,
@@ -894,20 +913,51 @@ window.QEClock = {
     // OFFLINE SYNC
     // =============================================
 
+    _pendingSyncKey() {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || !user.email) return null;
+        return `qe_clock_pending_${user.email}`;
+    },
+
+    _readPendingSync() {
+        const key = this._pendingSyncKey();
+        if (!key) return { key: null, items: [] };
+        let items = [];
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) items = JSON.parse(raw);
+            if (!Array.isArray(items)) items = [];
+        } catch(e) { items = []; }
+        return { key, items };
+    },
+
     _addPendingSync(item) {
-        const pending = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]');
-        pending.push({ ...item, timestamp: this._now().toISOString() });
-        localStorage.setItem('qe_clock_pending', JSON.stringify(pending));
+        const { key, items } = this._readPendingSync();
+        if (!key) return;
+        const user = RobawsAPI.getLoggedInUser();
+        const myId = user ? String(user.robawsEmployeeId) : null;
+        const safe = { ...item, ownerEmployeeId: myId, employeeId: myId, timestamp: this._now().toISOString() };
+        items.push(safe);
+        try { localStorage.setItem(key, JSON.stringify(items)); } catch(e) {}
     },
 
     async syncPending() {
-        const pending = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]');
-        if (pending.length === 0) return;
+        const { key, items: pending } = this._readPendingSync();
+        if (!key || pending.length === 0) return;
 
-        console.log('[Clock] Syncing', pending.length, 'pending items');
+        const user = RobawsAPI.getLoggedInUser();
+        const myId = user ? String(user.robawsEmployeeId) : null;
+        // SECURITY: alleen eigen items verwerken (legacy items zonder owner droppen)
+        const myItems = pending.filter(it => it.ownerEmployeeId && String(it.ownerEmployeeId) === myId);
+        if (myItems.length === 0) {
+            try { localStorage.setItem(key, JSON.stringify([])); } catch(_) {}
+            return;
+        }
+
+        console.log('[Clock] Syncing', myItems.length, 'pending items voor', user.email);
         const remaining = [];
 
-        for (const item of pending) {
+        for (const item of myItems) {
             try {
                 if (item.action === 'update' && item.id) {
                     await RobawsAPI.updateTimeRegistration(item.id, {
@@ -917,7 +967,7 @@ window.QEClock = {
                     console.log('[Clock] Pending update gesynchroniseerd:', item.id);
                 } else if (item.action === 'create_complete') {
                     await RobawsAPI.createTimeRegistration({
-                        employeeId: item.employeeId,
+                        employeeId: myId,
                         startDate: item.startDate,
                         endDate: item.endDate,
                         hours: item.hours,
@@ -932,7 +982,7 @@ window.QEClock = {
             }
         }
 
-        localStorage.setItem('qe_clock_pending', JSON.stringify(remaining));
+        try { localStorage.setItem(key, JSON.stringify(remaining)); } catch(_) {}
         if (remaining.length === 0) {
             console.log('[Clock] Alle pending items gesynchroniseerd ✓');
         } else {
@@ -961,9 +1011,11 @@ window.QEClock = {
 
             return res.data.items
                 .filter(item => {
+                    if (!(item.startDate >= cutoffStr)) return false;
+                    // SECURITY-fix: strikt employeeId match
                     const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                    const empMatch = !itemEmpId || String(itemEmpId) === empId;
-                    return item.startDate >= cutoffStr && empMatch;
+                    if (!itemEmpId) return false;
+                    return String(itemEmpId) === empId;
                 })
                 .sort((a, b) => b.startDate.localeCompare(a.startDate));
         } catch (e) {
@@ -1101,6 +1153,12 @@ window.QEClock = {
     // =============================================
 
     async getAllAttendanceToday() {
+        // SECURITY: defense-in-depth — alleen kantoor-rol mag het overzicht
+        const me = RobawsAPI.getLoggedInUser();
+        if (!me || me.role !== 'bureel') {
+            console.warn('[Clock] getAllAttendanceToday geweigerd: rol =', me && me.role);
+            return [];
+        }
         try {
             const allRegs = await RobawsAPI.getAllTimeRegistrationsToday();
 
