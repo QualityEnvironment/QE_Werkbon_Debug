@@ -6011,49 +6011,6 @@ const app = {
         setTimeout(() => el.classList.remove('show'), 2500);
     },
 
-    /**
-     * Toon een fullscreen scan-resultaat overlay (groot SUCCES of MISLUKT).
-     * Wordt aangeroepen vanuit QEClock.onNfcScan na elke NFC-scan.
-     */
-    showScanResult(success, message, onDone, duration) {
-        const overlay = document.getElementById('scanResult');
-        const icon = document.getElementById('scanResultIcon');
-        const title = document.getElementById('scanResultTitle');
-        const msgEl = document.getElementById('scanResultMsg');
-        if (!overlay) {
-            this.toast(message);
-            if (typeof onDone === 'function') { try { onDone(); } catch(_) {} }
-            return;
-        }
-        if (success) {
-            overlay.style.background = 'rgba(46,125,50,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '✅';
-            title.textContent = 'SUCCES';
-        } else {
-            overlay.style.background = 'rgba(198,40,40,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '❌';
-            title.textContent = 'MISLUKT';
-        }
-        msgEl.textContent = message || '';
-        overlay.style.display = 'flex';
-        try { if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]); } catch(_) {}
-        const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
-        let closed = false;
-        const close = () => {
-            if (closed) return;
-            closed = true;
-            overlay.style.display = 'none';
-            overlay.onclick = null;
-            if (typeof onDone === 'function') {
-                try { onDone(); } catch(e) { console.warn('[ScanResult] onDone fout:', e); }
-            }
-        };
-        overlay.onclick = close;
-        setTimeout(close, dur);
-    },
-
     // ========================================
     // PLANNING POLLING — check op nieuwe items
     // ========================================
