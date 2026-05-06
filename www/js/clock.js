@@ -214,25 +214,26 @@ window.QEClock = {
     identifyTag(tagId) {
         const config = this.getTagConfig();
         if (!config) return null;
+        // BUG-fix: NFC tag-IDs case-insensitief vergelijken. Robaws slaat ze
+        // soms hoofdletters op, soms kleine letters. Java geeft de bytes door
+        // in het formaat dat de tag teruggeeft. Een 1-op-1 string-equality
+        // matchte daardoor maar half van de tags.
+        const norm = (s) => String(s || '').trim().toLowerCase();
+        const wanted = norm(tagId);
+        if (!wanted) return null;
 
-        // Bureau tag
-        if (config.bureau && config.bureau.tagId === tagId) {
+        if (config.bureau && norm(config.bureau.tagId) === wanted) {
             return { type: 'bureau', name: 'Bureau' };
         }
-
-        // Laden & Lossen tag
-        if (config.ladenLossen && config.ladenLossen.tagId === tagId) {
+        if (config.ladenLossen && norm(config.ladenLossen.tagId) === wanted) {
             return { type: 'laden_lossen', name: 'Laden & Lossen' };
         }
-
-        // Camionet tags
         for (const cam of (config.camionetten || [])) {
-            if (cam.tagId === tagId) {
+            if (norm(cam.tagId) === wanted) {
                 return { type: 'camionet', name: cam.name };
             }
         }
-
-        return null; // Onbekende tag
+        return null;
     },
 
     /** Persoonlijk startuur van de ingelogde werknemer */
@@ -393,13 +394,14 @@ window.QEClock = {
 
 
     async onNfcScan(tagId) {
-        console.log('[Clock] NFC scan:', tagId);
+        // BUG-fix: tagId normaliseren (lowercase + trim) zodat hex-casing
+        // verschillen geen mismatch geven met de Robaws-cache.
+        const normalizedTagId = String(tagId || '').trim().toLowerCase();
+        console.log('[Clock] NFC scan:', tagId, '(genormaliseerd:', normalizedTagId, ')');
 
-        // 🔧 DEBUG (tijdelijk v47): toon direct dat scan binnenkomt
-        if (window.app && window.app.toast) {
-            const tagPreview = String(tagId || '(leeg)').slice(0, 20);
-            const screen = (window.app && window.app.currentScreen) || '(geen)';
-            window.app.toast('📡 SCAN: ' + tagPreview + ' — scherm: ' + screen);
+        if (!normalizedTagId) {
+            if (window.app && window.app.toast) window.app.toast('Lege NFC scan genegeerd');
+            return;
         }
 
         // ── SCREEN-GUARD: alleen scannen wanneer gebruiker op het Klok-scherm staat ──
@@ -439,8 +441,9 @@ window.QEClock = {
             await this.loadTagConfig();
         }
 
-        // Identificeer de tag
-        const tag = this.identifyTag(tagId);
+        // Identificeer de tag (gebruik genormaliseerde ID)
+        let tag = this.identifyTag(normalizedTagId);
+        if (!tag) tag = this.identifyTag(tagId);
 
         if (!tag) {
             // Onbekende tag
