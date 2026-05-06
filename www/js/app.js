@@ -6308,6 +6308,58 @@ const app = {
     },
 
     // ========================================
+    // v59 TEST: éénmalige werkbon-aanmaak
+    // ========================================
+    async testCreateTimeRegistration() {
+        const resultEl = document.getElementById('testTrResult');
+        resultEl.style.color = 'var(--qe-grey)';
+        resultEl.textContent = '⏳ Bezig...';
+
+        try {
+            const user = RobawsAPI.getLoggedInUser();
+            if (!user) throw new Error('Niet ingelogd');
+
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mi = String(now.getMinutes()).padStart(2, '0');
+            const dateStr = `${yyyy}-${mm}-${dd}`;
+            const timeStr = `${hh}:${mi}`;
+
+            const result = await RobawsAPI.createTimeRegistrationWorkOrder({
+                employeeId: user.robawsEmployeeId,
+                employeeName: user.name || user.email,
+                userId: user.robawsUserId,
+                dateStr: dateStr,
+                ingeklokt: timeStr,
+                tijdLabel: 'Op tijd',
+                opmerking: 'TEST WERKBON - https://maps.google.com/?q=51.234,4.567',
+            });
+
+            resultEl.style.color = '#2e7d32';
+            const woUrl = `https://app.robaws.com/work-orders/${result.workOrderId}`;
+            resultEl.innerHTML = '✅ Werkbon aangemaakt: <a href="' + woUrl +
+                '" target="_blank" style="color:#1565c0">#' + result.workOrderId +
+                '</a>\n\nKlik link, controleer alle velden in Robaws, en stuur screenshot.';
+        } catch (e) {
+            resultEl.style.color = '#c62828';
+            // Probeer ook de laatste req/res uit localStorage te tonen voor debugging
+            let extra = '';
+            try {
+                const postRes = localStorage.getItem('qe_last_tr_post_res');
+                const putReq = localStorage.getItem('qe_last_tr_put_req');
+                const putRes = localStorage.getItem('qe_last_tr_put_res');
+                if (postRes) extra += '\n\nPOST response: ' + postRes.slice(0, 200);
+                if (putRes) extra += '\n\nPUT response: ' + putRes.slice(0, 300);
+                if (putReq) extra += '\n\nPUT request body: ' + putReq.slice(0, 400);
+            } catch(_) {}
+            resultEl.textContent = '❌ FOUT: ' + e.message + extra;
+        }
+    },
+
+    // ========================================
     // DARK MODE
     // ========================================
     toggleDarkMode(enabled) {

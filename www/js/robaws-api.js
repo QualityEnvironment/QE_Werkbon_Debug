@@ -2977,94 +2977,96 @@ const RobawsAPI = {
     /**
      * Maak een nieuwe Tijdsregistratie-werkbon aan voor de gescande werknemer.
      * Returns { workOrderId, raw }.
-     * @param {Object} opts
-     * @param {string|number} opts.employeeId
-     * @param {string} opts.employeeName       Voor in titel
-     * @param {string|number} [opts.userId]    Voor "Verantwoordelijke"
-     * @param {string} opts.dateStr            YYYY-MM-DD (vandaag)
-     * @param {string} opts.ingeklokt          HH:MM
-     * @param {string} opts.tijdLabel          "Op tijd" | "Te laat"
-     * @param {string} opts.opmerking          Tag-naam + GPS URL
+     * v59: GET-then-PUT i.p.v. partial PUT — voorkomt dat Robaws het body-format
+     * stilzwijgend afwijst en een lege werkbon achterlaat. Uitgebreide
+     * logging naar localStorage zodat we exact kunnen zien wat er gebeurt.
      */
     async createTimeRegistrationWorkOrder(opts) {
         const { employeeId, employeeName, userId, dateStr, ingeklokt, tijdLabel, opmerking } = opts;
 
-        // Stap 1: lege werkbon
+        // Stap 1: lege werkbon aanmaken
         const woRes = await this.post('work-orders', {});
+        try { localStorage.setItem('qe_last_tr_post_res', JSON.stringify({code: woRes.code, data: woRes.data})); } catch(_) {}
         if (woRes.code !== 200 && woRes.code !== 201) {
-            throw new Error('Kon werkbon niet aanmaken (' + woRes.code + '): ' +
+            throw new Error('POST /work-orders faalde (' + woRes.code + '): ' +
                 JSON.stringify(woRes.data).slice(0, 200));
         }
-        const workOrderId = woRes.data.id;
-
-        // Stap 2: PUT met alle velden
-        const dateLabel = this._formatDateLabel(dateStr);
-        const body = {
-            title: `Tijdsregistratie ${employeeName || ''} - ${dateLabel}`.trim(),
-            date: dateStr,
-            status: 'Tijdsregistratie',
-            timeAndMaterial: false,
-            remark: opmerking || '',
-            extraFields: {
-                'Tijd': {
-                    type: 'CHOICE',
-                    group: 'Tijdsregistratie',
-                    stringValue: tijdLabel || 'Op tijd',
-                },
-                'Ingeklokt': {
-                    type: 'TEXT',
-                    group: 'Tijdsregistratie',
-                    stringValue: ingeklokt || '',
-                },
-                'Uitgeklokt': {
-                    type: 'TEXT',
-                    group: 'Tijdsregistratie',
-                    stringValue: '',
-                },
-            },
-        };
-        if (userId) body.assignedUserId = String(userId);
-
-        try {
-            const putRes = await this.put(`work-orders/${workOrderId}`, body);
-            if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) {
-                console.warn('[RobawsAPI] Tijdsregistratie-werkbon PUT mislukt:',
-                    putRes.code, JSON.stringify(putRes.data).slice(0, 200));
-            }
-        } catch(e) {
-            console.warn('[RobawsAPI] Tijdsregistratie-werkbon PUT exception:', e.message);
+        const workOrderId = woRes.data && woRes.data.id;
+        if (!workOrderId) {
+            throw new Error('POST /work-orders gaf geen id terug: ' + JSON.stringify(woRes.data).slice(0,200));
         }
 
-        return { workOrderId, raw: woRes.data };
+        // Stap 2: GET de werkbon zodat we het volledige object kunnen mergen
+        let woFull;
+        try {
+            const getRes = await this.get(`work-orders/${workOrderId}`);
+            if (getRes.code === 200 && getRes.data) {
+                woFull = getRes.data;
+            }
+        } catch(e) {
+            console.warn('[RobawsAPI] GET werkbon na POST faalde:', e.message);
+        }
+        if (!woFull) {
+            // Fallback: alleen het id bekend
+            woFull = { id: workOrderId };
+        }
+
+        // Stap 3: bouw merged body — bestaande velden behouden, onze velden toevoegen
+        const dateLabel = this._formatDateLabel(dateStr);
+        woFull.title = `Tijdsregistratie ${employeeName || ''} - ${dateLabel}`.trim();
+        woFull.date = dateStr;
+        woFull.status = 'Tijdsregistratie';
+        woFull.timeAndMaterial = false;
+        woFull.remark = opmerking || '';
+        if (userId) woFull.assignedUserId = String(userId);
+
+        // v60: Variant A format — bevestigd werkend via PHP probe.
+        // GEEN type/group meegeven; Robaws gebruikt zijn eigen schema.
+        woFull.extraFields = woFull.extraFields || {};
+        woFull.extraFields['Tijd']       = { stringValue: tijdLabel || 'Op tijd' };
+        woFull.extraFields['Ingeklokt']  = { stringValue: ingeklokt || '' };
+        woFull.extraFields['Uitgeklokt'] = { stringValue: '' };
+
+        try { localStorage.setItem('qe_last_tr_put_req', JSON.stringify(woFull)); } catch(_) {}
+
+        const putRes = await this.put(`work-orders/${workOrderId}`, woFull);
+        try { localStorage.setItem('qe_last_tr_put_res', JSON.stringify({code: putRes.code, data: putRes.data})); } catch(_) {}
+
+        if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) {
+            throw new Error('PUT /work-orders/' + workOrderId + ' faalde (' + putRes.code +
+                '): ' + JSON.stringify(putRes.data).slice(0, 300));
+        }
+
+        return { workOrderId, raw: putRes.data || woFull };
     },
 
-    /** Update Uitgeklokt-tijd op een tijdsregistratie-werkbon (HH:MM string). */
+    /** Update Uitgeklokt-tijd op een tijdsregistratie-werkbon. v59: GET-then-PUT. */
     async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt) {
-        // Robaws PUT vereist het volledige extraFields-object niet meer; partial PUT volstaat.
-        const body = {
-            extraFields: {
-                'Uitgeklokt': {
-                    type: 'TEXT',
-                    group: 'Tijdsregistratie',
-                    stringValue: uitgeklokt || '',
-                },
-            },
-        };
-        return await this.put(`work-orders/${workOrderId}`, body);
+        const getRes = await this.get(`work-orders/${workOrderId}`);
+        if (getRes.code !== 200 || !getRes.data) {
+            throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
+        }
+        const wo = getRes.data;
+        wo.extraFields = wo.extraFields || {};
+        // v60: Variant A — geen type/group, partial PUT zou andere velden wissen
+        wo.extraFields['Uitgeklokt'] = { stringValue: uitgeklokt || '' };
+        try { localStorage.setItem('qe_last_uitg_put_req', JSON.stringify(wo)); } catch(_) {}
+        const putRes = await this.put(`work-orders/${workOrderId}`, wo);
+        try { localStorage.setItem('qe_last_uitg_put_res', JSON.stringify({code: putRes.code, data: putRes.data})); } catch(_) {}
+        return putRes;
     },
 
-    /** Update Tijd-keuze (bv. naar "Ziek" of als startuur retroactief moet) */
+    /** Update Tijd-keuze (bv. naar "Ziek"). v59: GET-then-PUT. */
     async setTimeRegistrationTijd(workOrderId, tijdLabel) {
-        const body = {
-            extraFields: {
-                'Tijd': {
-                    type: 'CHOICE',
-                    group: 'Tijdsregistratie',
-                    stringValue: tijdLabel || 'Op tijd',
-                },
-            },
-        };
-        return await this.put(`work-orders/${workOrderId}`, body);
+        const getRes = await this.get(`work-orders/${workOrderId}`);
+        if (getRes.code !== 200 || !getRes.data) {
+            throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
+        }
+        const wo = getRes.data;
+        wo.extraFields = wo.extraFields || {};
+        // v60: Variant A — geen type/group
+        wo.extraFields['Tijd'] = { stringValue: tijdLabel || 'Op tijd' };
+        return await this.put(`work-orders/${workOrderId}`, wo);
     },
 
     /**

@@ -33,6 +33,18 @@ window.QEClock = {
     // CONFIGURATIE
     // =============================================
 
+    /**
+     * v59: Test-modus. Wanneer true wordt de NFC-scan-flow GEBLOKKEERD —
+     * scans tonen alleen een waarschuwing en doen verder niks. Op die manier
+     * kunnen we eerst via de "Test tijdsregistratie aanmaken"-knop op het
+     * Klok-scherm de Robaws-werkbon-API valideren zonder dat er bij elke
+     * scan ongewenste werkbonnen worden aangemaakt.
+     *
+     * Zet op false zodra de test-werkbon perfect blijkt - dan worden scans
+     * weer doorgestuurd naar _clockIn / _clockOut / _handleLadenLossen.
+     */
+    _testModeActive: false,  // v60: scan-flow weer live (Variant A format bevestigd)
+
     /** Fallback starttijd als er ECHT niets te vinden is in Robaws */
     DEFAULT_START_TIME: '07:00',
 
@@ -447,6 +459,20 @@ window.QEClock = {
             const user = RobawsAPI.getLoggedInUser();
             if (!user) {
                 if (window.app) app.toast('Log eerst in om te clocken');
+                return;
+            }
+
+            // v59: Test-modus blokkeert scan-flow tot het werkbon-formaat klopt
+            if (this._testModeActive) {
+                if (window.app && typeof app.showScanResult === 'function') {
+                    app.showScanResult(false,
+                        'Scan geblokkeerd in test-modus.\n\n' +
+                        'Gebruik eerst de oranje knop "Test tijdsregistratie" ' +
+                        'op het Klok-scherm om het werkbon-formaat te valideren.',
+                        null, 4000);
+                } else if (window.app) {
+                    app.toast('Test-modus actief — gebruik de test-knop', true);
+                }
                 return;
             }
 
@@ -1065,51 +1091,17 @@ window.QEClock = {
         console.log('[Clock] Syncing', pending.length, 'pending items');
         const remaining = [];
 
+        // v60: oude time-registrations sync-actions worden NIET meer
+        // doorgestuurd. Die queue stamt uit de oude flow en zou anders calls
+        // doen naar het time-registrations endpoint. We laten ze stil vallen.
         for (const item of pending) {
-            try {
-                if (item.action === 'update' && item.id) {
-                    await RobawsAPI.updateTimeRegistration(item.id, {
-                        endDate: item.endDate,
-                        hours: item.hours,
-                    });
-                    console.log('[Clock] Pending update gesynchroniseerd:', item.id);
-                } else if (item.action === 'create_complete') {
-                    await RobawsAPI.createTimeRegistration({
-                        employeeId: item.employeeId,
-                        startDate: item.startDate,
-                        endDate: item.endDate,
-                        hours: item.hours,
-                        type: item.type,
-                        remarks: item.remarks,
-                    });
-                    console.log('[Clock] Pending registratie gesynchroniseerd');
-                } else if (item.action === 'create_open') {
-                    // Open registratie zonder endDate — werknemer was offline
-                    // tijdens inclock. Maak hem nu alsnog aan en update lokale
-                    // sessie met de Robaws-id zodat clock-out hem kan vinden.
-                    const result = await RobawsAPI.createTimeRegistration({
-                        employeeId: item.employeeId,
-                        startDate: item.startISO,
-                        type: item.type,
-                        remarks: item.remarks,
-                    });
-                    if (result && (result.code === 200 || result.code === 201) && result.data) {
-                        const newId = String(result.data.id);
-                        // Probeer de bijbehorende lokale sessie te vinden en updaten
-                        const session = this.getSession();
-                        if (session && session.startISO === item.startISO && !session.robawsId) {
-                            session.robawsId = newId;
-                            this._saveSession(session);
-                        }
-                        console.log('[Clock] Pending open-registratie gesynchroniseerd, ID:', newId);
-                    } else {
-                        throw new Error('Robaws gaf code ' + (result && result.code));
-                    }
-                }
-            } catch (e) {
-                console.warn('[Clock] Sync mislukt voor item:', e.message);
-                remaining.push(item);
+            const a = item.action;
+            if (a === 'update' || a === 'create_complete' || a === 'create_open') {
+                console.log('[Clock] Legacy pending-item gedropt (oude time-registrations flow):', a);
+                continue;
             }
+            // Onbekende of nieuwe actions — voor nu bewaren als unknown
+            remaining.push(item);
         }
 
         try { localStorage.setItem(key, JSON.stringify(remaining)); } catch(e) {}
@@ -1126,28 +1118,61 @@ window.QEClock = {
 
     /** Haal tijdsregistraties op voor de afgelopen X dagen */
     async getHistory(days = 7) {
+        // v60: time-registrations endpoint wordt NIET meer gebruikt.
+        // "Mijn week" haalt nu Tijdsregistratie-werkbonnen op via dezelfde
+        // endpoint als loadDagoverzicht, en mapt de extraFields naar het
+        // verwachte history-format (startDate/endDate/type/hours).
         const user = RobawsAPI.getLoggedInUser();
         if (!user) return [];
 
         try {
-            const res = await RobawsAPI.get(`time-registrations?employeeId=${user.robawsEmployeeId}&limit=100`);
-            if (res.code !== 200 || !res.data || !res.data.items) return [];
+            const today = new Date();
+            const cutoff = new Date(today);
+            cutoff.setDate(today.getDate() - days);
 
-            // Filter op laatste X dagen + dubbele check employeeId
-            const cutoff = this._now();
-            cutoff.setDate(cutoff.getDate() - days);
-            const cutoffStr = cutoff.toISOString();
-            const empId = String(user.robawsEmployeeId);
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const monthPrefix = `${yyyy}-${mm}`;
+            const userId = user.robawsUserId || user.userId;
+            if (!userId) return [];
 
-            return res.data.items
-                .filter(item => {
-                    if (!(item.startDate >= cutoffStr)) return false;
-                    // SECURITY-fix: strikt employeeId match
-                    const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                    if (!itemEmpId) return false;
-                    return String(itemEmpId) === empId;
+            // Haal alle Tijdsregistratie-werkbonnen voor de huidige maand
+            const wos = await RobawsAPI.getMyTimeRegistrationWorkOrders(userId, monthPrefix);
+
+            // Eventueel ook vorige maand erbij als de cutoff terug gaat
+            let extraWos = [];
+            if (cutoff.getMonth() !== today.getMonth() || cutoff.getFullYear() !== today.getFullYear()) {
+                const pyyyy = cutoff.getFullYear();
+                const pmm = String(cutoff.getMonth() + 1).padStart(2, '0');
+                try {
+                    extraWos = await RobawsAPI.getMyTimeRegistrationWorkOrders(userId, `${pyyyy}-${pmm}`);
+                } catch(_) {}
+            }
+
+            const allWos = wos.concat(extraWos);
+
+            // Filter op cutoff en map naar het oude format (startDate/endDate/type/hours)
+            const cutoffISO = cutoff.toISOString().substring(0, 10);
+            return allWos
+                .filter(wo => (wo.date || '') >= cutoffISO)
+                .map(wo => {
+                    const ef = wo.extraFields || {};
+                    const tijd = (ef.Tijd && ef.Tijd.stringValue) || 'Op tijd';
+                    const ingeklokt = (ef.Ingeklokt && ef.Ingeklokt.stringValue) || null;
+                    const uitgeklokt = (ef.Uitgeklokt && ef.Uitgeklokt.stringValue) || null;
+                    const dateStr = wo.date || '';
+                    const startDate = ingeklokt ? `${dateStr}T${ingeklokt}:00` : dateStr;
+                    const endDate = uitgeklokt ? `${dateStr}T${uitgeklokt}:00` : null;
+                    return {
+                        id: wo.id,
+                        startDate,
+                        endDate,
+                        type: tijd,
+                        hours: null,  // wordt nu niet getoond in history-tegel
+                        remarks: wo.remark || '',
+                    };
                 })
-                .sort((a, b) => b.startDate.localeCompare(a.startDate));
+                .sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
         } catch (e) {
             console.warn('[Clock] Kon geschiedenis niet ophalen:', e.message);
             return [];
@@ -1159,181 +1184,16 @@ window.QEClock = {
     // =============================================
 
     /**
-     * Synchroniseer de lokale sessie met de werkelijke Robaws data.
-     * Als registraties in Robaws verwijderd zijn, worden ze ook lokaal verwijderd.
-     * Wordt aangeroepen bij het openen van het klokscherm.
+     * v60: time-registrations endpoint wordt NIET meer gequeryd voor de
+     * "ingeklokt om X" status. De lokale sessie (workOrderId + startTime
+     * in localStorage) is leidend. Dit voorkomt dat de gebruiker een
+     * verouderd Robaws-tijdregistratie record te zien krijgt.
+     *
+     * De functie blijft bestaan (caller-compatibility) maar is een no-op.
      */
     async syncWithRobaws() {
-        const user = RobawsAPI.getLoggedInUser();
-        if (!user) return;
-
-        // BUG-fix: vroeger werd bij een mislukte Robaws-fetch (timeout, 5xx,
-        // pagination-glitch) de lokale sessie GEWIST omdat getTimeRegistrations
-        // stilletjes [] terugaf. Volgende NFC scan dacht "niets ingeklokt" en
-        // maakte een 2e Robaws registratie aan → dubbele registraties.
-        // Fix: getTimeRegistrations gooit nu een fout bij niet-200 responses,
-        // wat hier door de catch wordt opgevangen. Alleen bij een SUCCESVOLLE
-        // fetch met écht 0 items wordt de lokale sessie gewist.
-        let robawsRegs;
-        try {
-            const today = this._localDate();
-            robawsRegs = await RobawsAPI.getTimeRegistrations(user.robawsEmployeeId, today);
-            console.log('[Clock] Robaws sync: gevonden', robawsRegs.length, 'registraties voor vandaag');
-        } catch (e) {
-            console.warn('[Clock] Robaws sync mislukt — lokale sessie BEHOUDEN:', e.message);
-            return;
-        }
-
-        try {
-            // SECURITY: extra paranoid check — drop registraties die niet
-            // aan de ingelogde werknemer toebehoren. Laatste verdedigingslinie.
-            const myEmpId = String(user.robawsEmployeeId);
-            robawsRegs = robawsRegs.filter(r => {
-                const empId = r.employeeId || (r.employee && r.employee.id);
-                if (!empId) return false;
-                if (String(empId) !== myEmpId) {
-                    console.warn('[Clock] Registratie van andere werknemer genegeerd in sync:', r.id);
-                    return false;
-                }
-                return true;
-            });
-
-            // Geen registraties in Robaws? Wis de lokale sessie volledig
-            // (alleen na bevestigde succesvolle fetch — zie boven)
-            if (robawsRegs.length === 0) {
-                const session = this.getSession();
-                if (session && (session.active || (session.completedSessions || []).length > 0)) {
-                    console.log('[Clock] Robaws heeft geen registraties — lokale sessie gewist');
-                    const key = this._getSessionKey();
-                    if (key) localStorage.removeItem(key);
-                }
-                return;
-            }
-
-            // ── SESSIE VOLLEDIG HERBOUWEN vanuit Robaws ──
-            // Robaws is de enige bron van waarheid. Lokale waarden worden
-            // altijd overschreven met wat Robaws teruggeeft.
-            let session = this.getSession() || this._newSession();
-
-            // 1. Herbouw completedSessions (afgesloten registraties)
-            const completedFromRobaws = robawsRegs
-                .filter(r => r.endDate)
-                .map(r => ({
-                    startTime: new Date(r.startDate).toTimeString().slice(0, 5),
-                    endTime: new Date(r.endDate).toTimeString().slice(0, 5),
-                    type: r.type || 'Op tijd',
-                    robawsId: String(r.id),
-                    tagName: (r.remarks || '').split(' — ')[0] || '',
-                    hours: r.hours || this._calcHours(r.startDate, r.endDate),
-                }));
-            session.completedSessions = completedFromRobaws;
-
-            // 2. Open registratie (zonder endDate) = actieve sessie
-            const openReg = robawsRegs.find(r => !r.endDate);
-            if (openReg) {
-                const robawsStart = new Date(openReg.startDate).toTimeString().slice(0, 5);
-                const robawsType = openReg.type || 'Op tijd';
-                const robawsId = String(openReg.id);
-                // ALTIJD updaten vanuit Robaws — ook als de sessie al actief was
-                if (session.startTime !== robawsStart || session.registrationType !== robawsType || String(session.robawsId) !== robawsId) {
-                    console.log('[Clock] Sessie bijgewerkt vanuit Robaws:', session.startTime, '->', robawsStart, session.registrationType, '->', robawsType);
-                }
-                session.active = true;
-                session.robawsId = robawsId;
-                session.startTime = robawsStart;
-                session.startISO = openReg.startDate;
-                session.registrationType = robawsType;
-                // tagName alleen updaten als er remarks zijn (anders behouden we lokale waarde)
-                if (openReg.remarks) {
-                    session.tagName = (openReg.remarks).split(' — ')[0] || session.tagName;
-                }
-            } else {
-                // Geen open registratie meer → sessie niet actief
-                session.active = false;
-                session.robawsId = null;
-                // Starttime en type bepalen op basis van eerste registratie
-                const firstReg = robawsRegs.find(r => r.type === 'Op tijd' || r.type === 'Te laat');
-                if (firstReg) {
-                    session.registrationType = firstReg.type;
-                } else if (completedFromRobaws.length > 0) {
-                    session.registrationType = completedFromRobaws[0].type;
-                }
-                const earliest = robawsRegs.reduce((a, b) => a.startDate < b.startDate ? a : b);
-                session.startTime = new Date(earliest.startDate).toTimeString().slice(0, 5);
-            }
-
-            this._saveSession(session);
-            console.log('[Clock] Lokale sessie gesynchroniseerd met Robaws:', JSON.stringify({
-                active: session.active,
-                startTime: session.startTime,
-                type: session.registrationType,
-                robawsId: session.robawsId
-            }));
-        } catch (e) {
-            console.warn('[Clock] Robaws sync mislukt:', e.message);
-            // Bij fout: gewoon doorgaan met lokale data
-        }
-    },
-
-    // =============================================
-    // ADMIN: ALLE WERKNEMERS VANDAAG (Robaws)
-    // =============================================
-
-    async getAllAttendanceToday() {
-        // SECURITY: defense-in-depth — alleen kantoor-rol mag het overzicht
-        const me = RobawsAPI.getLoggedInUser();
-        if (!me || me.role !== 'bureel') {
-            console.warn('[Clock] getAllAttendanceToday geweigerd: rol =', me && me.role);
-            return [];
-        }
-        try {
-            const allRegs = await RobawsAPI.getAllTimeRegistrationsToday();
-
-            // Groepeer per werknemer
-            const byEmployee = {};
-            for (const reg of allRegs) {
-                const empId = reg.employeeId;
-                if (!byEmployee[empId]) byEmployee[empId] = [];
-                byEmployee[empId].push(reg);
-            }
-
-            // Haal werknemersnamen op (uit cache of Robaws)
-            const result = [];
-            for (const [empId, regs] of Object.entries(byEmployee)) {
-                const firstReg = regs[0];
-                // Probeer naam op te halen
-                let name = `Werknemer ${empId}`;
-                try {
-                    const empRes = await RobawsAPI.get(`employees/${empId}`);
-                    if (empRes.code === 200 && empRes.data) {
-                        name = empRes.data.fullName || empRes.data.name || name;
-                    }
-                } catch(e) {}
-
-                const firstOfDay = regs.find(r => r.type === 'Op tijd' || r.type === 'Te laat');
-                const clockTime = firstOfDay ? new Date(firstOfDay.startDate).toTimeString().slice(0,5) : null;
-                const isLate = firstOfDay ? firstOfDay.type === 'Te laat' : false;
-                const llSessions = regs.filter(r => r.type === 'Laden & Lossen');
-                const extraSessions = regs.filter(r => r.type === 'Extra uren');
-
-                result.push({
-                    employeeId: empId,
-                    name,
-                    clockTime,
-                    isLate,
-                    type: firstOfDay ? firstOfDay.type : null,
-                    totalRegistrations: regs.length,
-                    ladenLossen: llSessions.length,
-                    extraUren: extraSessions.length,
-                    registrations: regs,
-                });
-            }
-
-            return result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-        } catch (e) {
-            console.warn('[Clock] Admin overzicht ophalen mislukt:', e.message);
-            return [];
-        }
+        // No-op in v60. Local session is the source of truth.
+        return;
     },
 
     // =============================================
