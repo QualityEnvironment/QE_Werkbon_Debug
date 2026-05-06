@@ -395,6 +395,13 @@ window.QEClock = {
     async onNfcScan(tagId) {
         console.log('[Clock] NFC scan:', tagId);
 
+        // 🔧 DEBUG (tijdelijk v47): toon direct dat scan binnenkomt
+        if (window.app && window.app.toast) {
+            const tagPreview = String(tagId || '(leeg)').slice(0, 20);
+            const screen = (window.app && window.app.currentScreen) || '(geen)';
+            window.app.toast('📡 SCAN: ' + tagPreview + ' — scherm: ' + screen);
+        }
+
         // ── SCREEN-GUARD: alleen scannen wanneer gebruiker op het Klok-scherm staat ──
         // Voorkomt onbedoelde inclock terwijl iemand een werkbon invult of
         // door planning bladert. Toewijzingsmodus is een uitzondering.
