@@ -489,47 +489,31 @@ const APIBridge = {
     // =============================================
     async handlePayment(params, options) {
         const action = params.action || 'status';
-
-        if (action === 'status') {
-            const result = await VivaAPI.checkStatus();
-            return this.jsonResponse(result);
-        }
-
+        if (action === 'status') return this.jsonResponse(await VivaAPI.checkStatus());
         if (action === 'create-order') {
             const body = await this.parseBody(options);
             const result = await VivaAPI.createOrder(body);
-            if (result.success) return this.jsonResponse(result);
-            return this.jsonResponse(result, 500);
+            return this.jsonResponse(result, result.success ? 200 : 500);
         }
-
         if (action === 'terminal-payment') {
             const body = await this.parseBody(options);
             const result = await VivaAPI.terminalPayment(body);
-            if (result.success) return this.jsonResponse(result);
-            return this.jsonResponse(result, 500);
+            return this.jsonResponse(result, result.success ? 200 : 500);
         }
-
         if (action === 'check-status') {
-            const result = await VivaAPI.checkPaymentStatus(params.orderCode);
-            return this.jsonResponse(result);
+            return this.jsonResponse(await VivaAPI.checkPaymentStatus(params.orderCode));
         }
-
         if (action === 'find-by-ref') {
             const ref = params.ref || params.clientTransactionId || '';
-            const result = await VivaAPI.findTransactionByClientRef(ref);
-            return this.jsonResponse(result);
+            return this.jsonResponse(await VivaAPI.findTransactionByClientRef(ref));
         }
-
         if (action === 'mark-paid') {
             const body = await this.parseBody(options);
             if (!body.invoiceId) return this.jsonResponse({ error: 'invoiceId is verplicht' }, 400);
-            const result = await RobawsAPI.markInvoicePaid(body.invoiceId);
-            return this.jsonResponse(result);
+            return this.jsonResponse(await RobawsAPI.markInvoicePaid(body.invoiceId));
         }
-
         return this.jsonResponse({ error: 'Ongeldige actie' }, 400);
     },
 };
 
-// Auto-initialisatie
 APIBridge.init();

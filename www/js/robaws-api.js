@@ -2432,8 +2432,6 @@ const RobawsAPI = {
             formattedOgm = '+++' + ogm.substr(0, 3) + '/' + ogm.substr(3, 4) + '/' + ogm.substr(7, 5) + '+++';
         }
 
-        // Stap 5: Bedrijfsgegevens ophalen voor betaalscherm
-        // Fallback: hardcoded QE bedrijfsgegevens (Robaws companies endpoint geeft IBAN niet altijd terug)
         let companyIban = 'BE17645135216621', companyBic = 'JVBABE22', companyName = 'Quality Environment';
         try {
             const compResult = await this.get(`companies/${companyId}`);
@@ -2442,42 +2440,30 @@ const RobawsAPI = {
                 companyBic = compResult.data.bic || companyBic;
                 companyName = compResult.data.name || companyName;
             }
-        } catch(e) { /* fallback naar hardcoded waarden */ }
+        } catch(e) {}
 
-        // Stap 6: Werkbon + order status updaten op basis van betaalmethode
-        // Overschrijving/Viva wallet = betaald → "Gefactureerd"
-        // Cash = moet nagekeken worden → "Nakijken"
-        // Niet Ontvangen = laten zoals is
         let newStatus = null;
         if (paymentMethod === 'Overschrijving ter plaatse' || paymentMethod === 'Viva wallet') {
             newStatus = 'gefactureerd';
         }
 
         if (newStatus) {
-            // Werkbon status updaten
             try {
                 const woFull = await this.get(`work-orders/${workOrderId}`);
                 if (woFull.code === 200 && woFull.data) {
                     woFull.data.status = newStatus;
                     await this.put(`work-orders/${workOrderId}`, woFull.data);
-                    console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}`);
                 }
-            } catch(e) {
-                console.warn('[RobawsAPI] Werkbon status updaten mislukt:', e);
-            }
+            } catch(e) { console.warn('[RobawsAPI] Werkbon status updaten mislukt:', e); }
 
-            // Sales order status updaten
             if (woSalesOrderId) {
                 try {
                     const soFull = await this.get(`sales-orders/${woSalesOrderId}`);
                     if (soFull.code === 200 && soFull.data) {
                         soFull.data.status = newStatus;
                         await this.put(`sales-orders/${woSalesOrderId}`, soFull.data);
-                        console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}`);
                     }
-                } catch(e) {
-                    console.warn('[RobawsAPI] Order status updaten mislukt:', e);
-                }
+                } catch(e) { console.warn('[RobawsAPI] Order status updaten mislukt:', e); }
             }
         }
 
@@ -2491,7 +2477,7 @@ const RobawsAPI = {
                 totalExclVat: totalExclVat || 0,
                 totalInclVat: totalInclVat || 0,
                 status: inv.status,
-                booked: inv.booked ?? false,
+                booked: inv.booked != null ? inv.booked : false,
                 paymentInstruction: ogm,
                 formattedOgm,
             },
@@ -2515,32 +2501,21 @@ const RobawsAPI = {
         };
     },
 
-    // =============================================
-    // HANDTEKENING UPLOADEN
-    // =============================================
     async uploadSignature({ workOrderId, signatureName, signatureData }) {
-        // Base64 naar Blob
         let base64 = signatureData;
         if (base64.includes(',')) base64 = base64.split(',')[1];
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let j = 0; j < binary.length; j++) {
-            bytes[j] = binary.charCodeAt(j);
-        }
+        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
         const blob = new Blob([bytes], { type: 'image/png' });
         const file = new File([blob], 'signature.png', { type: 'image/png' });
 
-        // Upload als document bij werkorder
         const result = await this.uploadFile(
             `work-orders/${workOrderId}/documents`,
             file,
             'signature.png'
         );
 
-        // Probeer signatureName op te slaan.
-        // BELANGRIJK: Robaws v2 PUT is een VOLLEDIGE replace (geen PATCH).
-        // Een PUT met enkel { signatureName } zet alle andere velden terug op null.
-        // Daarom eerst GET, dan alle bestaande velden + signatureName mee PUT'en.
         if (signatureName) {
             try {
                 const cur = await this.get(`work-orders/${workOrderId}`);
@@ -2571,7 +2546,7 @@ const RobawsAPI = {
                     }
                     await this.put(`work-orders/${workOrderId}`, body);
                 }
-            } catch(e) { /* niet fataal */ }
+            } catch(e) {}
         }
 
         return {
@@ -2580,21 +2555,7 @@ const RobawsAPI = {
         };
     },
 
-    // =============================================
-    // FACTUUR ALS BETAALD MARKEREN
-    // =============================================
     async markInvoicePaid(invoiceId) {
-        // Status blijft "Viva wallet betaling" — de bank zet de factuur automatisch
-        // op "betaald" via matching op de gestructureerde mededeling (OGM).
-        //
-        // We posten GEEN /payments en veranderen GEEN status, want:
-        // - Een /payments voor het volledige bedrag zet de factuur meteen op "betaald"
-        //   (openstaand saldo = 0), wat we niet willen tot de bank het bevestigt.
-        // - De status mag op "Viva wallet betaling" blijven staan zodat de factuur
-        //   in de juiste lijst zichtbaar blijft tot de bank matcht.
-        //
-        // Deze functie is dus effectief een no-op vanuit Robaws-perspectief; ze bestaat
-        // enkel nog zodat de app-flow kan doorgaan na een geslaagde terminal-betaling.
         return { success: true, code: 200, skipped: true };
     },
 };

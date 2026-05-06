@@ -5757,7 +5757,6 @@ const app = {
         try {
             if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]);
         } catch(_) {}
-
         // MISLUKT blijft langer staan zodat de gebruiker de reden kan lezen.
         // Tikken op de overlay sluit hem ook meteen.
         const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
@@ -5782,7 +5781,6 @@ const app = {
     _planningPollInterval: null,
 
     startPlanningPoll() {
-        // Check elke 5 minuten of er nieuwe planning-items zijn
         if (this._planningPollInterval) clearInterval(this._planningPollInterval);
         this._planningPollInterval = setInterval(() => this._pollForNewPlanning(), 5 * 60 * 1000);
     },
@@ -5794,65 +5792,44 @@ const app = {
             const result = await RobawsAPI.getPlanning(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
             const items = (result.items || []).filter(it => !it.hasWerkbon);
             const count = items.length;
-
             if (this._lastPlanningCount !== null && count > this._lastPlanningCount) {
                 const diff = count - this._lastPlanningCount;
                 this.toast(`📋 ${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
-                // Badge tonen op planning-scherm
                 const badge = document.getElementById('woCount');
                 if (badge) { badge.textContent = count; badge.style.background = 'var(--qe-orange)'; }
             }
             this._lastPlanningCount = count;
-        } catch (e) { /* stille fout bij polling */ }
+        } catch (e) {}
     },
 
-    // ========================================
-    // ONLINE/OFFLINE
-    // ========================================
     updateOnlineStatus() {
         const isOnline = navigator.onLine;
-        document.getElementById('offlineBar').classList.toggle('show', !isOnline);
-
-        // Terug online? Sync database + verwerk wachtrij
+        const bar = document.getElementById('offlineBar');
+        if (bar) bar.classList.toggle('show', !isOnline);
         if (isOnline) {
-            this.backgroundSync();
-            // Klokdata synchroniseren
+            if (typeof this.backgroundSync === 'function') this.backgroundSync();
             if (typeof QEClock !== 'undefined' && QEClock.syncPending) {
                 QEClock.syncPending().catch(e => console.warn('[App] Klok sync fout:', e));
             }
         }
     },
 
-    // ========================================
-    // HELPERS
-    // ========================================
-    // Afrondingslogica voor facturatie:
-    // - Wachturen → naar boven afronden per heel uur (60 min)
-    // - Overige uren → naar boven afronden per half uur (30 min)
     roundHoursForInvoice(totalMinutes, uurcode) {
         if (!totalMinutes || totalMinutes <= 0) return 0;
         const isWacht = uurcode && (uurcode.name || '').toLowerCase().includes('wacht');
-        const roundTo = isWacht ? 60 : 30; // minuten
+        const roundTo = isWacht ? 60 : 30;
         return Math.ceil(totalMinutes / roundTo) * roundTo;
     },
 
-    // Pas afrondingslogica toe op de uren-array vóór submit.
-    // Werkuren (klant) worden afgerond op basis van uurcode.
-    // Het verschil wordt aan de laatste entry toegevoegd.
     _roundHoursForSubmit(hours) {
         if (!hours || hours.length === 0) return hours;
         const result = hours.map(h => ({ ...h }));
-
-        // Bereken totaal werkuren
         const werkEntries = result.filter(h => h.type === 'klant');
         if (werkEntries.length > 0) {
             const totalRaw = werkEntries.reduce((sum, h) => sum + (h.duration || 0), 0);
             const totalRounded = this.roundHoursForInvoice(totalRaw, this.selectedUurcode);
             const diff = totalRounded - totalRaw;
-            if (diff > 0) {
-                // Voeg verschil toe aan de laatste werkuren entry
-                werkEntries[werkEntries.length - 1].duration += diff;
-            }
+            if (diff > 0) werkEntries[werkEntries.length - 1].duration += diff;
         }
         return result;
     },
@@ -5864,7 +5841,6 @@ const app = {
         if (!mins || mins <= 0) return '0:00';
         return `${Math.floor(mins / 60)}:${(mins % 60).toString().padStart(2, '0')}`;
     },
-    /** Formatteer decimale uren (bijv. 1.75) als "1u 45m" */
     formatDecimalHours(decHours) {
         if (!decHours || decHours <= 0) return '0u 00m';
         const h = Math.floor(decHours);
@@ -5878,26 +5854,18 @@ const app = {
         return div.innerHTML;
     },
 
-    // ========================================
-    // ONDERHOUDSCHECKLIST
-    // ========================================
     initChecklist() {
         const section = document.getElementById('checklistSection');
         const container = document.getElementById('checklistContainer');
         if (!section || !container || !window.ONDERHOUD_DATA) { if (section) section.style.display = 'none'; return; }
-
-        const summary = this.currentWO?.summary || '';
+        const summary = (this.currentWO && this.currentWO.summary) || '';
         const checklistKey = ONDERHOUD_DATA.detectChecklist(summary);
         if (!checklistKey) { section.style.display = 'none'; return; }
-
         const checklist = ONDERHOUD_DATA.CHECKLISTS[checklistKey];
         if (!checklist) { section.style.display = 'none'; return; }
-
-        // Herstel opgeslagen staat
         const woId = this.currentWO.id;
-        const saved = this.woData[woId]?.checklist || {};
-
-        document.getElementById('checklistTitle').textContent = '\u2705 ' + checklist.label;
+        const saved = (this.woData[woId] && this.woData[woId].checklist) || {};
+        document.getElementById('checklistTitle').textContent = '✅ ' + checklist.label;
         container.innerHTML = checklist.items.map(item => {
             const checked = saved[item.id] ? 'checked' : '';
             return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--qe-grey-light);cursor:pointer">
@@ -5906,8 +5874,6 @@ const app = {
                 <span style="font-size:14px;line-height:1.4" id="clItem_${item.id}">${this.escapeHtml(item.text)}</span>
             </label>`;
         }).join('');
-
-        // Voortgangsbalk
         const doneCount = Object.values(saved).filter(v => v).length;
         const totalCount = checklist.items.length;
         const pct = totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0;
@@ -5917,7 +5883,6 @@ const app = {
             </div>
             <span id="checklistPct" style="font-size:12px;color:var(--qe-grey);font-weight:500;min-width:36px;text-align:right">${pct}%</span>
         </div>`;
-
         section.style.display = '';
     },
 
@@ -5926,8 +5891,6 @@ const app = {
         const woId = this.currentWO.id;
         if (!this.woData[woId].checklist) this.woData[woId].checklist = {};
         this.woData[woId].checklist[itemId] = checked;
-
-        // Update voortgang
         const checklist = ONDERHOUD_DATA.CHECKLISTS[checklistKey];
         if (checklist) {
             const saved = this.woData[woId].checklist;
@@ -5938,17 +5901,11 @@ const app = {
             if (bar) bar.style.width = pct + '%';
             if (label) label.textContent = pct + '%';
         }
-
-        // Doorhalen van afgevinkte items
         const span = document.getElementById(`clItem_${itemId}`);
         if (span) span.style.textDecoration = checked ? 'line-through' : 'none';
-
-        this._saveWoData();
+        if (typeof this._saveWoData === 'function') this._saveWoData();
     },
 
-    // ========================================
-    // DARK MODE
-    // ========================================
     toggleDarkMode(enabled) {
         document.body.classList.toggle('dark-mode', enabled);
         localStorage.setItem('qe_dark_mode', enabled ? '1' : '0');
