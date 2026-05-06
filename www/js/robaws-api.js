@@ -1001,17 +1001,35 @@ const RobawsAPI = {
         if (empRes.code !== 200 || !empRes.data) throw new Error('Kon werknemer niet ophalen');
         const config = this._parseNfcTags(empRes.data.extraFields || {});
 
-        // Startuur ophalen van de INGELOGDE werknemer (persoonlijk)
+        // Startuur + Pauze ophalen van de INGELOGDE werknemer (persoonlijk)
+        // BUG-fix v56: ook voor werknemer 1, en lees alle mogelijke value-types
+        // (intValue/numberValue/...) — Robaws levert numerieke extra-velden niet
+        // altijd als stringValue.
         const user = this.getLoggedInUser();
-        if (user && user.robawsEmployeeId && String(user.robawsEmployeeId) !== '1') {
+        if (user && user.robawsEmployeeId) {
             try {
                 const myRes = await this.get(`employees/${user.robawsEmployeeId}`);
                 if (myRes.code === 200 && myRes.data && myRes.data.extraFields) {
                     console.log('[RobawsAPI] Extra velden werknemer:', JSON.stringify(Object.keys(myRes.data.extraFields)));
+
+                    // Helper: lees een waarde uit alle gangbare value-keys
+                    const extractVal = (field) => {
+                        if (!field) return '';
+                        const raw = field.stringValue
+                            ?? field.intValue
+                            ?? field.integerValue
+                            ?? field.numberValue
+                            ?? field.decimalValue
+                            ?? field.doubleValue
+                            ?? field.longValue
+                            ?? field.value
+                            ?? '';
+                        return raw === null || raw === undefined ? '' : String(raw).trim();
+                    };
+
                     // Zoek startuur veld (kan "Startuur werknemer" of "Startuur" heten)
                     let startField = myRes.data.extraFields['Startuur werknemer'];
                     if (!startField) startField = myRes.data.extraFields['Startuur'];
-                    // Zoek in alle velden naar een veld dat "startuur" bevat
                     if (!startField) {
                         for (const [name, data] of Object.entries(myRes.data.extraFields)) {
                             if (name.toLowerCase().includes('startuur')) {
@@ -1021,22 +1039,29 @@ const RobawsAPI = {
                             }
                         }
                     }
-                    const val = startField ? String(startField.stringValue ?? startField.value ?? '') : '';
+                    const val = extractVal(startField);
                     console.log('[RobawsAPI] Startuur waarde voor', user.name, ':', val || 'NIET GEVONDEN');
                     if (val) config.startuur = val;
 
-                    // Pauze veld ophalen (minuten)
+                    // Pauze veld ophalen (in minuten)
                     let pauzeField = myRes.data.extraFields['Pauze'];
+                    let pauzeFieldName = pauzeField ? 'Pauze' : null;
                     if (!pauzeField) {
                         for (const [name, data] of Object.entries(myRes.data.extraFields)) {
-                            if (name.toLowerCase() === 'pauze') {
+                            if (name.toLowerCase().includes('pauze')) {
                                 pauzeField = data;
+                                pauzeFieldName = name;
                                 break;
                             }
                         }
                     }
-                    const pauzeVal = pauzeField ? String(pauzeField.stringValue ?? pauzeField.value ?? '') : '';
-                    console.log('[RobawsAPI] Pauze waarde voor', user.name, ':', pauzeVal || 'NIET GEVONDEN');
+                    let pauzeVal = extractVal(pauzeField);
+                    // Strip eventuele tekst (bv. "60 min" -> "60")
+                    const numMatch = pauzeVal.match(/\d+/);
+                    if (numMatch) pauzeVal = numMatch[0];
+                    console.log('[RobawsAPI] Pauze waarde voor', user.name,
+                        '(veld:', pauzeFieldName || 'GEEN', '):',
+                        pauzeVal || 'NIET GEVONDEN');
                     if (pauzeVal) config.pauze = pauzeVal;
                 }
             } catch(e) {

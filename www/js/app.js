@@ -5330,19 +5330,24 @@ const app = {
         }
 
         try {
-            const registrations = await RobawsAPI.getTimeRegistrationHistory(user.robawsEmployeeId, 30);
+            // v56: huidige kalendermaand i.p.v. rolling 30 dagen
+            const today = new Date();
+            today.setHours(12, 0, 0, 0);
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const monthPrefix = `${yyyy}-${mm}`; // bv. "2026-05"
+            const monthNames = ['januari','februari','maart','april','mei','juni',
+                'juli','augustus','september','oktober','november','december'];
+            const monthLabel = `${monthNames[today.getMonth()].toUpperCase()} ${yyyy}`;
 
-            if (registrations.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state" style="margin-top:20px">
-                        <div class="empty-icon">⏰</div>
-                        <h3>Geen registraties</h3>
-                        <p>Scan een NFC tag om je eerste tijdsregistratie te starten</p>
-                    </div>`;
-                return;
-            }
+            // Fetch met ruime buffer (tot vandaag + 2 dagen) en filter daarna op maand
+            const fetchDays = today.getDate() + 2;
+            const allRegistrations = await RobawsAPI.getTimeRegistrationHistory(user.robawsEmployeeId, fetchDays);
+            const registrations = allRegistrations.filter(r =>
+                (r.startDate || '').substring(0, 7) === monthPrefix
+            );
 
-            // Groepeer per datum
+            // Groepeer per datum (alleen items van huidige maand)
             const byDate = {};
             for (const reg of registrations) {
                 const date = reg.startDate.substring(0, 10);
@@ -5350,17 +5355,17 @@ const app = {
                 byDate[date].push(reg);
             }
 
-            // Totalen berekenen
+            // Totalen berekenen (huidige maand)
             const totalHours = registrations.reduce((sum, r) => sum + (r.hours || 0), 0);
             const totalDays = Object.keys(byDate).length;
             const lateCount = registrations.filter(r => r.type === 'Te laat').length;
 
             let html = '';
 
-            // Samenvatting kaart
+            // Samenvatting kaart - toont nu maand-naam
             html += `
                 <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
-                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Laatste 30 dagen</div>
+                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
                         <div>
                             <div style="font-size:28px;font-weight:700">${totalHours.toFixed(1)}</div>
@@ -5377,54 +5382,83 @@ const app = {
                     </div>
                 </div>`;
 
-            // Per datum groep
+            // Per datum groep - toon ALLE dagen van de huidige maand t/m vandaag
             const days = ['Zo','Ma','Di','Wo','Do','Vr','Za'];
-            const sortedDates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+            // Bouw lijst: vandaag t/m 1ste van de maand (recent eerst)
+            const allDates = [];
+            for (let day = today.getDate(); day >= 1; day--) {
+                const d = new Date(yyyy, today.getMonth(), day, 12, 0, 0);
+                const ddStr = String(d.getDate()).padStart(2, '0');
+                allDates.push(`${yyyy}-${mm}-${ddStr}`);
+            }
 
-            for (const date of sortedDates) {
-                const regs = byDate[date];
+            // Edge-case: geen werkdag in deze maand en dag 1 nog niet bereikt
+            if (registrations.length === 0 && allDates.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="margin-top:20px">
+                        <div class="empty-icon">⏰</div>
+                        <h3>Geen registraties</h3>
+                        <p>Scan een NFC tag om je eerste tijdsregistratie te starten</p>
+                    </div>`;
+                return;
+            }
+
+            for (const date of allDates) {
+                const regs = byDate[date] || [];
                 const d = new Date(date + 'T12:00:00');
                 const dayName = days[d.getDay()];
                 const dateStr = d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' });
+                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
                 const dayTotal = regs.reduce((sum, r) => sum + (r.hours || 0), 0);
 
-                html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
-                    <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
-                    <div style="font-size:12px;color:var(--qe-grey)">${dayTotal.toFixed(1)} uur</div>
-                </div>`;
+                // Header per dag
+                if (regs.length > 0) {
+                    html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
+                        <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
+                        <div style="font-size:12px;color:var(--qe-grey)">${dayTotal.toFixed(1)} uur</div>
+                    </div>`;
 
-                for (const reg of regs) {
-                    const startTime = new Date(reg.startDate).toTimeString().slice(0, 5);
-                    const endTime = reg.endDate ? new Date(reg.endDate).toTimeString().slice(0, 5) : '...';
-                    const hours = reg.hours ? `${reg.hours}u` : '';
+                    for (const reg of regs) {
+                        const startTime = new Date(reg.startDate).toTimeString().slice(0, 5);
+                        const endTime = reg.endDate ? new Date(reg.endDate).toTimeString().slice(0, 5) : '...';
+                        const hours = reg.hours ? `${reg.hours}u` : '';
 
-                    let typeIcon, typeBg, typeColor;
-                    switch (reg.type) {
-                        case 'Te laat':
-                            typeIcon = '⚠️'; typeBg = '#fff8e1'; typeColor = '#e65100'; break;
-                        case 'Laden & Lossen':
-                            typeIcon = '📦'; typeBg = '#e3f2fd'; typeColor = '#1565c0'; break;
-                        case 'Extra uren':
-                            typeIcon = '🔄'; typeBg = '#f3e5f5'; typeColor = '#7b1fa2'; break;
-                        default:
-                            typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
-                    }
+                        let typeIcon, typeBg, typeColor;
+                        switch (reg.type) {
+                            case 'Te laat':
+                                typeIcon = '⚠️'; typeBg = '#fff8e1'; typeColor = '#e65100'; break;
+                            case 'Laden & Lossen':
+                                typeIcon = '📦'; typeBg = '#e3f2fd'; typeColor = '#1565c0'; break;
+                            case 'Extra uren':
+                                typeIcon = '🔄'; typeBg = '#f3e5f5'; typeColor = '#7b1fa2'; break;
+                            default:
+                                typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
+                        }
 
-                    // GPS link uit opmerkingen halen
-                    const gpsMatch = (reg.remarks || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
-                    const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
+                        // GPS link uit opmerkingen halen
+                        const gpsMatch = (reg.remarks || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
+                        const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
 
-                    html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${reg.id}')">
-                        <div style="display:flex;align-items:center;justify-content:space-between">
-                            <div style="display:flex;align-items:center;gap:10px">
-                                <span style="font-size:18px">${typeIcon}</span>
-                                <div>
-                                    <div style="font-size:14px;font-weight:500">${startTime} → ${endTime} <span style="font-size:12px;font-weight:400;color:var(--qe-grey)">${hours}</span></div>
-                                    <div style="font-size:11px;color:${typeColor}">${reg.type} ${gpsLink}</div>
+                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${reg.id}')">
+                            <div style="display:flex;align-items:center;justify-content:space-between">
+                                <div style="display:flex;align-items:center;gap:10px">
+                                    <span style="font-size:18px">${typeIcon}</span>
+                                    <div>
+                                        <div style="font-size:14px;font-weight:500">${startTime} → ${endTime} <span style="font-size:12px;font-weight:400;color:var(--qe-grey)">${hours}</span></div>
+                                        <div style="font-size:11px;color:${typeColor}">${reg.type} ${gpsLink}</div>
+                                    </div>
                                 </div>
+                                <div style="font-size:18px;color:var(--qe-grey)">›</div>
                             </div>
-                            <div style="font-size:18px;color:var(--qe-grey)">›</div>
-                        </div>
+                        </div>`;
+                    }
+                } else {
+                    // Lege dag: compacte rij
+                    const opacity = isWeekend ? '0.4' : '0.6';
+                    const label = isWeekend ? 'Weekend' : 'Geen registratie';
+                    html += `<div style="margin-bottom:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:#fafafa;border-radius:8px;opacity:${opacity}">
+                        <div style="font-size:13px;font-weight:500;color:var(--qe-grey)">${dayName} ${dateStr}</div>
+                        <div style="font-size:11px;color:var(--qe-grey);font-style:italic">${label}</div>
                     </div>`;
                 }
             }
@@ -6262,7 +6296,6 @@ const app = {
     },
 };
 
-// Zet app expliciet op window zodat screen-guards in clock.js werken
+// Zet app expliciet op window zodat screen-guards in clock.js werken (v53)
 window.app = app;
-
 document.addEventListener('DOMContentLoaded', () => app.init());

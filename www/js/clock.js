@@ -681,24 +681,36 @@ window.QEClock = {
         // Pauze aftrekken: dynamisch uit Robaws extra veld "Pauze" (in minuten)
         // Alleen bij normale registraties (niet bij Laden & Lossen of Extra uren)
         let pauseHours = 0;
+        let pauseSource = 'geen-aftrek';
         const isNormalShift = session.registrationType === 'Op tijd' || session.registrationType === 'Te laat';
         if (isNormalShift) {
             // Haal pauze op: eerst uit geladen config, dan localStorage cache
             let pauseMinutes = this._personalPauze;
+            pauseSource = 'config';
             if (!pauseMinutes && pauseMinutes !== 0) {
                 const user = RobawsAPI.getLoggedInUser();
                 const userId = user ? String(user.robawsEmployeeId) : null;
                 if (userId) {
                     const cached = localStorage.getItem(`qe_pauze_${userId}`);
-                    if (cached) pauseMinutes = parseInt(cached, 10);
+                    if (cached) {
+                        pauseMinutes = parseInt(cached, 10);
+                        pauseSource = 'localStorage';
+                    }
                 }
             }
-            // Fallback: 45 minuten als er geen waarde is
-            if (!pauseMinutes && pauseMinutes !== 0) pauseMinutes = 45;
+            // Fallback v56: 60 min ipv 45 (QE-standaard). Als config en cache leeg
+            // zijn was er waarschijnlijk een Robaws-fetch fout - log dit duidelijk.
+            if (!pauseMinutes && pauseMinutes !== 0) {
+                pauseMinutes = 60;
+                pauseSource = 'fallback-60';
+                console.warn('[Clock] PAUZE NIET GEVONDEN voor user - fallback naar 60 min. ' +
+                    'Check Robaws extra-veld "Pauze" op de werknemerskaart.');
+            }
             pauseHours = pauseMinutes / 60;
         }
         const hours = Math.max(0, Math.round((rawHours - pauseHours) * 100) / 100);
-        console.log('[Clock] Uren berekend:', rawHours, '- pauze', pauseHours, '=', hours);
+        console.log('[Clock] Uren berekend: rawHours', rawHours,
+            '- pauze', Math.round(pauseHours * 60), 'min (', pauseSource, ') =', hours);
 
         // Sessie afronden
         session.active = false;
