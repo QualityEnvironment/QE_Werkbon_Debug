@@ -242,9 +242,12 @@ const APIBridge = {
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
         if (action === 'get-avatar') {
-            // Robaws is leidend: probeer altijd eerst Robaws zodat een wijziging
-            // op een ander toestel ook hier opduikt. Lokale cache is enkel
-            // fallback voor offline gebruik.
+            // CACHE-FIRST: lokaal eerst — voorkomt dat de profielfoto verdwijnt
+            // bij elke page-refresh wanneer Robaws traag is. Voor een verse
+            // refresh uit Robaws gebruik je expliciet refreshAvatarFromRobaws.
+            const local = RobawsAPI.getLocalAvatar(user.email);
+            if (local) return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
+            // Geen lokaal? Dan Robaws proberen
             try {
                 const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
                 if (blob) {
@@ -256,9 +259,7 @@ const APIBridge = {
                     RobawsAPI.setLocalAvatar(user.email, dataUrl);
                     return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws' });
                 }
-            } catch(e) { /* val terug op lokale cache */ }
-            const local = RobawsAPI.getLocalAvatar(user.email);
-            if (local) return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
+            } catch(e) { /* val terug op leeg */ }
             return this.jsonResponse({ avatar: null, dataUrl: null });
         }
 
@@ -277,8 +278,9 @@ const APIBridge = {
                 const ct = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
                 const ext = ct === 'image/png' ? 'png' : 'jpg';
                 const blob = new Blob([bytes], { type: ct });
-                const file = new File([blob], `Foto.${ext}`, { type: ct });
-                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, `Foto.${ext}`);
+                const ts = Date.now();
+                const file = new File([blob], `Foto_${ts}.${ext}`, { type: ct });
+                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, `Foto_${ts}.${ext}`);
                 const ok = upRes && (upRes.code === 200 || upRes.code === 201);
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });

@@ -258,8 +258,14 @@ const app = {
         // Body-class zetten zodat CSS elementen kan verbergen voor monteurs
         document.body.classList.toggle('monteur-mode', this.isMonteur());
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
-        // Avatar in header laden
+        // Avatar in header laden — eerst snel uit cache, dan Robaws verversen
         this.refreshAvatar();
+        // Eenmalig per login: forceer refresh uit Robaws zodat wijzigingen
+        // op een ander toestel ook hier doorkomen.
+        if (!this._avatarRefreshedForUser || this._avatarRefreshedForUser !== this.currentUser?.email) {
+            this.refreshAvatarFromRobaws().then(() => this.refreshAvatar());
+            this._avatarRefreshedForUser = this.currentUser?.email;
+        }
         this.buildDateStrip();
         this.updateHeaderDate();
         this.loadPlanning();
@@ -299,14 +305,55 @@ const app = {
                 if (imgHeader) { imgHeader.src = data.dataUrl; imgHeader.style.display = ''; }
                 if (fbHeader) fbHeader.style.display = 'none';
                 this._avatarDataUrl = data.dataUrl;
+            } else if (this._avatarDataUrl) {
+                // BUG-fix: dataUrl niet wegwerpen als we hem al hadden — anders
+                // verdwijnt de foto bij elke refresh wanneer Robaws traag is.
+                if (imgHeader) { imgHeader.src = this._avatarDataUrl; imgHeader.style.display = ''; }
+                if (fbHeader) fbHeader.style.display = 'none';
             } else {
                 if (imgHeader) imgHeader.style.display = 'none';
                 if (fbHeader) fbHeader.style.display = '';
-                this._avatarDataUrl = null;
             }
         } catch (e) {
-            if (imgHeader) imgHeader.style.display = 'none';
-            if (fbHeader) fbHeader.style.display = '';
+            // BUG-fix: bij netwerkfout NIET de cached foto wegwerpen
+            console.warn('[App] refreshAvatar fetch mislukt:', e.message);
+            if (this._avatarDataUrl) {
+                if (imgHeader) { imgHeader.src = this._avatarDataUrl; imgHeader.style.display = ''; }
+                if (fbHeader) fbHeader.style.display = 'none';
+            } else {
+                if (imgHeader) imgHeader.style.display = 'none';
+                if (fbHeader) fbHeader.style.display = '';
+            }
+        }
+    },
+
+    /**
+     * Force-refresh van avatar uit Robaws (skip cache).
+     * Wordt aangeroepen bij login zodat een gewijzigde profielfoto op een ander
+     * toestel ook hier opduikt. Maar wist NOOIT de cache als Robaws faalt.
+     */
+    async refreshAvatarFromRobaws() {
+        if (!this.currentUser || !this.currentUser.email) return;
+        try {
+            const email = this.currentUser.email.toLowerCase();
+            // Tijdelijk lokale cache wissen zodat get-avatar Robaws aanroept
+            const backup = localStorage.getItem('qe_avatar_' + email);
+            try { localStorage.removeItem('qe_avatar_' + email); } catch(_) {}
+            const res = await fetch('api/profile.php?action=get-avatar');
+            const data = await res.json();
+            if (data && data.dataUrl) {
+                this._avatarDataUrl = data.dataUrl;
+                const imgHeader = document.getElementById('headerAvatarImg');
+                const fbHeader = document.getElementById('headerAvatarFallback');
+                if (imgHeader) { imgHeader.src = data.dataUrl; imgHeader.style.display = ''; }
+                if (fbHeader) fbHeader.style.display = 'none';
+                console.log('[App] Avatar ververst uit Robaws');
+            } else if (backup) {
+                // Robaws gaf niets — restore de oude cache
+                try { localStorage.setItem('qe_avatar_' + email, backup); } catch(_) {}
+            }
+        } catch (e) {
+            console.warn('[App] refreshAvatarFromRobaws faalde — cache behouden:', e.message);
         }
     },
 
@@ -1200,7 +1247,7 @@ const app = {
             this.timer.elapsed = Date.now() - this.timer.startTime;
             this.timer.running = false;
             document.getElementById('btnTimerStart').style.display = '';
-            document.getElementById('btnTimerVerplaatsing').style.display = '';
+            document.getElementById('btnTimerVerplaatsing').style.display = 'none'; // verplaatsing-UI uitgeschakeld
             document.getElementById('btnTimerPause').style.display = 'none';
             this._saveTimerState();
         } else {
@@ -1229,23 +1276,45 @@ const app = {
         }
     },
 
-    _showTimerCorrection() {
+    async _showTimerCorrection() {
         const startDate = new Date(this.timer.startTime);
         const endDate = new Date();
         const type = this.timer.type || 'klant';
         const label = this._timerLabels[type] || type;
 
-        const fmtH = (d) => String(d.getHours()).padStart(2, '0');
-        const fmtM = (d) => String(d.getMinutes()).padStart(2, '0');
-
         const hourOpts = (sel) => Array.from({length: 24}, (_, i) =>
             `<option value="${i}" ${i === sel ? 'selected' : ''}>${String(i).padStart(2,'0')}</option>`).join('');
         const minOpts = (sel) => Array.from({length: 60}, (_, m) =>
             `<option value="${m}" ${m === sel ? 'selected' : ''}>${String(m).padStart(2,'0')}</option>`).join('');
+        const pauzeOpts = [0, 15, 30, 45, 60].map(m =>
+            `<option value="${m}" ${m === 0 ? 'selected' : ''}>${m} min</option>`).join('');
+
+        // Loading tonen, want werknemers ophalen kan even duren
+        document.getElementById('modalContent').innerHTML = `<h3>${label}</h3><div class="spinner" style="margin:20px auto"></div>`;
+        this.openModal();
+
+        // Werknemers ophalen — net als bij addManualHours
+        const empIds = this.currentWO ? (this.currentWO.employeeIds || []) : [];
+        let employees = [];
+        if (empIds.length > 0) {
+            try { employees = await this._getEmployeeNames(empIds); } catch(e) {}
+        }
+        if (employees.length === 0 && this.currentUser) {
+            employees = [{ id: String(this.currentUser.robawsEmployeeId), name: this.currentUser.name || 'Ik' }];
+        }
+        const currentEmpId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : '';
+        const employeeSelect = employees.length > 0 ? `
+            <div class="form-group" style="margin-bottom:12px">
+                <label>👷 Werknemer</label>
+                <select class="form-input" id="tcEmployee">
+                    ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${e.name}</option>`).join('')}
+                </select>
+            </div>` : '';
 
         document.getElementById('modalContent').innerHTML = `
             <h3>${label} — controleer tijden</h3>
             <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Pas aan indien nodig</p>
+            ${employeeSelect}
             <div class="form-group" style="margin-bottom:10px">
                 <label>Van</label>
                 <div style="display:flex;gap:8px;align-items:center">
@@ -1254,7 +1323,7 @@ const app = {
                     <select class="form-input" id="tcFromM" style="flex:1">${minOpts(startDate.getMinutes())}</select>
                 </div>
             </div>
-            <div class="form-group" style="margin-bottom:12px">
+            <div class="form-group" style="margin-bottom:10px">
                 <label>Tot</label>
                 <div style="display:flex;gap:8px;align-items:center">
                     <select class="form-input" id="tcToH" style="flex:1">${hourOpts(endDate.getHours())}</select>
@@ -1262,10 +1331,13 @@ const app = {
                     <select class="form-input" id="tcToM" style="flex:1">${minOpts(endDate.getMinutes())}</select>
                 </div>
             </div>
+            <div class="form-group" style="margin-bottom:12px">
+                <label>☕ Pauze</label>
+                <select class="form-input" id="tcPauze">${pauzeOpts}</select>
+            </div>
             <button class="btn btn-primary btn-full" onclick="app._saveTimerCorrection('${type}')">✓ Opslaan</button>
             <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app._discardTimer()">Verwijderen</button>
         `;
-        this.openModal();
     },
 
     _saveTimerCorrection(type) {
@@ -1275,8 +1347,15 @@ const app = {
         const tm = parseInt(document.getElementById('tcToM').value);
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
-        const duration = (th * 60 + tm) - (fh * 60 + fm);
-        if (duration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+        const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
+        if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+
+        // Pauze + werknemer (zelfde patroon als addManualHours)
+        const pauze = parseInt(document.getElementById('tcPauze')?.value || 0);
+        const duration = Math.max(0, totalDuration - pauze);
+        const empSelect = document.getElementById('tcEmployee');
+        const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
+        const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
 
         // GPS check-out bij stop
         this._getGpsLocation(loc => {
@@ -1289,7 +1368,9 @@ const app = {
 
         if (this.currentWO) {
             this.woData[this.currentWO.id].hours.push({
-                id: Date.now(), type, startTime: from, endTime: to, duration,
+                id: Date.now(), type, startTime: from, endTime: to,
+                duration, pauze,
+                employeeId, employeeName,
                 gpsStart: this.timer.gpsStart || null,
             });
             this.renderHoursList();
@@ -1297,7 +1378,8 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
-        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}`);
+        const pauzeText = pauze > 0 ? ` (${pauze}m pauze)` : '';
+        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeText}`);
     },
 
     _discardTimer() {
@@ -1311,7 +1393,7 @@ const app = {
         document.getElementById('timerValue').textContent = '00:00:00';
         document.getElementById('timerLabel').textContent = 'Werkuren';
         document.getElementById('btnTimerStart').style.display = '';
-        document.getElementById('btnTimerVerplaatsing').style.display = '';
+        document.getElementById('btnTimerVerplaatsing').style.display = 'none'; // verplaatsing-UI uitgeschakeld
         document.getElementById('btnTimerPause').style.display = 'none';
         document.getElementById('btnTimerStop').style.display = 'none';
     },
@@ -5592,6 +5674,62 @@ const app = {
         el.textContent = message;
         el.classList.add('show');
         setTimeout(() => el.classList.remove('show'), 2500);
+    },
+
+    /**
+     * Toon een fullscreen scan-resultaat overlay (groot SUCCES of MISLUKT).
+     * Wordt aangeroepen vanuit QEClock.onNfcScan na elke NFC-scan.
+     * @param {boolean} success
+     * @param {string} message - subtekst (bv. "Ingeklokt om 06:29 — Bureel")
+     * @param {Function} [onDone] - callback nadat overlay gesloten is
+     * @param {number} [duration] - hoelang zichtbaar (ms); default 2200 succes / 6000 fout
+     */
+    showScanResult(success, message, onDone, duration) {
+        const overlay = document.getElementById('scanResult');
+        const icon = document.getElementById('scanResultIcon');
+        const title = document.getElementById('scanResultTitle');
+        const msgEl = document.getElementById('scanResultMsg');
+        if (!overlay) {
+            // Geen overlay div in HTML — fallback naar toast
+            this.toast(message);
+            if (typeof onDone === 'function') { try { onDone(); } catch(_) {} }
+            return;
+        }
+
+        if (success) {
+            overlay.style.background = 'rgba(46,125,50,0.97)';
+            overlay.style.color = '#ffffff';
+            icon.textContent = '✅';
+            title.textContent = 'SUCCES';
+        } else {
+            overlay.style.background = 'rgba(198,40,40,0.97)';
+            overlay.style.color = '#ffffff';
+            icon.textContent = '❌';
+            title.textContent = 'MISLUKT';
+        }
+        msgEl.textContent = message || '';
+        overlay.style.display = 'flex';
+
+        // Vibratie als bevestiging
+        try {
+            if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]);
+        } catch(_) {}
+
+        // MISLUKT blijft langer zichtbaar zodat de foutreden te lezen is.
+        // Tikken op overlay sluit hem direct.
+        const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
+        let closed = false;
+        const close = () => {
+            if (closed) return;
+            closed = true;
+            overlay.style.display = 'none';
+            overlay.onclick = null;
+            if (typeof onDone === 'function') {
+                try { onDone(); } catch(e) { console.warn('[ScanResult] onDone fout:', e); }
+            }
+        };
+        overlay.onclick = close;
+        setTimeout(close, dur);
     },
 
     // ========================================

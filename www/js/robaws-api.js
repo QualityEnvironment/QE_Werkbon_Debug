@@ -496,7 +496,42 @@ const RobawsAPI = {
         } catch(e) { return null; }
     },
     setLocalAvatar(email, dataUrl) {
-        try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl); } catch(e){}
+        // Avatar wordt geresized naar 256x256 thumbnail vóór opslag — voorkomt
+        // localStorage quota-fouten met grote foto's en versnelt rendering.
+        const tryStore = (url) => {
+            try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), url); return true; }
+            catch(e) { console.warn('[Avatar] localStorage opslag mislukt:', e.message); return false; }
+        };
+        if (!dataUrl || typeof dataUrl !== 'string') return;
+        // Direct opslaan als het al klein is (< 50KB)
+        if (dataUrl.length < 50000) { tryStore(dataUrl); return; }
+        // Anders resizen via canvas
+        try {
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const size = 256;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = size;
+                    canvas.height = size;
+                    const ctx = canvas.getContext('2d');
+                    // Cover-fit: midden uitsnede
+                    const ratio = Math.max(size / img.width, size / img.height);
+                    const w = img.width * ratio;
+                    const h = img.height * ratio;
+                    ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+                    const small = canvas.toDataURL('image/jpeg', 0.85);
+                    if (!tryStore(small)) {
+                        // Quota nog vol? Probeer 128 px
+                        canvas.width = 128; canvas.height = 128;
+                        ctx.drawImage(img, (128 - w/2) / 2, (128 - h/2) / 2, w/2, h/2);
+                        tryStore(canvas.toDataURL('image/jpeg', 0.75));
+                    }
+                } catch(e) { tryStore(dataUrl); }
+            };
+            img.onerror = () => tryStore(dataUrl);
+            img.src = dataUrl;
+        } catch(e) { tryStore(dataUrl); }
     },
     getLocalAvatar(email) {
         return localStorage.getItem('qe_avatar_' + email.toLowerCase()) || null;
@@ -546,6 +581,20 @@ const RobawsAPI = {
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
+        // SECURITY: ownership-check — voorkom dat we per ongeluk een PUT
+        // doen op de registratie van een andere werknemer (bv. als de
+        // lokale sessie nog een verkeerde robawsId bevat). Sta geen update
+        // toe als de registratie niet aan de ingelogde gebruiker toebehoort.
+        const me = this.getLoggedInUser();
+        if (me && me.robawsEmployeeId) {
+            const ownerId = existing.data.employeeId
+                || (existing.data.employee && existing.data.employee.id);
+            if (ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
+                console.error('[RobawsAPI] WEIGER update — registratie', id,
+                    'is van werknemer', ownerId, 'niet van mij (', me.robawsEmployeeId, ')');
+                throw new Error(`Registratie ${id} hoort bij een andere werknemer (${ownerId})`);
+            }
+        }
         const body = { ...existing.data, ...updates };
         // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
@@ -562,15 +611,45 @@ const RobawsAPI = {
      * @param {string} date - YYYY-MM-DD
      */
     async getTimeRegistrations(employeeId, date) {
-        // Robaws filtert op employeeId, we filteren zelf op datum + dubbele employeeId check
-        const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100`);
-        if (res.code !== 200 || !res.data || !res.data.items) return [];
-        return res.data.items.filter(item => {
+        // BUG-fix: vroeger 1 pagina van 100 zonder sort. Robaws default sort is
+        // ascending op id (oudste eerst), dus hedendaagse registraties vielen
+        // soms uit de respons. Resultaat: app dacht dat een werknemer niet
+        // ingeklokt was → maakte een 2e registratie aan.
+        // Fix: sort=id:desc (nieuwste eerst), paginate met early-stop, en
+        // GOOI een fout bij niet-200 zodat caller (syncWithRobaws) de lokale
+        // sessie niet wist op basis van een mislukte fetch.
+        let allItems = [];
+        let page = 0;
+        const maxPages = 10;
+        while (page < maxPages) {
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            allItems.push(...res.data.items);
+            // Vroeg stoppen: als oudste item op deze pagina al voor de
+            // gevraagde datum is, hoeven we niet verder te paginen
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
+            if (oldestDate && oldestDate < date) break;
+            page++;
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
+        return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
-            // Dubbele check: alleen registraties van deze werknemer
+            if (itemDate !== date) return false;
+            // SECURITY-fix: vroeger was item zonder employeeId een match
+            // (`!itemEmpId || ...`). Robaws geeft het veld soms niet terug,
+            // waardoor andermans open registratie als de eigen ingeklokte
+            // tijd verscheen — en bij uitklokken werd andermans reg gesloten.
+            // Nu VEREISEN we een expliciete employeeId match.
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-            const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-            return itemDate === date && empMatch;
+            if (!itemEmpId) {
+                console.warn('[RobawsAPI] Tijdsregistratie zonder employeeId genegeerd, id=', item.id);
+                return false;
+            }
+            return String(itemEmpId) === String(employeeId);
         });
     },
 
@@ -581,14 +660,23 @@ const RobawsAPI = {
         const today = new Date().toISOString().split('T')[0];
         let allItems = [];
         let page = 0;
-        do {
-            const res = await this.get(`time-registrations?limit=100&page=${page}`);
-            if (res.code !== 200 || !res.data || !res.data.items) break;
+        const maxPages = 20;
+        while (page < maxPages) {
+            // sort=id:desc: nieuwste eerst → vandaag staat altijd vooraan,
+            // ook als er duizenden historische registraties zijn
+            const res = await this.get(`time-registrations?limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
             allItems.push(...res.data.items);
+            // Vroeg stoppen wanneer oudste item op deze pagina al voor vandaag is
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
+            if (oldestDate && oldestDate < today) break;
             page++;
-            if (page >= (res.data.totalPages || 1)) break;
-        } while (page < 10);
-        // Filter op vandaag
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
             return itemDate === today;
@@ -729,26 +817,43 @@ const RobawsAPI = {
      * @param {number} days - aantal dagen terug
      */
     async getTimeRegistrationHistory(employeeId, days = 30) {
-        let allItems = [];
-        let page = 0;
-        do {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}`);
-            if (res.code !== 200 || !res.data || !res.data.items) break;
-            allItems.push(...res.data.items);
-            page++;
-            if (page >= (res.data.totalPages || 1)) break;
-        } while (page < 10);
-
-        // Filter op laatste X dagen + dubbele check employeeId
+        // BUG-fix: zelfde issue als getTimeRegistrations — sort=id:desc + early
+        // stop op datum, en deduplicatie op id. Robaws geeft soms dezelfde
+        // items op meerdere pagina's terug, wat in "Mijn registraties" tot
+        // dubbele entries leidde.
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffStr = cutoff.toISOString();
 
+        let allItems = [];
+        const seenIds = new Set();
+        let page = 0;
+        const maxPages = 10;
+        while (page < maxPages) {
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations history fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            for (const it of res.data.items) {
+                if (it.id != null && !seenIds.has(String(it.id))) {
+                    seenIds.add(String(it.id));
+                    allItems.push(it);
+                }
+            }
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            if (oldestOnPage.startDate && oldestOnPage.startDate < cutoffStr) break;
+            page++;
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
+
         return allItems
             .filter(item => {
+                if (!(item.startDate >= cutoffStr)) return false;
+                // SECURITY-fix: strikt employeeId match (zie getTimeRegistrations)
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-                return item.startDate >= cutoffStr && empMatch;
+                if (!itemEmpId) return false;
+                return String(itemEmpId) === String(employeeId);
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
     },
