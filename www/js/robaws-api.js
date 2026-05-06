@@ -883,20 +883,35 @@ const RobawsAPI = {
      * @param {number} days - aantal dagen terug
      */
     async getTimeRegistrationHistory(employeeId, days = 30) {
-        let allItems = [];
-        let page = 0;
-        do {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}`);
-            if (res.code !== 200 || !res.data || !res.data.items) break;
-            allItems.push(...res.data.items);
-            page++;
-            if (page >= (res.data.totalPages || 1)) break;
-        } while (page < 10);
-
-        // Filter op laatste X dagen + dubbele check employeeId
+        // BUG-fix: zelfde issue als getTimeRegistrations — sort=id:desc + early
+        // stop op datum, en deduplicatie op id. Robaws bleek soms dezelfde
+        // items op meerdere pagina's terug te geven (totalPages incorrect),
+        // wat in "Mijn registraties" tot dubbele entries leidde.
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffStr = cutoff.toISOString();
+
+        let allItems = [];
+        const seenIds = new Set();
+        let page = 0;
+        const maxPages = 10;
+        while (page < maxPages) {
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            if (res.code !== 200) {
+                throw new Error(`Robaws time-registrations history fetch faalde (code ${res.code})`);
+            }
+            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            for (const it of res.data.items) {
+                if (it.id != null && !seenIds.has(String(it.id))) {
+                    seenIds.add(String(it.id));
+                    allItems.push(it);
+                }
+            }
+            const oldestOnPage = res.data.items[res.data.items.length - 1];
+            if (oldestOnPage.startDate && oldestOnPage.startDate < cutoffStr) break;
+            page++;
+            if (res.data.totalPages && page >= res.data.totalPages) break;
+        }
 
         return allItems
             .filter(item => {
