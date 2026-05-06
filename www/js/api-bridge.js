@@ -242,69 +242,33 @@ const APIBridge = {
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
         if (action === 'get-avatar') {
-            // Cache-first: voorheen werd ALTIJD Robaws aangeroepen wat traag is
-            // en onnodig data verbruikt. Nu gebruiken we de lokale cache als
-            // primaire bron. De cache wordt vernieuwd:
-            //   - bij elke succesvolle login (RobawsAPI.refreshAvatarFromRobaws)
-            //   - bij upload van een nieuwe foto via set-avatar
-            //   - bij expliciete refresh via action=force-refresh-avatar
+            // Robaws is leidend: probeer altijd eerst Robaws zodat een wijziging
+            // op een ander toestel ook hier opduikt. Lokale cache is enkel
+            // fallback voor offline gebruik.
+            try {
+                const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
+                if (blob) {
+                    const dataUrl = await new Promise(res => {
+                        const r = new FileReader();
+                        r.onload = () => res(r.result);
+                        r.readAsDataURL(blob);
+                    });
+                    RobawsAPI.setLocalAvatar(user.email, dataUrl);
+                    return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws' });
+                }
+            } catch(e) { /* val terug op lokale cache */ }
             const local = RobawsAPI.getLocalAvatar(user.email);
-            if (local) {
-                return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
-            }
-            // Geen lokale cache (eerste app-start of cache gewist) → eenmalig
-            // Robaws proberen om de cache te vullen.
-            try {
-                const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
-                if (blob) {
-                    const dataUrl = await new Promise(res => {
-                        const r = new FileReader();
-                        r.onload = () => res(r.result);
-                        r.readAsDataURL(blob);
-                    });
-                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
-                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws' });
-                }
-            } catch(e) { /* offline of geen avatar in Robaws */ }
+            if (local) return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
             return this.jsonResponse({ avatar: null, dataUrl: null });
-        }
-
-        if (action === 'force-refresh-avatar') {
-            // Expliciete refresh — gebruikt door RobawsAPI.refreshAvatarFromRobaws
-            // (na login) en kan ook gebruikt worden voor een handmatige
-            // "vernieuw foto"-knop in de profielpagina.
-            try {
-                const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
-                if (blob) {
-                    const dataUrl = await new Promise(res => {
-                        const r = new FileReader();
-                        r.onload = () => res(r.result);
-                        r.readAsDataURL(blob);
-                    });
-                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
-                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws', refreshed: true });
-                }
-                // Geen foto meer in Robaws → wis ook lokale cache
-                RobawsAPI.clearLocalAvatar && RobawsAPI.clearLocalAvatar(user.email);
-                return this.jsonResponse({ avatar: null, dataUrl: null, refreshed: true });
-            } catch(e) {
-                // Bij netwerkfout: laat lokale cache staan, return wat we hebben
-                const local = RobawsAPI.getLocalAvatar(user.email);
-                return this.jsonResponse({
-                    avatar: local || null,
-                    dataUrl: local || null,
-                    source: local ? 'local' : null,
-                    error: 'refresh mislukt: ' + e.message,
-                });
-            }
         }
 
         if (action === 'set-avatar') {
             const body = await this.parseBody(options);
             const dataUrl = body.dataUrl || '';
             if (!dataUrl) return this.jsonResponse({ success: false, error: 'Geen foto' }, 400);
-            // Lokaal cachen als 256x256 thumbnail (voorkomt quota-issues)
-            const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
+            // Lokaal direct cachen
+            RobawsAPI.setLocalAvatar(user.email, dataUrl);
+            // Naar Robaws sturen
             try {
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
                 const binary = atob(base64);
@@ -313,23 +277,15 @@ const APIBridge = {
                 const ct = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
                 const ext = ct === 'image/png' ? 'png' : 'jpg';
                 const blob = new Blob([bytes], { type: ct });
-
-                // Unieke filename met timestamp (sorteert chronologisch in Robaws)
-                const now = new Date();
-                const pad = n => String(n).padStart(2, '0');
-                const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}` +
-                           `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-                const fileName = `Foto_${ts}.${ext}`;
-
-                const file = new File([blob], fileName, { type: ct });
-                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, fileName);
+                const file = new File([blob], `Foto.${ext}`, { type: ct });
+                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, `Foto.${ext}`);
                 const ok = upRes && (upRes.code === 200 || upRes.code === 201);
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
                 }
-                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: cachedDataUrl, dataUrl: cachedDataUrl, fileName });
+                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: dataUrl, dataUrl });
             } catch(e) {
-                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: cachedDataUrl });
+                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: dataUrl });
             }
         }
 
@@ -489,31 +445,47 @@ const APIBridge = {
     // =============================================
     async handlePayment(params, options) {
         const action = params.action || 'status';
-        if (action === 'status') return this.jsonResponse(await VivaAPI.checkStatus());
+
+        if (action === 'status') {
+            const result = await VivaAPI.checkStatus();
+            return this.jsonResponse(result);
+        }
+
         if (action === 'create-order') {
             const body = await this.parseBody(options);
             const result = await VivaAPI.createOrder(body);
-            return this.jsonResponse(result, result.success ? 200 : 500);
+            if (result.success) return this.jsonResponse(result);
+            return this.jsonResponse(result, 500);
         }
+
         if (action === 'terminal-payment') {
             const body = await this.parseBody(options);
             const result = await VivaAPI.terminalPayment(body);
-            return this.jsonResponse(result, result.success ? 200 : 500);
+            if (result.success) return this.jsonResponse(result);
+            return this.jsonResponse(result, 500);
         }
+
         if (action === 'check-status') {
-            return this.jsonResponse(await VivaAPI.checkPaymentStatus(params.orderCode));
+            const result = await VivaAPI.checkPaymentStatus(params.orderCode);
+            return this.jsonResponse(result);
         }
+
         if (action === 'find-by-ref') {
             const ref = params.ref || params.clientTransactionId || '';
-            return this.jsonResponse(await VivaAPI.findTransactionByClientRef(ref));
+            const result = await VivaAPI.findTransactionByClientRef(ref);
+            return this.jsonResponse(result);
         }
+
         if (action === 'mark-paid') {
             const body = await this.parseBody(options);
             if (!body.invoiceId) return this.jsonResponse({ error: 'invoiceId is verplicht' }, 400);
-            return this.jsonResponse(await RobawsAPI.markInvoicePaid(body.invoiceId));
+            const result = await RobawsAPI.markInvoicePaid(body.invoiceId);
+            return this.jsonResponse(result);
         }
+
         return this.jsonResponse({ error: 'Ongeldige actie' }, 400);
     },
 };
 
+// Auto-initialisatie
 APIBridge.init();

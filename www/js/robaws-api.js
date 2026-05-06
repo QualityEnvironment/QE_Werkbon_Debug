@@ -22,9 +22,9 @@ const RobawsAPI = {
     // Bron: auth.php user_mapping + Robaws gebruikersbeheer
     EMPLOYEES: {
         // Techniekers
-        'glycera@qe.be':             { employeeId: 7,  userId: 10,    name: 'Glycera',    role: 'technieker' },
+        'glycera@qe.be':             { employeeId: 7,  userId: null,  name: 'Glycera',    role: 'technieker' },
         'sascha@qe.be':              { employeeId: 9,  userId: 18,    name: 'Sascha',     role: 'technieker' },
-        'daxleekens@qe.be':          { employeeId: 10, userId: 9,     name: 'Dax',        role: 'technieker' },
+        'daxleekens@qe.be':          { employeeId: 10, userId: null,  name: 'Dax',        role: 'technieker' },
         'olivier.puchacz@qe.be':     { employeeId: 12, userId: 13,    name: 'Olivier',    role: 'technieker' },
         'yassine@qe.be':             { employeeId: 30, userId: 20,    name: 'Yassine',    role: 'technieker' },
         // Monteurs
@@ -33,16 +33,16 @@ const RobawsAPI = {
         'jelle@qe.be':               { employeeId: 3,  userId: 14,    name: 'Jelle',      role: 'monteur' },
         'wim@qe.be':                 { employeeId: 4,  userId: 22,    name: 'Wim',        role: 'monteur' },
         'jens@qe.be':                { employeeId: 5,  userId: 23,    name: 'Jens',       role: 'monteur' },
-        'herve@qe.be':               { employeeId: 8,  userId: 15,    name: 'Herve',      role: 'monteur' },
+        'herve@qe.be':               { employeeId: 8,  userId: null,  name: 'Herve',      role: 'monteur' },
         'keng@qe.be':                { employeeId: 11, userId: 17,    name: 'Keng',       role: 'monteur' },
         'joshua@qe.be':              { employeeId: 13, userId: 16,    name: 'Joshua',     role: 'monteur' },
         // Bureel / kantoor
         'vince@qe.be':               { employeeId: 16, userId: 5,     name: 'Vince',      role: 'bureel' },
         'bjorn@qe.be':               { employeeId: 19, userId: 4,     name: 'Bjorn',      role: 'bureel' },
         'bart@qe.be':                { employeeId: 20, userId: 7,     name: 'Bart',       role: 'bureel' },
-        'felicity@qe.be':            { employeeId: 21, userId: 6,     name: 'Felicity',   role: 'bureel' },
+        'felicity@qe.be':            { employeeId: 21, userId: null,  name: 'Felicity',   role: 'bureel' },
         'rolf@qe.be':                { employeeId: 22, userId: 2,     name: 'Rolf',       role: 'bureel' },
-        'els@qe.be':                 { employeeId: 23, userId: 3,     name: 'Els',        role: 'bureel' },
+        'els@qe.be':                 { employeeId: null, userId: null, name: 'Els',       role: 'bureel' },
     },
 
     // === AUTH HEADERS ===
@@ -315,12 +315,6 @@ const RobawsAPI = {
         };
         console.log('[RobawsAPI] Login OK:', empName, '→ employeeId:', employee.id, ', userId:', resolvedUserId || 'GEEN');
         localStorage.setItem('qe_user', JSON.stringify(user));
-
-        // Vernieuw de avatar-cache vanuit Robaws (achtergrond, niet awaited
-        // zodat de login-flow niet wacht op de download). Tijdens app-gebruik
-        // gebruikt get-avatar gewoon de lokale cache.
-        this.refreshAvatarFromRobaws(emailLower, employee.id).catch(() => {});
-
         return { success: true, user };
     },
 
@@ -482,153 +476,30 @@ const RobawsAPI = {
     async uploadEmployeePhoto(employeeId, file, fileName = 'Foto.jpg') {
         return await this.uploadFile(`employees/${employeeId}/documents`, file, fileName);
     },
-    /**
-     * Haal de profielfoto-blob op voor een werknemer.
-     * Returns: Blob (gevonden), null (geen foto), throws (kon niet ophalen).
-     * Zie uitgebreide uitleg in de productie-versie van dit bestand.
-     */
     async getEmployeePhotoBlob(employeeId) {
-        const res = await this.get(`employees/${employeeId}/documents`);
-        if (res.code !== 200 || !res.data) {
-            const e = new Error('Documents-lijst niet bereikbaar (code ' + res.code + ')');
-            e.code = 'DOCS_UNREACHABLE';
-            throw e;
-        }
-        const items = res.data.items || res.data || [];
-        const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
-        if (!photos.length) return null;
-
-        photos.sort((a, b) => {
-            const dateCmp = (b.createdAt || '').localeCompare(a.createdAt || '');
-            if (dateCmp !== 0) return dateCmp;
-            return (b.name || '').localeCompare(a.name || '');
-        });
-        const doc = photos[0];
-        if (!doc.id) return null;
-
-        // Native bridge eerst (omzeilt WebView redirect)
-        if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
-            try {
-                const result = QEBridge.downloadRobawsDocument(
-                    String(doc.id), this.API_KEY, this.API_SECRET, this.TENANT
-                );
-                if (result && result.length > 0) {
-                    const pipeIdx = result.indexOf('|');
-                    const contentType = pipeIdx > 0 ? result.substring(0, pipeIdx) : 'image/jpeg';
-                    const base64 = pipeIdx > 0 ? result.substring(pipeIdx + 1) : result;
-                    const binary = atob(base64);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    return new Blob([bytes], { type: contentType });
-                }
-                const e = new Error('Native download gaf lege response');
-                e.code = 'DOWNLOAD_EMPTY';
-                throw e;
-            } catch(e) {
-                console.warn('[RobawsAPI] Native photo-download mislukt, val terug op fetch:', e.message);
-            }
-        }
-
-        // Fallback: directe fetch
-        const url = this.BASE_URL + '/documents/' + doc.id;
-        const dlRes = await fetch(url, { headers: this.getHeaders() });
-        if (!dlRes.ok) {
-            const e = new Error('Document download faalde (HTTP ' + dlRes.status + ')');
-            e.code = 'DOWNLOAD_FAILED';
-            throw e;
-        }
-        const blob = await dlRes.blob();
-        if (blob.type && blob.type.startsWith('text/html')) {
-            const e = new Error('Document download gaf HTML terug (redirect naar login?)');
-            e.code = 'DOWNLOAD_REDIRECTED';
-            throw e;
-        }
-        return blob;
+        try {
+            const res = await this.get(`employees/${employeeId}/documents`);
+            if (res.code !== 200 || !res.data) return null;
+            const items = res.data.items || res.data || [];
+            // Zoek meest recente document met "foto" of "photo" in de naam
+            const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
+            if (!photos.length) return null;
+            photos.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+            const doc = photos[0];
+            if (!doc.id) return null;
+            // Download de inhoud via /documents/{id}/preview of /documents/{id}
+            const url = this.BASE_URL + '/documents/' + doc.id;
+            const dlRes = await fetch(url, { headers: this.getHeaders() });
+            if (!dlRes.ok) return null;
+            const blob = await dlRes.blob();
+            return blob;
+        } catch(e) { return null; }
     },
     setLocalAvatar(email, dataUrl) {
-        try {
-            localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl);
-            return true;
-        } catch(e) {
-            console.warn('[RobawsAPI] Avatar opslaan in localStorage mislukt (' + e.name +
-                '): mogelijk quota overschreden. dataUrl was ' +
-                (dataUrl ? dataUrl.length : 0) + ' tekens lang.');
-            return false;
-        }
+        try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl); } catch(e){}
     },
     getLocalAvatar(email) {
         return localStorage.getItem('qe_avatar_' + email.toLowerCase()) || null;
-    },
-    clearLocalAvatar(email) {
-        try { localStorage.removeItem('qe_avatar_' + email.toLowerCase()); } catch(e){}
-    },
-
-    /** Schaal een dataUrl af naar maximaal NxN. Returns gerezisede dataUrl of origineel bij fout. */
-    _resizeImageDataUrl(dataUrl, maxSize, quality) {
-        maxSize = maxSize || 256;
-        quality = quality || 0.85;
-        return new Promise((resolve) => {
-            try {
-                const img = new Image();
-                img.onload = () => {
-                    try {
-                        let w = img.naturalWidth || img.width;
-                        let h = img.naturalHeight || img.height;
-                        if (w > maxSize || h > maxSize) {
-                            if (w >= h) { h = Math.round(h * (maxSize / w)); w = maxSize; }
-                            else { w = Math.round(w * (maxSize / h)); h = maxSize; }
-                        }
-                        const canvas = document.createElement('canvas');
-                        canvas.width = w;
-                        canvas.height = h;
-                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                        resolve(canvas.toDataURL('image/jpeg', quality));
-                    } catch(e) { resolve(dataUrl); }
-                };
-                img.onerror = () => resolve(dataUrl);
-                img.src = dataUrl;
-            } catch(e) { resolve(dataUrl); }
-        });
-    },
-
-    /** Cache een avatar als 256x256 thumbnail in localStorage. */
-    async cacheAvatarFromDataUrl(email, dataUrl) {
-        if (!dataUrl) return null;
-        let toCache = dataUrl;
-        try { toCache = await this._resizeImageDataUrl(dataUrl, 256, 0.85); } catch(e) {}
-        const ok = this.setLocalAvatar(email, toCache);
-        return ok ? toCache : null;
-    },
-
-    /**
-     * Vernieuw de avatar-cache. blob → vervangen, null → wissen,
-     * throws → cache behouden (zie getEmployeePhotoBlob semantiek).
-     */
-    async refreshAvatarFromRobaws(email, employeeId) {
-        if (!employeeId) return;
-        let blob;
-        try {
-            blob = await this.getEmployeePhotoBlob(employeeId);
-        } catch(e) {
-            console.warn('[RobawsAPI] Avatar refresh mislukt, lokale cache behouden:', e.message);
-            return;
-        }
-        if (blob === null) {
-            this.clearLocalAvatar(email);
-            console.log('[RobawsAPI] Geen foto in Robaws — lokale cache gewist');
-            return;
-        }
-        try {
-            const dataUrl = await new Promise(res => {
-                const r = new FileReader();
-                r.onload = () => res(r.result);
-                r.readAsDataURL(blob);
-            });
-            await this.cacheAvatarFromDataUrl(email, dataUrl);
-            console.log('[RobawsAPI] Avatar verfrist vanuit Robaws bij login');
-        } catch(e) {
-            console.warn('[RobawsAPI] Avatar omzetten naar dataUrl mislukt:', e.message);
-        }
     },
 
     getLoggedInUser() {
@@ -670,22 +541,13 @@ const RobawsAPI = {
      * @param {Object} updates - velden om te updaten
      */
     async updateTimeRegistration(id, updates) {
+        // Haal eerst de volledige registratie op om niets te overschrijven
         const existing = await this.get(`time-registrations/${id}`);
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
-        // SECURITY: ownership-check — voorkom dat we per ongeluk een PUT
-        // doen op de registratie van een andere werknemer.
-        const me = this.getLoggedInUser();
-        if (me && me.robawsEmployeeId) {
-            const ownerId = existing.data.employeeId
-                || (existing.data.employee && existing.data.employee.id);
-            if (ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
-                console.error('[RobawsAPI] WEIGER update — registratie', id, 'is van werknemer', ownerId, 'niet van mij (', me.robawsEmployeeId, ')');
-                throw new Error(`Registratie ${id} hoort bij een andere werknemer (${ownerId})`);
-            }
-        }
         const body = { ...existing.data, ...updates };
+        // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
         delete body.logicId;
         delete body.createdAt;
@@ -700,41 +562,15 @@ const RobawsAPI = {
      * @param {string} date - YYYY-MM-DD
      */
     async getTimeRegistrations(employeeId, date) {
-        // BUG-fix: vroeger 1 pagina van 100 zonder sort. Robaws default sort is
-        // ascending op id (oudste eerst), dus hedendaagse registraties stonden
-        // op latere pagina's en verdwenen uit de respons. Resultaat: app dacht
-        // dat een werknemer niet ingeklokt was → maakte een 2e registratie aan.
-        // Fix: sort=id:desc (nieuwste eerst), paginate met early-stop, en GOOI
-        // een fout bij niet-200 zodat caller (syncWithRobaws) geen lokale
-        // sessie wist op basis van een mislukte fetch.
-        let allItems = [];
-        let page = 0;
-        const maxPages = 10;
-        while (page < maxPages) {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
-            if (res.code !== 200) {
-                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
-            }
-            if (!res.data || !res.data.items || res.data.items.length === 0) break;
-            allItems.push(...res.data.items);
-            const oldestOnPage = res.data.items[res.data.items.length - 1];
-            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
-            if (oldestDate && oldestDate < date) break;
-            page++;
-            if (res.data.totalPages && page >= res.data.totalPages) break;
-        }
-        return allItems.filter(item => {
+        // Robaws filtert op employeeId, we filteren zelf op datum + dubbele employeeId check
+        const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100`);
+        if (res.code !== 200 || !res.data || !res.data.items) return [];
+        return res.data.items.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
-            if (itemDate !== date) return false;
-            // SECURITY-fix: strikt employeeId match. Items zonder herleidbare
-            // werknemer worden genegeerd, anders kan een ander zijn open
-            // registratie als eigen ingeklokte tijd verschijnen.
+            // Dubbele check: alleen registraties van deze werknemer
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-            if (!itemEmpId) {
-                console.warn('[RobawsAPI] Tijdsregistratie zonder employeeId genegeerd, id=', item.id);
-                return false;
-            }
-            return String(itemEmpId) === String(employeeId);
+            const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
+            return itemDate === date && empMatch;
         });
     },
 
@@ -745,20 +581,14 @@ const RobawsAPI = {
         const today = new Date().toISOString().split('T')[0];
         let allItems = [];
         let page = 0;
-        const maxPages = 20;
-        while (page < maxPages) {
-            const res = await this.get(`time-registrations?limit=100&page=${page}&sort=id:desc`);
-            if (res.code !== 200) {
-                throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
-            }
-            if (!res.data || !res.data.items || res.data.items.length === 0) break;
+        do {
+            const res = await this.get(`time-registrations?limit=100&page=${page}`);
+            if (res.code !== 200 || !res.data || !res.data.items) break;
             allItems.push(...res.data.items);
-            const oldestOnPage = res.data.items[res.data.items.length - 1];
-            const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
-            if (oldestDate && oldestDate < today) break;
             page++;
-            if (res.data.totalPages && page >= res.data.totalPages) break;
-        }
+            if (page >= (res.data.totalPages || 1)) break;
+        } while (page < 10);
+        // Filter op vandaag
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
             return itemDate === today;
@@ -899,42 +729,26 @@ const RobawsAPI = {
      * @param {number} days - aantal dagen terug
      */
     async getTimeRegistrationHistory(employeeId, days = 30) {
-        // BUG-fix: zelfde issue als getTimeRegistrations — sort=id:desc + early
-        // stop op datum, en deduplicatie op id. Robaws bleek soms dezelfde
-        // items op meerdere pagina's terug te geven (totalPages incorrect),
-        // wat in "Mijn registraties" tot dubbele entries leidde.
+        let allItems = [];
+        let page = 0;
+        do {
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}`);
+            if (res.code !== 200 || !res.data || !res.data.items) break;
+            allItems.push(...res.data.items);
+            page++;
+            if (page >= (res.data.totalPages || 1)) break;
+        } while (page < 10);
+
+        // Filter op laatste X dagen + dubbele check employeeId
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffStr = cutoff.toISOString();
 
-        let allItems = [];
-        const seenIds = new Set();
-        let page = 0;
-        const maxPages = 10;
-        while (page < maxPages) {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
-            if (res.code !== 200) {
-                throw new Error(`Robaws time-registrations history fetch faalde (code ${res.code})`);
-            }
-            if (!res.data || !res.data.items || res.data.items.length === 0) break;
-            for (const it of res.data.items) {
-                if (it.id != null && !seenIds.has(String(it.id))) {
-                    seenIds.add(String(it.id));
-                    allItems.push(it);
-                }
-            }
-            const oldestOnPage = res.data.items[res.data.items.length - 1];
-            if (oldestOnPage.startDate && oldestOnPage.startDate < cutoffStr) break;
-            page++;
-            if (res.data.totalPages && page >= res.data.totalPages) break;
-        }
-
         return allItems
             .filter(item => {
-                if (!(item.startDate >= cutoffStr)) return false;
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                if (!itemEmpId) return false;
-                return String(itemEmpId) === String(employeeId);
+                const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
+                return item.startDate >= cutoffStr && empMatch;
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
     },
@@ -2432,6 +2246,8 @@ const RobawsAPI = {
             formattedOgm = '+++' + ogm.substr(0, 3) + '/' + ogm.substr(3, 4) + '/' + ogm.substr(7, 5) + '+++';
         }
 
+        // Stap 5: Bedrijfsgegevens ophalen voor betaalscherm
+        // Fallback: hardcoded QE bedrijfsgegevens (Robaws companies endpoint geeft IBAN niet altijd terug)
         let companyIban = 'BE17645135216621', companyBic = 'JVBABE22', companyName = 'Quality Environment';
         try {
             const compResult = await this.get(`companies/${companyId}`);
@@ -2440,30 +2256,42 @@ const RobawsAPI = {
                 companyBic = compResult.data.bic || companyBic;
                 companyName = compResult.data.name || companyName;
             }
-        } catch(e) {}
+        } catch(e) { /* fallback naar hardcoded waarden */ }
 
+        // Stap 6: Werkbon + order status updaten op basis van betaalmethode
+        // Overschrijving/Viva wallet = betaald → "Gefactureerd"
+        // Cash = moet nagekeken worden → "Nakijken"
+        // Niet Ontvangen = laten zoals is
         let newStatus = null;
         if (paymentMethod === 'Overschrijving ter plaatse' || paymentMethod === 'Viva wallet') {
             newStatus = 'gefactureerd';
         }
 
         if (newStatus) {
+            // Werkbon status updaten
             try {
                 const woFull = await this.get(`work-orders/${workOrderId}`);
                 if (woFull.code === 200 && woFull.data) {
                     woFull.data.status = newStatus;
                     await this.put(`work-orders/${workOrderId}`, woFull.data);
+                    console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}`);
                 }
-            } catch(e) { console.warn('[RobawsAPI] Werkbon status updaten mislukt:', e); }
+            } catch(e) {
+                console.warn('[RobawsAPI] Werkbon status updaten mislukt:', e);
+            }
 
+            // Sales order status updaten
             if (woSalesOrderId) {
                 try {
                     const soFull = await this.get(`sales-orders/${woSalesOrderId}`);
                     if (soFull.code === 200 && soFull.data) {
                         soFull.data.status = newStatus;
                         await this.put(`sales-orders/${woSalesOrderId}`, soFull.data);
+                        console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}`);
                     }
-                } catch(e) { console.warn('[RobawsAPI] Order status updaten mislukt:', e); }
+                } catch(e) {
+                    console.warn('[RobawsAPI] Order status updaten mislukt:', e);
+                }
             }
         }
 
@@ -2477,7 +2305,7 @@ const RobawsAPI = {
                 totalExclVat: totalExclVat || 0,
                 totalInclVat: totalInclVat || 0,
                 status: inv.status,
-                booked: inv.booked != null ? inv.booked : false,
+                booked: inv.booked ?? false,
                 paymentInstruction: ogm,
                 formattedOgm,
             },
@@ -2501,21 +2329,32 @@ const RobawsAPI = {
         };
     },
 
+    // =============================================
+    // HANDTEKENING UPLOADEN
+    // =============================================
     async uploadSignature({ workOrderId, signatureName, signatureData }) {
+        // Base64 naar Blob
         let base64 = signatureData;
         if (base64.includes(',')) base64 = base64.split(',')[1];
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+        for (let j = 0; j < binary.length; j++) {
+            bytes[j] = binary.charCodeAt(j);
+        }
         const blob = new Blob([bytes], { type: 'image/png' });
         const file = new File([blob], 'signature.png', { type: 'image/png' });
 
+        // Upload als document bij werkorder
         const result = await this.uploadFile(
             `work-orders/${workOrderId}/documents`,
             file,
             'signature.png'
         );
 
+        // Probeer signatureName op te slaan.
+        // BELANGRIJK: Robaws v2 PUT is een VOLLEDIGE replace (geen PATCH).
+        // Een PUT met enkel { signatureName } zet alle andere velden terug op null.
+        // Daarom eerst GET, dan alle bestaande velden + signatureName mee PUT'en.
         if (signatureName) {
             try {
                 const cur = await this.get(`work-orders/${workOrderId}`);
@@ -2546,7 +2385,7 @@ const RobawsAPI = {
                     }
                     await this.put(`work-orders/${workOrderId}`, body);
                 }
-            } catch(e) {}
+            } catch(e) { /* niet fataal */ }
         }
 
         return {
@@ -2555,7 +2394,21 @@ const RobawsAPI = {
         };
     },
 
+    // =============================================
+    // FACTUUR ALS BETAALD MARKEREN
+    // =============================================
     async markInvoicePaid(invoiceId) {
+        // Status blijft "Viva wallet betaling" — de bank zet de factuur automatisch
+        // op "betaald" via matching op de gestructureerde mededeling (OGM).
+        //
+        // We posten GEEN /payments en veranderen GEEN status, want:
+        // - Een /payments voor het volledige bedrag zet de factuur meteen op "betaald"
+        //   (openstaand saldo = 0), wat we niet willen tot de bank het bevestigt.
+        // - De status mag op "Viva wallet betaling" blijven staan zodat de factuur
+        //   in de juiste lijst zichtbaar blijft tot de bank matcht.
+        //
+        // Deze functie is dus effectief een no-op vanuit Robaws-perspectief; ze bestaat
+        // enkel nog zodat de app-flow kan doorgaan na een geslaagde terminal-betaling.
         return { success: true, code: 200, skipped: true };
     },
 };

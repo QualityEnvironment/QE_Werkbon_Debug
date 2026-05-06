@@ -85,32 +85,6 @@ const app = {
         if (typeof RobawsAPI !== 'undefined' && RobawsAPI.seedDefaultPins) {
             RobawsAPI.seedDefaultPins();
         }
-
-        // Android back-knop: navigeer binnen de app i.p.v. afsluiten.
-        if (!window._qeBackHandlerInstalled) {
-            window.addEventListener('popstate', () => {
-                const modal = document.getElementById('modalOverlay');
-                if (modal && modal.classList.contains('show')) {
-                    this.closeModal();
-                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
-                    return;
-                }
-                if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
-                    this.screenHistory = [];
-                    try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
-                    this.navigate('screenPlanning', false);
-                    this.loadPlanning();
-                    return;
-                }
-                if (this.screenHistory.length > 0) {
-                    const prev = this.screenHistory.pop();
-                    this.navigate(prev, false);
-                    return;
-                }
-            });
-            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
-            window._qeBackHandlerInstalled = true;
-        }
         // Ingediende werkorders + openstaande betalingen herstellen uit localStorage
         this._loadSubmittedWOs();
         // Herstel onafgemaakte werkorder-data (uren, materialen, notities)
@@ -375,81 +349,8 @@ const app = {
         }
         const updateStatus = document.getElementById('updateStatus');
         if (updateStatus) updateStatus.style.display = 'none';
-
-        // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
-        this._maybeShowNfcTesterButton();
-        // === EINDE DEBUG NFC TESTER ===
-
         this.navigate('screenProfile');
     },
-
-    // === DEBUG NFC TESTER — verwijder deze methode na security audit ===
-    _maybeShowNfcTesterButton() {
-        // Alleen voor Levi tonen — security audit is admin-only.
-        const email = (this.currentUser && this.currentUser.email || '').toLowerCase();
-        if (email !== 'levi@qe.be') {
-            const existing = document.getElementById('btnDebugNfcTester');
-            if (existing && existing.parentElement) existing.parentElement.remove();
-            this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = false;
-            return;
-        }
-        if (this._nfcTesterChecked) {
-            const btn = document.getElementById('btnDebugNfcTester');
-            if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
-            return;
-        }
-        // BUG-fix: fetch() werkt niet altijd op file:// in Android WebView —
-        // soms krijg je een lege body. XMLHttpRequest is betrouwbaarder.
-        let done = false;
-        const finish = (exists, why) => {
-            if (done) return;
-            done = true;
-            this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = exists;
-            console.log('[DebugNFC] available=' + exists + ' (' + why + ')');
-            if (exists) this._injectNfcTesterButton();
-        };
-        try {
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', 'debug-nfc.html', true);
-            xhr.timeout = 5000;
-            xhr.onload = () => {
-                const text = xhr.responseText || '';
-                console.log('[DebugNFC] xhr.status=' + xhr.status + ' text.length=' + text.length);
-                const exists = text.length > 100 && text.indexOf('NFC Security Tester') !== -1;
-                finish(exists, exists ? 'xhr-found' : 'xhr-no-marker');
-            };
-            xhr.onerror = () => finish(false, 'xhr-error');
-            xhr.ontimeout = () => finish(false, 'xhr-timeout');
-            xhr.send();
-        } catch(e) {
-            finish(false, 'xhr-exception: ' + e.message);
-        }
-    },
-    _injectNfcTesterButton() {
-        const profile = document.getElementById('screenProfile');
-        if (!profile || document.getElementById('btnDebugNfcTester')) return;
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
-        card.innerHTML = `
-            <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
-            <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
-            <button id="btnDebugNfcTester" class="btn btn-full"
-                style="background:#C62828;color:#fff;padding:12px"
-                onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
-        `;
-        // Zoek de PIN-card via een loop (.card:has() werkt niet in oudere WebViews)
-        let pinCard = null;
-        const cards = profile.querySelectorAll('.card');
-        for (const c of cards) {
-            if (c.querySelector('#profileOldPin')) { pinCard = c; break; }
-        }
-        if (pinCard) profile.insertBefore(card, pinCard);
-        else profile.appendChild(card);
-    },
-    // === EINDE DEBUG NFC TESTER ===
 
     checkForUpdate() {
         const btn = document.getElementById('btnCheckUpdate');
@@ -612,9 +513,6 @@ const app = {
     navigate(screenId, pushHistory = true) {
         if (pushHistory && this.currentScreen !== screenId) {
             this.screenHistory.push(this.currentScreen);
-            // Voeg ook een entry toe aan window.history zodat de Android
-            // back-knop deze stap kan terugzetten (zie popstate-handler in init).
-            try { history.pushState({ qeApp: true, screen: screenId }, '', location.pathname); } catch(_) {}
         }
 
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -663,15 +561,13 @@ const app = {
         // Vanaf betaalscherm/overschrijving: factuur is al aangemaakt, ga altijd naar planning
         if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
             this.screenHistory = [];
-            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
             this.navigate('screenPlanning', false);
             this.loadPlanning();
             return;
         }
-        // Trigger window.history.back() zodat zowel UI back-button als Android
-        // back-button via dezelfde popstate-handler lopen (alles in sync).
         if (this.screenHistory.length > 0) {
-            history.back();
+            const prev = this.screenHistory.pop();
+            this.navigate(prev, false);
         } else {
             this.navigate('screenPlanning', false);
         }
@@ -1304,7 +1200,7 @@ const app = {
             this.timer.elapsed = Date.now() - this.timer.startTime;
             this.timer.running = false;
             document.getElementById('btnTimerStart').style.display = '';
-            // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
+            document.getElementById('btnTimerVerplaatsing').style.display = '';
             document.getElementById('btnTimerPause').style.display = 'none';
             this._saveTimerState();
         } else {
@@ -1333,44 +1229,23 @@ const app = {
         }
     },
 
-    async _showTimerCorrection() {
+    _showTimerCorrection() {
         const startDate = new Date(this.timer.startTime);
         const endDate = new Date();
         const type = this.timer.type || 'klant';
         const label = this._timerLabels[type] || type;
 
-        document.getElementById('modalContent').innerHTML =
-            `<h3>${label} — controleer tijden</h3><div class="spinner" style="margin:20px auto"></div>`;
-        this.openModal();
+        const fmtH = (d) => String(d.getHours()).padStart(2, '0');
+        const fmtM = (d) => String(d.getMinutes()).padStart(2, '0');
 
         const hourOpts = (sel) => Array.from({length: 24}, (_, i) =>
             `<option value="${i}" ${i === sel ? 'selected' : ''}>${String(i).padStart(2,'0')}</option>`).join('');
         const minOpts = (sel) => Array.from({length: 60}, (_, m) =>
             `<option value="${m}" ${m === sel ? 'selected' : ''}>${String(m).padStart(2,'0')}</option>`).join('');
-        const pauzeOpts = [0, 15, 30, 45, 60].map(m =>
-            `<option value="${m}" ${m === 0 ? 'selected' : ''}>${m} min</option>`).join('');
-
-        const empIds = this.currentWO ? (this.currentWO.employeeIds || []) : [];
-        let employees = [];
-        if (empIds.length > 0) {
-            try { employees = await this._getEmployeeNames(empIds); } catch(e) {}
-        }
-        if (employees.length === 0 && this.currentUser) {
-            employees = [{ id: String(this.currentUser.robawsEmployeeId), name: this.currentUser.name || 'Ik' }];
-        }
-        const currentEmpId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : '';
-        const employeeSelect = employees.length > 0 ? `
-            <div class="form-group" style="margin-bottom:12px">
-                <label>👷 Werknemer</label>
-                <select class="form-input" id="tcEmployee">
-                    ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${this.escapeHtml(e.name)}</option>`).join('')}
-                </select>
-            </div>` : '';
 
         document.getElementById('modalContent').innerHTML = `
             <h3>${label} — controleer tijden</h3>
             <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Pas aan indien nodig</p>
-            ${employeeSelect}
             <div class="form-group" style="margin-bottom:10px">
                 <label>Van</label>
                 <div style="display:flex;gap:8px;align-items:center">
@@ -1379,7 +1254,7 @@ const app = {
                     <select class="form-input" id="tcFromM" style="flex:1">${minOpts(startDate.getMinutes())}</select>
                 </div>
             </div>
-            <div class="form-group" style="margin-bottom:10px">
+            <div class="form-group" style="margin-bottom:12px">
                 <label>Tot</label>
                 <div style="display:flex;gap:8px;align-items:center">
                     <select class="form-input" id="tcToH" style="flex:1">${hourOpts(endDate.getHours())}</select>
@@ -1387,13 +1262,10 @@ const app = {
                     <select class="form-input" id="tcToM" style="flex:1">${minOpts(endDate.getMinutes())}</select>
                 </div>
             </div>
-            <div class="form-group" style="margin-bottom:12px">
-                <label>☕ Pauze</label>
-                <select class="form-input" id="tcPauze">${pauzeOpts}</select>
-            </div>
             <button class="btn btn-primary btn-full" onclick="app._saveTimerCorrection('${type}')">✓ Opslaan</button>
             <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app._discardTimer()">Verwijderen</button>
         `;
+        this.openModal();
     },
 
     _saveTimerCorrection(type) {
@@ -1401,17 +1273,12 @@ const app = {
         const fm = parseInt(document.getElementById('tcFromM').value);
         const th = parseInt(document.getElementById('tcToH').value);
         const tm = parseInt(document.getElementById('tcToM').value);
-        const pauze = parseInt(document.getElementById('tcPauze')?.value || 0);
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
-        const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
-        if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
-        const duration = Math.max(0, totalDuration - pauze);
+        const duration = (th * 60 + tm) - (fh * 60 + fm);
+        if (duration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
 
-        const empSelect = document.getElementById('tcEmployee');
-        const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
-        const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
-
+        // GPS check-out bij stop
         this._getGpsLocation(loc => {
             if (loc && this.currentWO) {
                 const lastHour = this.woData[this.currentWO.id].hours[this.woData[this.currentWO.id].hours.length - 1];
@@ -1422,9 +1289,7 @@ const app = {
 
         if (this.currentWO) {
             this.woData[this.currentWO.id].hours.push({
-                id: Date.now(), type, startTime: from, endTime: to,
-                duration, pauze,
-                employeeId, employeeName,
+                id: Date.now(), type, startTime: from, endTime: to, duration,
                 gpsStart: this.timer.gpsStart || null,
             });
             this.renderHoursList();
@@ -1432,8 +1297,7 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
-        const pauzeTxt = pauze > 0 ? ` (${pauze}min pauze)` : '';
-        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}`);
+        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}`);
     },
 
     _discardTimer() {
@@ -1447,7 +1311,7 @@ const app = {
         document.getElementById('timerValue').textContent = '00:00:00';
         document.getElementById('timerLabel').textContent = 'Werkuren';
         document.getElementById('btnTimerStart').style.display = '';
-        // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
+        document.getElementById('btnTimerVerplaatsing').style.display = '';
         document.getElementById('btnTimerPause').style.display = 'none';
         document.getElementById('btnTimerStop').style.display = 'none';
     },
@@ -5730,50 +5594,6 @@ const app = {
         setTimeout(() => el.classList.remove('show'), 2500);
     },
 
-    /**
-     * Toon een fullscreen scan-resultaat overlay (groot SUCCES of MISLUKT).
-     */
-    showScanResult(success, message, onDone, duration) {
-        const overlay = document.getElementById('scanResult');
-        const icon = document.getElementById('scanResultIcon');
-        const title = document.getElementById('scanResultTitle');
-        const msgEl = document.getElementById('scanResultMsg');
-        if (!overlay) return;
-
-        if (success) {
-            overlay.style.background = 'rgba(46,125,50,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '✅';
-            title.textContent = 'SUCCES';
-        } else {
-            overlay.style.background = 'rgba(198,40,40,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '❌';
-            title.textContent = 'MISLUKT';
-        }
-        msgEl.textContent = message || '';
-        overlay.style.display = 'flex';
-
-        try {
-            if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]);
-        } catch(_) {}
-        // MISLUKT blijft langer staan zodat de gebruiker de reden kan lezen.
-        // Tikken op de overlay sluit hem ook meteen.
-        const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
-        let closed = false;
-        const close = () => {
-            if (closed) return;
-            closed = true;
-            overlay.style.display = 'none';
-            overlay.onclick = null;
-            if (typeof onDone === 'function') {
-                try { onDone(); } catch(e) { console.warn('[ScanResult] onDone fout:', e); }
-            }
-        };
-        overlay.onclick = close;
-        setTimeout(close, dur);
-    },
-
     // ========================================
     // PLANNING POLLING — check op nieuwe items
     // ========================================
@@ -5781,6 +5601,7 @@ const app = {
     _planningPollInterval: null,
 
     startPlanningPoll() {
+        // Check elke 5 minuten of er nieuwe planning-items zijn
         if (this._planningPollInterval) clearInterval(this._planningPollInterval);
         this._planningPollInterval = setInterval(() => this._pollForNewPlanning(), 5 * 60 * 1000);
     },
@@ -5792,44 +5613,65 @@ const app = {
             const result = await RobawsAPI.getPlanning(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
             const items = (result.items || []).filter(it => !it.hasWerkbon);
             const count = items.length;
+
             if (this._lastPlanningCount !== null && count > this._lastPlanningCount) {
                 const diff = count - this._lastPlanningCount;
                 this.toast(`📋 ${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
+                // Badge tonen op planning-scherm
                 const badge = document.getElementById('woCount');
                 if (badge) { badge.textContent = count; badge.style.background = 'var(--qe-orange)'; }
             }
             this._lastPlanningCount = count;
-        } catch (e) {}
+        } catch (e) { /* stille fout bij polling */ }
     },
 
+    // ========================================
+    // ONLINE/OFFLINE
+    // ========================================
     updateOnlineStatus() {
         const isOnline = navigator.onLine;
-        const bar = document.getElementById('offlineBar');
-        if (bar) bar.classList.toggle('show', !isOnline);
+        document.getElementById('offlineBar').classList.toggle('show', !isOnline);
+
+        // Terug online? Sync database + verwerk wachtrij
         if (isOnline) {
-            if (typeof this.backgroundSync === 'function') this.backgroundSync();
+            this.backgroundSync();
+            // Klokdata synchroniseren
             if (typeof QEClock !== 'undefined' && QEClock.syncPending) {
                 QEClock.syncPending().catch(e => console.warn('[App] Klok sync fout:', e));
             }
         }
     },
 
+    // ========================================
+    // HELPERS
+    // ========================================
+    // Afrondingslogica voor facturatie:
+    // - Wachturen → naar boven afronden per heel uur (60 min)
+    // - Overige uren → naar boven afronden per half uur (30 min)
     roundHoursForInvoice(totalMinutes, uurcode) {
         if (!totalMinutes || totalMinutes <= 0) return 0;
         const isWacht = uurcode && (uurcode.name || '').toLowerCase().includes('wacht');
-        const roundTo = isWacht ? 60 : 30;
+        const roundTo = isWacht ? 60 : 30; // minuten
         return Math.ceil(totalMinutes / roundTo) * roundTo;
     },
 
+    // Pas afrondingslogica toe op de uren-array vóór submit.
+    // Werkuren (klant) worden afgerond op basis van uurcode.
+    // Het verschil wordt aan de laatste entry toegevoegd.
     _roundHoursForSubmit(hours) {
         if (!hours || hours.length === 0) return hours;
         const result = hours.map(h => ({ ...h }));
+
+        // Bereken totaal werkuren
         const werkEntries = result.filter(h => h.type === 'klant');
         if (werkEntries.length > 0) {
             const totalRaw = werkEntries.reduce((sum, h) => sum + (h.duration || 0), 0);
             const totalRounded = this.roundHoursForInvoice(totalRaw, this.selectedUurcode);
             const diff = totalRounded - totalRaw;
-            if (diff > 0) werkEntries[werkEntries.length - 1].duration += diff;
+            if (diff > 0) {
+                // Voeg verschil toe aan de laatste werkuren entry
+                werkEntries[werkEntries.length - 1].duration += diff;
+            }
         }
         return result;
     },
@@ -5841,6 +5683,7 @@ const app = {
         if (!mins || mins <= 0) return '0:00';
         return `${Math.floor(mins / 60)}:${(mins % 60).toString().padStart(2, '0')}`;
     },
+    /** Formatteer decimale uren (bijv. 1.75) als "1u 45m" */
     formatDecimalHours(decHours) {
         if (!decHours || decHours <= 0) return '0u 00m';
         const h = Math.floor(decHours);
@@ -5854,18 +5697,26 @@ const app = {
         return div.innerHTML;
     },
 
+    // ========================================
+    // ONDERHOUDSCHECKLIST
+    // ========================================
     initChecklist() {
         const section = document.getElementById('checklistSection');
         const container = document.getElementById('checklistContainer');
         if (!section || !container || !window.ONDERHOUD_DATA) { if (section) section.style.display = 'none'; return; }
-        const summary = (this.currentWO && this.currentWO.summary) || '';
+
+        const summary = this.currentWO?.summary || '';
         const checklistKey = ONDERHOUD_DATA.detectChecklist(summary);
         if (!checklistKey) { section.style.display = 'none'; return; }
+
         const checklist = ONDERHOUD_DATA.CHECKLISTS[checklistKey];
         if (!checklist) { section.style.display = 'none'; return; }
+
+        // Herstel opgeslagen staat
         const woId = this.currentWO.id;
-        const saved = (this.woData[woId] && this.woData[woId].checklist) || {};
-        document.getElementById('checklistTitle').textContent = '✅ ' + checklist.label;
+        const saved = this.woData[woId]?.checklist || {};
+
+        document.getElementById('checklistTitle').textContent = '\u2705 ' + checklist.label;
         container.innerHTML = checklist.items.map(item => {
             const checked = saved[item.id] ? 'checked' : '';
             return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--qe-grey-light);cursor:pointer">
@@ -5874,6 +5725,8 @@ const app = {
                 <span style="font-size:14px;line-height:1.4" id="clItem_${item.id}">${this.escapeHtml(item.text)}</span>
             </label>`;
         }).join('');
+
+        // Voortgangsbalk
         const doneCount = Object.values(saved).filter(v => v).length;
         const totalCount = checklist.items.length;
         const pct = totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0;
@@ -5883,6 +5736,7 @@ const app = {
             </div>
             <span id="checklistPct" style="font-size:12px;color:var(--qe-grey);font-weight:500;min-width:36px;text-align:right">${pct}%</span>
         </div>`;
+
         section.style.display = '';
     },
 
@@ -5891,6 +5745,8 @@ const app = {
         const woId = this.currentWO.id;
         if (!this.woData[woId].checklist) this.woData[woId].checklist = {};
         this.woData[woId].checklist[itemId] = checked;
+
+        // Update voortgang
         const checklist = ONDERHOUD_DATA.CHECKLISTS[checklistKey];
         if (checklist) {
             const saved = this.woData[woId].checklist;
@@ -5901,11 +5757,17 @@ const app = {
             if (bar) bar.style.width = pct + '%';
             if (label) label.textContent = pct + '%';
         }
+
+        // Doorhalen van afgevinkte items
         const span = document.getElementById(`clItem_${itemId}`);
         if (span) span.style.textDecoration = checked ? 'line-through' : 'none';
-        if (typeof this._saveWoData === 'function') this._saveWoData();
+
+        this._saveWoData();
     },
 
+    // ========================================
+    // DARK MODE
+    // ========================================
     toggleDarkMode(enabled) {
         document.body.classList.toggle('dark-mode', enabled);
         localStorage.setItem('qe_dark_mode', enabled ? '1' : '0');
