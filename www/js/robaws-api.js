@@ -1160,7 +1160,7 @@ const RobawsAPI = {
         let allItems = [];
         const seenIds = new Set();
         let page = 0;
-        const maxPages = 10;
+        const maxPages = 20; // v57: opgekrikt van 10 -> 20 voor actieve users
         while (page < maxPages) {
             const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
             if (res.code !== 200) {
@@ -1181,15 +1181,28 @@ const RobawsAPI = {
             if (res.data.totalPages && page >= res.data.totalPages) break;
         }
 
-        return allItems
+        // v57: filter versoepeld - server query is al ?employeeId=X, dus
+        // items zonder expliciete empId-veld vertrouwen we (Robaws levert het
+        // veld soms niet terug, vroeger dropten we die zichtbaarheid weg).
+        // Items MET een ander empId blijven uitgesloten.
+        const beforeFilter = allItems.length;
+        const filtered = allItems
             .filter(item => {
                 if (!(item.startDate >= cutoffStr)) return false;
-                // SECURITY-fix: strikt employeeId match (zie getTimeRegistrations)
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                if (!itemEmpId) return false;
-                return String(itemEmpId) === String(employeeId);
+                // Als empId expliciet anders is, droppen (cross-employee bescherming)
+                if (itemEmpId && String(itemEmpId) !== String(employeeId)) {
+                    console.warn('[RobawsAPI] history: item id=' + item.id +
+                        ' had empId=' + itemEmpId + ' (verwacht ' + employeeId + ') - skip');
+                    return false;
+                }
+                // empId leeg/niet meegegeven: server-side ?employeeId=X filter vertrouwen
+                return true;
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
+        console.log('[RobawsAPI] history fetch: ' + beforeFilter + ' fetched, ' +
+            filtered.length + ' na filter (cutoff=' + cutoffStr + ', empId=' + employeeId + ')');
+        return filtered;
     },
 
     /**
