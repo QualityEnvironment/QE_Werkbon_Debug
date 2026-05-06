@@ -716,9 +716,16 @@ const RobawsAPI = {
         }
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
+            if (itemDate !== date) return false;
+            // SECURITY-fix: strikt employeeId match. Items zonder herleidbare
+            // werknemer worden genegeerd, anders kan een ander zijn open
+            // registratie als eigen ingeklokte tijd verschijnen.
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-            const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-            return itemDate === date && empMatch;
+            if (!itemEmpId) {
+                console.warn('[RobawsAPI] Tijdsregistratie zonder employeeId genegeerd, id=', item.id);
+                return false;
+            }
+            return String(itemEmpId) === String(employeeId);
         });
     },
 
@@ -915,9 +922,10 @@ const RobawsAPI = {
 
         return allItems
             .filter(item => {
+                if (!(item.startDate >= cutoffStr)) return false;
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-                return item.startDate >= cutoffStr && empMatch;
+                if (!itemEmpId) return false;
+                return String(itemEmpId) === String(employeeId);
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
     },

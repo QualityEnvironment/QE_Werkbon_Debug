@@ -354,72 +354,145 @@ window.QEClock = {
 
     _scanLock: false,
 
-    async onNfcScan(tagId) {
-        console.log('[Clock] NFC scan:', tagId);
+    /**
+     * Pluk de échte foutboodschap uit een Robaws response, ongeacht de shape.
+     */
+    _extractRobawsError(result) {
+        if (!result) return 'onbekende fout';
+        const code = result.code != null ? result.code : '?';
+        const d = result.data;
+        if (d == null) return `code ${code}`;
+        if (typeof d === 'string') {
+            const trim = d.trim();
+            if (trim) return `code ${code}: ${trim.slice(0, 200)}`;
+            return `code ${code}`;
+        }
+        if (typeof d !== 'object') return `code ${code}: ${String(d)}`;
+        const direct = d.message || d.error || d.detail || d.title || d.reason || d.errorMessage;
+        if (direct && typeof direct === 'string') return `${code}: ${direct}`;
+        if (Array.isArray(d.errors) && d.errors.length) {
+            const parts = d.errors.map(e => {
+                if (!e) return '';
+                if (typeof e === 'string') return e;
+                return e.message || e.error || e.detail || e.field || JSON.stringify(e);
+            }).filter(Boolean);
+            if (parts.length) return `${code}: ${parts.join('; ').slice(0, 250)}`;
+        }
+        if (d.errors && typeof d.errors === 'object') {
+            const parts = [];
+            for (const [field, val] of Object.entries(d.errors)) {
+                if (Array.isArray(val)) parts.push(`${field}: ${val.join(', ')}`);
+                else if (val) parts.push(`${field}: ${val}`);
+            }
+            if (parts.length) return `${code}: ${parts.join('; ').slice(0, 250)}`;
+        }
+        try {
+            const json = JSON.stringify(d);
+            if (json && json !== '{}') return `${code}: ${json.slice(0, 200)}`;
+        } catch(_) {}
+        return `code ${code}`;
+    },
 
-        // Debounce: voorkom dubbele scans binnen 3 seconden
+    async onNfcScan(tagId) {
+        const normalizedTagId = String(tagId || '').trim().toLowerCase();
+        if (!normalizedTagId) return;
+        console.log('[Clock] NFC scan:', normalizedTagId);
+
+        // ── SCREEN-GUARD: alleen scannen op het Klok-scherm ──
+        const onClockScreen = window.app && window.app.currentScreen === 'screenClock';
+        if (!onClockScreen && !this._pendingAssignment) {
+            if (window.app) {
+                app.toast('Open eerst het Klok-scherm om te scannen');
+                try { app.navigate('screenClock'); } catch(_) {}
+            }
+            return;
+        }
+
         if (this._scanLock) {
             console.log('[Clock] Scan genegeerd (debounce)');
             return;
         }
         this._scanLock = true;
-        setTimeout(() => { this._scanLock = false; }, 3000);
+        const lockTimeoutId = setTimeout(() => { this._scanLock = false; }, 8000);
 
-        const user = RobawsAPI.getLoggedInUser();
-        if (!user) {
-            if (window.app) app.toast('Log eerst in om te clocken');
-            return;
-        }
+        let scanResult = null;
 
-        // ── TOEWIJZINGSMODUS: tag wordt toegewezen aan gekozen locatie ──
-        if (this._pendingAssignment) {
-            await this._handleAssignmentScan(tagId);
-            return;
-        }
-
-        // Zorg dat tag config geladen is
-        if (!this.getTagConfig()) {
-            await this.loadTagConfig();
-        }
-
-        // Identificeer de tag
-        const tag = this.identifyTag(tagId);
-
-        if (!tag) {
-            // Onbekende tag
-            if (window.app) app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
-            return;
-        }
-
-        // Haal of maak sessie — controleer dat employeeId klopt met ingelogde user
-        let session = this.getSession() || this._newSession();
-        if (session.employeeId && String(session.employeeId) !== String(user.robawsEmployeeId)) {
-            console.warn('[Clock] Sessie van andere werknemer gevonden, nieuwe sessie aanmaken');
-            session = this._newSession();
-        }
-
-        // ── LADEN & LOSSEN ──
-        if (tag.type === 'laden_lossen') {
-            await this._handleLadenLossen(session, tag);
-            return;
-        }
-
-        // ── ACTIEVE SESSIE → UITCLOCKEN ──
-        if (session.active) {
-            // Bevestiging vragen om fouten te voorkomen (bijv. verkeerde user ingelogd)
-            const userName = user.name || user.email;
-            const startTime = session.startTime || '?';
-            const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
-            if (!confirmed) {
-                console.log('[Clock] Uitklokken geannuleerd door gebruiker');
+        try {
+            const user = RobawsAPI.getLoggedInUser();
+            if (!user) {
+                scanResult = { ok: false, message: 'Niet ingelogd' };
                 return;
             }
-            await this._clockOut(session, tag);
-            return;
-        }
 
-        // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
-        await this._clockIn(session, tag);
+            if (this._pendingAssignment) {
+                await this._handleAssignmentScan(normalizedTagId);
+                return;
+            }
+
+            if (!this.getTagConfig()) {
+                await this.loadTagConfig();
+            }
+
+            let tag = this.identifyTag(normalizedTagId);
+            if (!tag) tag = this.identifyTag(tagId);
+            if (!tag) {
+                await this.loadTagConfig();
+                tag = this.identifyTag(normalizedTagId) || this.identifyTag(tagId);
+            }
+
+            if (!tag) {
+                scanResult = { ok: false, message: 'Onbekende NFC tag — eerst toewijzen via Tag beheer' };
+                return;
+            }
+
+            let session = this.getSession() || this._newSession();
+            if (session.employeeId && String(session.employeeId) !== String(user.robawsEmployeeId)) {
+                console.warn('[Clock] Sessie van andere werknemer gevonden, nieuwe sessie aanmaken');
+                session = this._newSession();
+            }
+
+            if (tag.type === 'laden_lossen') {
+                const r = await this._handleLadenLossen(session, tag);
+                scanResult = r || { ok: true, message: 'Laden & Lossen verwerkt', refresh: true };
+                return;
+            }
+
+            if (session.active) {
+                const userName = user.name || user.email;
+                const startTime = session.startTime || '?';
+                const confirmed = confirm(`${userName} uitklokken?\n\nIngeklokt om ${startTime}\nWil je nu uitklokken?`);
+                if (!confirmed) {
+                    console.log('[Clock] Uitklokken geannuleerd door gebruiker');
+                    return;
+                }
+                const r = await this._clockOut(session, tag);
+                scanResult = r || { ok: true, message: 'Uitgeklokt', refresh: true };
+                return;
+            }
+
+            const r = await this._clockIn(session, tag);
+            scanResult = r || { ok: true, message: 'Ingeklokt', refresh: true };
+        } catch (e) {
+            console.warn('[Clock] Scan flow fout:', e);
+            scanResult = { ok: false, message: e && e.message ? e.message : 'Onbekende fout' };
+        } finally {
+            clearTimeout(lockTimeoutId);
+            this._scanLock = false;
+
+            if (scanResult && window.app && typeof app.showScanResult === 'function') {
+                const refresh = !!scanResult.refresh;
+                app.showScanResult(scanResult.ok, scanResult.message, async () => {
+                    if (!refresh) return;
+                    try { await this.syncWithRobaws(); } catch(_) {}
+                    try { app.updateClockUI(); } catch(_) {}
+                    try {
+                        if (app.currentScreen === 'screenClock') {
+                            app.navigate('screenClock');
+                        }
+                    } catch(_) {}
+                });
+            }
+        }
     },
 
     // =============================================
@@ -499,6 +572,8 @@ window.QEClock = {
         session.employeeId = empId; // zorg dat sessie altijd juiste ID heeft
         this._saveSession(session);
 
+        let robawsCode = null;
+        let robawsError = null;
         try {
             const result = await RobawsAPI.createTimeRegistration({
                 employeeId: empId,
@@ -506,26 +581,26 @@ window.QEClock = {
                 type: type,
                 remarks: remarks,
             });
+            robawsCode = result.code;
             if (result.code === 200 || result.code === 201) {
                 session.robawsId = result.data ? String(result.data.id) : null;
                 this._saveSession(session);
                 console.log('[Clock] Registratie aangemaakt in Robaws, ID:', session.robawsId);
             } else {
-                console.warn('[Clock] Robaws registratie aanmaken mislukt:', result.code);
+                console.warn('[Clock] Robaws registratie aanmaken mislukt:', result.code, result.data);
+                robawsError = this._extractRobawsError(result);
             }
         } catch (e) {
             console.warn('[Clock] Robaws niet bereikbaar bij inclocken:', e.message);
-            // Sessie blijft lokaal, wordt later gesynchroniseerd
+            robawsError = `netwerkfout: ${e && e.message ? e.message : 'onbekend'}`;
         }
 
-        // UI feedback
-        const emoji = type === 'Op tijd' ? '✅' : (type === 'Te laat' ? '⚠️' : '🔄');
+        const ok = robawsCode === 200 || robawsCode === 201;
         const lateMsg = type === 'Te laat' ? ' (te laat!)' : '';
-        if (window.app) {
-            app.toast(`${emoji} Ingeklokt om ${time} — ${tag.name}${lateMsg}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        const message = ok
+            ? `Ingeklokt om ${time} — ${tag.name}${lateMsg}`
+            : `Robaws weigerde de inclock\n${robawsError || `code ${robawsCode || '?'}`}`;
+        return { ok, message, refresh: true };
     },
 
     // =============================================
@@ -574,8 +649,9 @@ window.QEClock = {
         session.completedSessions.push(completedEntry);
         this._saveSession(session);
 
-        // Update in Robaws (endDate + hours + breakDuration toevoegen)
         const breakMinutes = Math.round(pauseHours * 60);
+        let robawsCode = null;
+        let robawsError = null;
         if (session.robawsId) {
             try {
                 const updateData = {
@@ -583,11 +659,23 @@ window.QEClock = {
                     hours: hours,
                 };
                 if (breakMinutes > 0) updateData.breakDuration = breakMinutes;
-                await RobawsAPI.updateTimeRegistration(session.robawsId, updateData);
-                console.log('[Clock] Registratie afgesloten in Robaws:', session.robawsId);
+                const upd = await RobawsAPI.updateTimeRegistration(session.robawsId, updateData);
+                robawsCode = upd && typeof upd.code !== 'undefined' ? upd.code : 200;
+                if (robawsCode !== 200 && robawsCode !== 201 && robawsCode !== 204) {
+                    robawsError = this._extractRobawsError(upd);
+                    this._addPendingSync({
+                        action: 'update',
+                        id: session.robawsId,
+                        endDate: endISO,
+                        hours: hours,
+                        breakDuration: breakMinutes,
+                    });
+                } else {
+                    console.log('[Clock] Registratie afgesloten in Robaws:', session.robawsId);
+                }
             } catch (e) {
                 console.warn('[Clock] Robaws update mislukt:', e.message);
-                // Sla op als pending sync
+                robawsError = `netwerkfout: ${e && e.message ? e.message : 'onbekend'}`;
                 this._addPendingSync({
                     action: 'update',
                     id: session.robawsId,
@@ -597,7 +685,6 @@ window.QEClock = {
                 });
             }
         } else {
-            // Was nooit geüpload → sla volledige registratie op als pending
             this._addPendingSync({
                 action: 'create_complete',
                 employeeId: session.employeeId,
@@ -607,16 +694,16 @@ window.QEClock = {
                 type: session.registrationType,
                 remarks: session.pendingRemarks || '',
             });
+            robawsError = 'geen verbinding bij inclocken — wordt later automatisch verzonden';
         }
 
-        // UI feedback
         const pauseMin = Math.round(pauseHours * 60);
-        const pauseText = pauseMin > 0 ? ` (${pauseMin}min pauze afgetrokken)` : '';
-        if (window.app) {
-            app.toast(`🏁 Uitgeklokt om ${endTime} — ${hours} uur gewerkt${pauseText}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        const pauseText = pauseMin > 0 ? ` (${pauseMin}min pauze)` : '';
+        const ok = robawsCode === 200 || robawsCode === 201 || robawsCode === 204;
+        const message = ok
+            ? `Uitgeklokt om ${endTime} — ${hours}u gewerkt${pauseText}`
+            : `Uitklokken niet bevestigd\n${robawsError || `code ${robawsCode || '?'}`}`;
+        return { ok, message, refresh: true };
     },
 
     // =============================================
@@ -624,18 +711,13 @@ window.QEClock = {
     // =============================================
 
     async _handleLadenLossen(session, tag) {
-        // Check of er al een actieve L&L sessie loopt
         if (session.active && session.registrationType === 'Laden & Lossen') {
-            // Stop de L&L sessie
-            await this._clockOut(session, tag);
-            return;
+            return await this._clockOut(session, tag);
         }
 
-        // Start nieuwe L&L sessie
         const now = await this._getNow();
         const time = this._localTime(now);
 
-        // GPS
         let gpsLat = null, gpsLng = null, gpsText = '';
         try {
             const pos = await this._getGPS();
@@ -648,13 +730,11 @@ window.QEClock = {
 
         const remarks = `Laden & Lossen — ${gpsText} — ${time}`;
 
-        // Als er een andere actieve sessie loopt, sluit die eerst
         if (session.active) {
             await this._clockOut(session, tag);
             session = this.getSession() || this._newSession();
         }
 
-        // Start L&L sessie
         session.active = true;
         session.startTime = time;
         session.startISO = now.toISOString();
@@ -667,7 +747,8 @@ window.QEClock = {
         session.pendingRemarks = remarks;
         this._saveSession(session);
 
-        // Upload naar Robaws
+        let robawsCode = null;
+        let robawsError = null;
         try {
             const result = await RobawsAPI.createTimeRegistration({
                 employeeId: session.employeeId,
@@ -675,19 +756,23 @@ window.QEClock = {
                 type: 'Laden & Lossen',
                 remarks: remarks,
             });
+            robawsCode = result.code;
             if (result.code === 200 || result.code === 201) {
                 session.robawsId = result.data ? String(result.data.id) : null;
                 this._saveSession(session);
+            } else {
+                robawsError = this._extractRobawsError(result);
             }
         } catch (e) {
             console.warn('[Clock] Robaws L&L registratie mislukt:', e.message);
+            robawsError = `netwerkfout: ${e && e.message ? e.message : 'onbekend'}`;
         }
 
-        if (window.app) {
-            app.toast(`📦 Laden & Lossen gestart om ${time}`);
-            app.updateClockUI();
-            app.navigate(app.currentScreen);
-        }
+        const ok = robawsCode === 200 || robawsCode === 201;
+        const message = ok
+            ? `Laden & Lossen gestart om ${time}`
+            : `Robaws weigerde de L&L registratie\n${robawsError || `code ${robawsCode || '?'}`}`;
+        return { ok, message, refresh: true };
     },
 
     // =============================================
@@ -918,6 +1003,22 @@ window.QEClock = {
         }
 
         try {
+            // SECURITY-fix: extra paranoid check — drop alle registraties die
+            // niet aan de ingelogde werknemer toebehoren.
+            const myEmpId = String(user.robawsEmployeeId);
+            robawsRegs = robawsRegs.filter(r => {
+                const empId = r.employeeId || (r.employee && r.employee.id);
+                if (!empId) {
+                    console.warn('[Clock] Registratie zonder employeeId genegeerd in sync:', r.id);
+                    return false;
+                }
+                if (String(empId) !== myEmpId) {
+                    console.warn('[Clock] Registratie van andere werknemer genegeerd in sync:', r.id, 'empId=', empId, 'mij=', myEmpId);
+                    return false;
+                }
+                return true;
+            });
+
             // Geen registraties in Robaws? Wis de lokale sessie volledig
             // (alleen na bevestigde succesvolle fetch — zie boven)
             if (robawsRegs.length === 0) {
