@@ -560,6 +560,22 @@ window.QEClock = {
         const now = await this._getNow();
         const time = this._localTime(now);
 
+        // v62: Robaws is leidend. Check eerst of er VANDAAG al een werkbon
+        // bestaat voor deze user. Zo ja, hergebruik die ID. Zo nee, maak nieuwe.
+        const _user = RobawsAPI.getLoggedInUser();
+        const _userId = _user ? (_user.robawsUserId || _user.userId) : null;
+        if (!session.workOrderId && _userId) {
+            try {
+                const existing = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(_userId);
+                if (existing && existing.id) {
+                    session.workOrderId = existing.id;
+                    console.log('[Clock] Bestaande werkbon van vandaag gevonden:', existing.id);
+                }
+            } catch(e) {
+                console.warn('[Clock] Kon Robaws niet checken voor bestaande werkbon:', e.message);
+            }
+        }
+
         // Eerste scan van de dag = werkbon aanmaken. Daarna nog een bureau-scan?
         // Dan starten we gewoon weer een sessie en posten op die werkbon een
         // extra time-entry bij het volgende clock-out.
@@ -637,6 +653,7 @@ window.QEClock = {
         // Eerste scan: werkbon aanmaken
         if (isFirstScan) {
             session.onTimeLabel = onTimeLabel;
+            session.registrationType = onTimeLabel;  // v62: compat met oude UI
             session.dateStr = this._localDate();
             try {
                 const wo = await RobawsAPI.createTimeRegistrationWorkOrder({
@@ -663,9 +680,10 @@ window.QEClock = {
         this._saveSession(session);
 
         const lateMsg = onTimeLabel === 'Te laat' ? ' (te laat!)' : '';
+        const woRef = session.workOrderId ? ' (werkbon #' + session.workOrderId + ')' : '';
         const message = isFirstScan
-            ? 'Ingeklokt om ' + time + ' - ' + tag.name + lateMsg
-            : 'Extra sessie gestart om ' + time + ' - ' + tag.name;
+            ? 'Ingeklokt om ' + time + ' - ' + tag.name + lateMsg + woRef
+            : 'Extra sessie gestart om ' + time + ' - ' + tag.name + woRef;
         return { ok: true, message, refresh: true };
     },
 
@@ -1184,16 +1202,80 @@ window.QEClock = {
     // =============================================
 
     /**
-     * v60: time-registrations endpoint wordt NIET meer gequeryd voor de
-     * "ingeklokt om X" status. De lokale sessie (workOrderId + startTime
-     * in localStorage) is leidend. Dit voorkomt dat de gebruiker een
-     * verouderd Robaws-tijdregistratie record te zien krijgt.
-     *
-     * De functie blijft bestaan (caller-compatibility) maar is een no-op.
+     * v62: Robaws is leidend voor "ingeklokt"-status. Zoek de werkbon van
+     * vandaag (status="Tijdsregistratie" + assignedUserId=user) en bouw
+     * de lokale sessie op vanuit die werkbon. Als er geen werkbon is,
+     * wis de lokale sessie. Geen calls meer naar time-registrations.
      */
     async syncWithRobaws() {
-        // No-op in v60. Local session is the source of truth.
-        return;
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user) return;
+        const userId = user.robawsUserId || user.userId;
+        if (!userId) return;
+
+        let wo;
+        try {
+            wo = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(userId);
+        } catch (e) {
+            console.warn('[Clock] Robaws sync mislukt — lokale sessie behouden:', e.message);
+            return;
+        }
+
+        const sessionKey = this._getSessionKey();
+
+        if (!wo) {
+            // Geen werkbon vandaag in Robaws → wis lokale sessie
+            const session = this.getSession();
+            if (session) {
+                console.log('[Clock] Geen werkbon van vandaag in Robaws — lokale sessie gewist');
+                if (sessionKey) localStorage.removeItem(sessionKey);
+            }
+            return;
+        }
+
+        // Bouw sessie volledig op vanuit de Robaws-werkbon
+        const ef = wo.extraFields || {};
+        const ingeklokt  = (ef.Ingeklokt && ef.Ingeklokt.stringValue) || null;
+        const uitgeklokt = (ef.Uitgeklokt && ef.Uitgeklokt.stringValue) || null;
+        const tijdLabel  = (ef.Tijd && ef.Tijd.stringValue) || 'Op tijd';
+
+        // Active: ingeklokt-tijd staat, maar uitgeklokt nog leeg
+        const isActive = !!ingeklokt && !uitgeklokt;
+
+        const session = this.getSession() || this._newSession();
+        session.workOrderId      = wo.id;
+        session.dateStr          = (wo.date || '').substring(0, 10);
+        session.employeeId       = String(user.robawsEmployeeId);
+        session.employeeName     = user.name || user.email;
+        session.onTimeLabel      = tijdLabel;
+        session.registrationType = tijdLabel;  // compat met oude UI
+        session.startTime        = ingeklokt || session.startTime;
+        session.active           = isActive;
+        session.tagName          = (wo.remark || '').split(' - ')[0] || session.tagName || 'Bureau';
+        if (uitgeklokt) {
+            session.endTime = uitgeklokt;
+        }
+
+        // Wis legacy completedSessions die uit oude time-registrations komen
+        // (alleen items zonder workOrderId of die niet matchen met vandaag's werkbon)
+        if (Array.isArray(session.completedSessions)) {
+            session.completedSessions = session.completedSessions.filter(c => c && c.workOrderId === wo.id);
+        }
+
+        // Als de werkbon afgesloten is (Uitgeklokt gevuld), zet completedSessions
+        if (uitgeklokt && (!session.completedSessions || session.completedSessions.length === 0)) {
+            session.completedSessions = [{
+                startTime: ingeklokt,
+                endTime: uitgeklokt,
+                type: tijdLabel,
+                workOrderId: wo.id,
+                tagName: session.tagName,
+            }];
+        }
+
+        this._saveSession(session);
+        console.log('[Clock] Sessie gesynced vanuit Robaws-werkbon', wo.id,
+            '— actief:', isActive, ', start:', ingeklokt, ', eind:', uitgeklokt);
     },
 
     // =============================================

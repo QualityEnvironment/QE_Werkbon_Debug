@@ -3151,4 +3151,34 @@ const RobawsAPI = {
         return filtered;
     },
 
+    /**
+     * v62: zoek de OPEN tijdsregistratie-werkbon van vandaag voor een user.
+     * Robaws is hier leidend — er hoort er maar 1 te zijn per dag per user
+     * (status="Tijdsregistratie" + assignedUserId=user + date=today).
+     * Returns null als er geen is.
+     */
+    async getTodaysOpenTimeRegistrationWorkOrder(userId) {
+        if (!userId) return null;
+        const today = this._localDateStr();
+        // Korte fetch — eerste pagina is meestal genoeg
+        const res = await this.get('work-orders?limit=100&sort=date:desc');
+        if (res.code !== 200 || !res.data || !res.data.items) return null;
+        const items = res.data.items.filter(wo => {
+            const status = String(wo.status || '').toLowerCase();
+            if (!status.includes('tijdsregistratie')) return false;
+            if ((wo.date || '').substring(0, 10) !== today) return false;
+            const itemUserId = wo.assignedUserId
+                || (wo.assignedUser && wo.assignedUser.id);
+            return itemUserId && String(itemUserId) === String(userId);
+        });
+        if (items.length === 0) return null;
+        if (items.length > 1) {
+            console.warn('[RobawsAPI] Meer dan 1 tijdsregistratie-werkbon vandaag voor user',
+                userId, '- nieuwste eerste; ID:', items.map(i => i.id).join(','));
+        }
+        // Sorteer op id desc — nieuwste werkbon eerst (mocht er per ongeluk dubbel zijn)
+        items.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+        return items[0];
+    },
+
 };
