@@ -250,9 +250,10 @@
         </div>
 
         <!-- Handmatige uren invoer -->
-        <div style="display:flex;gap:6px;margin-bottom:12px">
-            <button class="btn btn-primary btn-sm" style="flex:1" onclick="app.addManualHours('klant')">+ Uren toevoegen</button>
-            <!-- Verplaatsing gedeactiveerd (badgesysteem) — knop bewaard voor reactivatie -->
+        <div style="margin-bottom:12px">
+            <button class="btn btn-primary btn-sm btn-full" onclick="app.addManualHours('klant')">+ Uren toevoegen</button>
+            <!-- Verplaatsing gedeactiveerd: geen verplaatsings-uren meer.
+                 Verplaatsingskosten lopen via materialen (zone-picker). -->
             <button class="btn btn-outline btn-sm" style="flex:1;display:none" id="btnAddVerplaatsing" onclick="app.addManualHours('verplaatsing')">+ Verplaatsing</button>
         </div>
 

@@ -165,7 +165,18 @@ const APIBridge = {
 
         if (action === 'check') {
             const user = RobawsAPI.getLoggedInUser();
-            if (user) return this.jsonResponse({ loggedIn: true, user });
+            if (user) {
+                // Als robawsUserId nog ontbreekt (oude sessies of login waarbij
+                // /users niet bereikbaar was), probeer hem alsnog op te halen
+                // zodat werkbonnen niet zonder verantwoordelijke ingediend worden.
+                if (!user.robawsUserId && user.robawsEmployeeId) {
+                    try {
+                        const resolved = await RobawsAPI.ensureUserId();
+                        if (resolved) user.robawsUserId = resolved;
+                    } catch(e) { /* offline → laat null staan, submit-tijd doet retry */ }
+                }
+                return this.jsonResponse({ loggedIn: true, user });
+            }
             return this.jsonResponse({ loggedIn: false });
         }
 
@@ -242,12 +253,18 @@ const APIBridge = {
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
         if (action === 'get-avatar') {
-            // CACHE-FIRST: lokaal eerst — voorkomt dat de profielfoto verdwijnt
-            // bij elke page-refresh wanneer Robaws traag is. Voor een verse
-            // refresh uit Robaws gebruik je expliciet refreshAvatarFromRobaws.
+            // Cache-first: voorheen werd ALTIJD Robaws aangeroepen wat traag is
+            // en onnodig data verbruikt. Nu gebruiken we de lokale cache als
+            // primaire bron. De cache wordt vernieuwd:
+            //   - bij elke succesvolle login (RobawsAPI.refreshAvatarFromRobaws)
+            //   - bij upload van een nieuwe foto via set-avatar
+            //   - bij expliciete refresh via action=force-refresh-avatar
             const local = RobawsAPI.getLocalAvatar(user.email);
-            if (local) return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
-            // Geen lokaal? Dan Robaws proberen
+            if (local) {
+                return this.jsonResponse({ avatar: local, dataUrl: local, source: 'local' });
+            }
+            // Geen lokale cache (eerste app-start of cache gewist) → eenmalig
+            // Robaws proberen om de cache te vullen.
             try {
                 const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
                 if (blob) {
@@ -256,19 +273,51 @@ const APIBridge = {
                         r.onload = () => res(r.result);
                         r.readAsDataURL(blob);
                     });
-                    RobawsAPI.setLocalAvatar(user.email, dataUrl);
-                    return this.jsonResponse({ avatar: dataUrl, dataUrl, source: 'robaws' });
+                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
+                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws' });
                 }
-            } catch(e) { /* val terug op leeg */ }
+            } catch(e) { /* offline of geen avatar in Robaws */ }
             return this.jsonResponse({ avatar: null, dataUrl: null });
+        }
+
+        if (action === 'force-refresh-avatar') {
+            // Expliciete refresh — gebruikt door RobawsAPI.refreshAvatarFromRobaws
+            // (na login) en kan ook gebruikt worden voor een handmatige
+            // "vernieuw foto"-knop in de profielpagina.
+            try {
+                const blob = await RobawsAPI.getEmployeePhotoBlob(user.robawsEmployeeId);
+                if (blob) {
+                    const dataUrl = await new Promise(res => {
+                        const r = new FileReader();
+                        r.onload = () => res(r.result);
+                        r.readAsDataURL(blob);
+                    });
+                    const cached = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
+                    return this.jsonResponse({ avatar: cached, dataUrl: cached, source: 'robaws', refreshed: true });
+                }
+                // Geen foto meer in Robaws → wis ook lokale cache
+                RobawsAPI.clearLocalAvatar && RobawsAPI.clearLocalAvatar(user.email);
+                return this.jsonResponse({ avatar: null, dataUrl: null, refreshed: true });
+            } catch(e) {
+                // Bij netwerkfout: laat lokale cache staan, return wat we hebben
+                const local = RobawsAPI.getLocalAvatar(user.email);
+                return this.jsonResponse({
+                    avatar: local || null,
+                    dataUrl: local || null,
+                    source: local ? 'local' : null,
+                    error: 'refresh mislukt: ' + e.message,
+                });
+            }
         }
 
         if (action === 'set-avatar') {
             const body = await this.parseBody(options);
             const dataUrl = body.dataUrl || '';
             if (!dataUrl) return this.jsonResponse({ success: false, error: 'Geen foto' }, 400);
-            // Lokaal direct cachen
-            RobawsAPI.setLocalAvatar(user.email, dataUrl);
+            // Lokaal direct cachen als 256x256 thumbnail (past gegarandeerd
+            // in localStorage; voorkomt quota-fouten bij grote foto's).
+            // De Robaws-upload hieronder krijgt de oorspronkelijke dataUrl.
+            const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
             // Naar Robaws sturen
             try {
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -278,16 +327,28 @@ const APIBridge = {
                 const ct = dataUrl.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
                 const ext = ct === 'image/png' ? 'png' : 'jpg';
                 const blob = new Blob([bytes], { type: ct });
-                const ts = Date.now();
-                const file = new File([blob], `Foto_${ts}.${ext}`, { type: ct });
-                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, `Foto_${ts}.${ext}`);
+
+                // BUG-fix: vroeger heetten alle uploads 'Foto.jpg', waardoor
+                // je in Robaws niet kon zien welke de nieuwste was. Nu zetten
+                // we een ISO-timestamp in de filename (sorteert chronologisch).
+                // Format: Foto_2026-05-05_15-30-45.jpg
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const ts = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}` +
+                           `_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+                const fileName = `Foto_${ts}.${ext}`;
+
+                const file = new File([blob], fileName, { type: ct });
+                const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, fileName);
                 const ok = upRes && (upRes.code === 200 || upRes.code === 201);
                 if (!ok) {
                     return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
                 }
-                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: dataUrl, dataUrl });
+                // Return de gecachete (kleinere) dataUrl zodat de UI de
+                // identieke foto toont als bij volgende refresh uit cache.
+                return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: cachedDataUrl, dataUrl: cachedDataUrl, fileName });
             } catch(e) {
-                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: dataUrl });
+                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: cachedDataUrl });
             }
         }
 
@@ -301,7 +362,7 @@ const APIBridge = {
         const user = RobawsAPI.getLoggedInUser();
         if (!user) return this.jsonResponse({ error: 'Niet ingelogd' }, 401);
 
-        const date = params.date || new Date().toISOString().split('T')[0];
+        const date = params.date || RobawsAPI._localDateStr();
         const result = await RobawsAPI.getPlanning(user.robawsEmployeeId, date, user.robawsUserId);
         return this.jsonResponse(result);
     },

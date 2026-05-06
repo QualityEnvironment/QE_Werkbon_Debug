@@ -15,6 +15,25 @@ const app = {
     // Per werkorder data (keyed by WO id)
     woData: {},
 
+    /**
+     * Brussel-aware "YYYY-MM-DD" string. Vervangt
+     * `new Date().toISOString().split('T')[0]` dat UTC gebruikte
+     * en daardoor rond middernacht de verkeerde dag teruggaf.
+     * Delegeert naar RobawsAPI._localDateStr (laden vóór app.js).
+     */
+    _localDateStr(d, offsetDays) {
+        if (typeof RobawsAPI !== 'undefined' && RobawsAPI._localDateStr) {
+            return RobawsAPI._localDateStr(d, offsetDays);
+        }
+        // Mini-fallback (zou nooit gebruikt mogen worden):
+        const base = (d instanceof Date) ? d : new Date();
+        const t = new Date(base.getTime() + (offsetDays ? offsetDays * 86400000 : 0));
+        const y = t.getFullYear();
+        const m = String(t.getMonth() + 1).padStart(2, '0');
+        const day = String(t.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    },
+
     // Auto-save: sla woData op na elke wijziging
     _saveWoData() {
         try {
@@ -81,6 +100,56 @@ const app = {
     // INITIALIZATION
     // ========================================
     async init() {
+        // BUG-fix: globale handler voor unhandled promise-rejections.
+        // Voorkomt dat fouten stilletjes verloren gaan en helpt bij debug.
+        if (!window._qeRejectionHandlerInstalled) {
+            window.addEventListener('unhandledrejection', (e) => {
+                try {
+                    console.error('[QE] Unhandled promise rejection:',
+                        e.reason && e.reason.message ? e.reason.message : e.reason);
+                } catch(_) {}
+            });
+            window._qeRejectionHandlerInstalled = true;
+        }
+
+        // Android back-knop: bij elke navigate wordt window.history.pushState
+        // aangeroepen, waardoor de WebView weet dat er een back-stack is.
+        // De Java-laag (MainActivity.onBackPressed) doet dan webView.goBack()
+        // i.p.v. de app te sluiten — wat een popstate-event triggert in JS.
+        // Hier handelen we dat event af door de modal te sluiten of binnen
+        // de app naar het vorige scherm te navigeren.
+        if (!window._qeBackHandlerInstalled) {
+            window.addEventListener('popstate', () => {
+                // 1. Modal heeft prioriteit: sluit hem en compenseer de pop
+                const modal = document.getElementById('modalOverlay');
+                if (modal && modal.classList.contains('show')) {
+                    this.closeModal();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
+                // 2. Speciale schermen die niet via gewone goBack mogen (zelfde
+                //    logica als app.goBack — factuur is al aangemaakt)
+                if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
+                    this.screenHistory = [];
+                    try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    this.navigate('screenPlanning', false);
+                    this.loadPlanning();
+                    return;
+                }
+                // 3. Schermhistorie? Pop en navigeer (window.history is al gepop't door Android)
+                if (this.screenHistory.length > 0) {
+                    const prev = this.screenHistory.pop();
+                    this.navigate(prev, false);
+                    return;
+                }
+                // 4. Geen history meer: blijf op huidig scherm. Bij volgende
+                //    back is webView.canGoBack() false en sluit Java de app.
+            });
+            // Initiële history-entry zodat de eerste back-knop een entry heeft
+            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
+            window._qeBackHandlerInstalled = true;
+        }
+
         // Standaard PINs seeden (alleen als er nog geen PIN staat)
         if (typeof RobawsAPI !== 'undefined' && RobawsAPI.seedDefaultPins) {
             RobawsAPI.seedDefaultPins();
@@ -245,8 +314,55 @@ const app = {
     // Behouden voor backward-compat (oude knoppen of code paths)
     doLogin() { return this.loginCheckEmail(); },
 
-    logout() {
-        fetch('api/auth.php?action=logout');
+    async logout() {
+        // BUG-fix: voorheen werd location.reload() direct uitgevoerd
+        // zonder de fetch te awaiten en zonder user-gebonden localStorage
+        // te wissen. Daardoor lekte woData/favorites/pending payments
+        // van de vorige user naar de volgende op hetzelfde toestel.
+        try { await fetch('api/auth.php?action=logout'); } catch(e) {}
+
+        // Wis enkel sleutels die user-gebonden zijn. Sleutels die voor
+        // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
+        // info) blijven staan.
+        try {
+            const userBoundPrefixes = [
+                'qe_user',                  // huidige sessie
+                'qe_wo_data',               // werkbon-state per WO
+                'qe_fav_materials',         // favorieten van vorige user
+                'qe_last_payment',          // betaling-state
+                'qe_last_overschrijving',
+                'qe_last_wo_create_res',    // debug payloads
+                'qe_last_wo_put_req',
+                'qe_last_wo_put_res',
+                'qe_last_wo_verify',
+                'qe_clock_pending',         // offline klok-queue
+                'qe_pending_payments',
+                'qe_submitted_wos',
+                'qe_timer_state',
+                'qe_timer_correction',
+            ];
+            const planItemPrefix = 'planItem_';
+            const clockSessionPrefix = 'qe_clock_v2_';
+            const empCachePrefix = 'qe_emp_cache_'; // mag staan voor offline login
+            const avatarPrefix = 'qe_avatar_';      // mag staan
+            const pinPrefix = 'qe_pin_';            // mag staan voor offline PIN-check
+
+            const toRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                if (userBoundPrefixes.includes(k)) { toRemove.push(k); continue; }
+                if (k.startsWith(planItemPrefix)) { toRemove.push(k); continue; }
+                if (k.startsWith(clockSessionPrefix)) { toRemove.push(k); continue; }
+                // empCache, avatar, pin: NIET wissen — die zijn nodig voor
+                // snelle herlogin en offline-fallback.
+                void empCachePrefix; void avatarPrefix; void pinPrefix;
+            }
+            for (const k of toRemove) {
+                try { localStorage.removeItem(k); } catch(e) {}
+            }
+        } catch(e) { console.warn('[logout] cleanup fout:', e); }
+
         this.currentUser = null;
         location.reload();
     },
@@ -258,14 +374,8 @@ const app = {
         // Body-class zetten zodat CSS elementen kan verbergen voor monteurs
         document.body.classList.toggle('monteur-mode', this.isMonteur());
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
-        // Avatar in header laden — eerst snel uit cache, dan Robaws verversen
+        // Avatar in header laden
         this.refreshAvatar();
-        // Eenmalig per login: forceer refresh uit Robaws zodat wijzigingen
-        // op een ander toestel ook hier doorkomen.
-        if (!this._avatarRefreshedForUser || this._avatarRefreshedForUser !== this.currentUser?.email) {
-            this.refreshAvatarFromRobaws().then(() => this.refreshAvatar());
-            this._avatarRefreshedForUser = this.currentUser?.email;
-        }
         this.buildDateStrip();
         this.updateHeaderDate();
         this.loadPlanning();
@@ -305,55 +415,14 @@ const app = {
                 if (imgHeader) { imgHeader.src = data.dataUrl; imgHeader.style.display = ''; }
                 if (fbHeader) fbHeader.style.display = 'none';
                 this._avatarDataUrl = data.dataUrl;
-            } else if (this._avatarDataUrl) {
-                // BUG-fix: dataUrl niet wegwerpen als we hem al hadden — anders
-                // verdwijnt de foto bij elke refresh wanneer Robaws traag is.
-                if (imgHeader) { imgHeader.src = this._avatarDataUrl; imgHeader.style.display = ''; }
-                if (fbHeader) fbHeader.style.display = 'none';
             } else {
                 if (imgHeader) imgHeader.style.display = 'none';
                 if (fbHeader) fbHeader.style.display = '';
+                this._avatarDataUrl = null;
             }
         } catch (e) {
-            // BUG-fix: bij netwerkfout NIET de cached foto wegwerpen
-            console.warn('[App] refreshAvatar fetch mislukt:', e.message);
-            if (this._avatarDataUrl) {
-                if (imgHeader) { imgHeader.src = this._avatarDataUrl; imgHeader.style.display = ''; }
-                if (fbHeader) fbHeader.style.display = 'none';
-            } else {
-                if (imgHeader) imgHeader.style.display = 'none';
-                if (fbHeader) fbHeader.style.display = '';
-            }
-        }
-    },
-
-    /**
-     * Force-refresh van avatar uit Robaws (skip cache).
-     * Wordt aangeroepen bij login zodat een gewijzigde profielfoto op een ander
-     * toestel ook hier opduikt. Maar wist NOOIT de cache als Robaws faalt.
-     */
-    async refreshAvatarFromRobaws() {
-        if (!this.currentUser || !this.currentUser.email) return;
-        try {
-            const email = this.currentUser.email.toLowerCase();
-            // Tijdelijk lokale cache wissen zodat get-avatar Robaws aanroept
-            const backup = localStorage.getItem('qe_avatar_' + email);
-            try { localStorage.removeItem('qe_avatar_' + email); } catch(_) {}
-            const res = await fetch('api/profile.php?action=get-avatar');
-            const data = await res.json();
-            if (data && data.dataUrl) {
-                this._avatarDataUrl = data.dataUrl;
-                const imgHeader = document.getElementById('headerAvatarImg');
-                const fbHeader = document.getElementById('headerAvatarFallback');
-                if (imgHeader) { imgHeader.src = data.dataUrl; imgHeader.style.display = ''; }
-                if (fbHeader) fbHeader.style.display = 'none';
-                console.log('[App] Avatar ververst uit Robaws');
-            } else if (backup) {
-                // Robaws gaf niets — restore de oude cache
-                try { localStorage.setItem('qe_avatar_' + email, backup); } catch(_) {}
-            }
-        } catch (e) {
-            console.warn('[App] refreshAvatarFromRobaws faalde — cache behouden:', e.message);
+            if (imgHeader) imgHeader.style.display = 'none';
+            if (fbHeader) fbHeader.style.display = '';
         }
     },
 
@@ -396,8 +465,81 @@ const app = {
         }
         const updateStatus = document.getElementById('updateStatus');
         if (updateStatus) updateStatus.style.display = 'none';
+
+        // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
+        // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
+        // In de productie-versie bestaat die file niet en gebeurt er niets.
+        this._maybeShowNfcTesterButton();
+        // === EINDE DEBUG NFC TESTER ===
+
         this.navigate('screenProfile');
     },
+
+    // === DEBUG NFC TESTER — verwijder deze methode na security audit ===
+    _maybeShowNfcTesterButton() {
+        // Alleen voor Levi tonen — security audit is admin-only.
+        const email = (this.currentUser && this.currentUser.email || '').toLowerCase();
+        if (email !== 'levi@qe.be') {
+            const existing = document.getElementById('btnDebugNfcTester');
+            if (existing && existing.parentElement) existing.parentElement.remove();
+            this._nfcTesterChecked = true;
+            this._nfcTesterAvailable = false;
+            return;
+        }
+        if (this._nfcTesterChecked) {
+            const btn = document.getElementById('btnDebugNfcTester');
+            if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
+            return;
+        }
+        let done = false;
+        const finish = (exists, why) => {
+            if (done) return;
+            done = true;
+            this._nfcTesterChecked = true;
+            this._nfcTesterAvailable = exists;
+            console.log('[DebugNFC] available=' + exists + ' (' + why + ')');
+            if (exists) this._injectNfcTesterButton();
+        };
+        try {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', 'debug-nfc.html', true);
+            xhr.timeout = 5000;
+            xhr.onload = () => {
+                const text = xhr.responseText || '';
+                console.log('[DebugNFC] xhr.status=' + xhr.status + ' text.length=' + text.length);
+                const exists = text.length > 100 && text.indexOf('NFC Security Tester') !== -1;
+                finish(exists, exists ? 'xhr-found' : 'xhr-no-marker');
+            };
+            xhr.onerror = () => finish(false, 'xhr-error');
+            xhr.ontimeout = () => finish(false, 'xhr-timeout');
+            xhr.send();
+        } catch(e) {
+            finish(false, 'xhr-exception: ' + e.message);
+        }
+    },
+    _injectNfcTesterButton() {
+        const profile = document.getElementById('screenProfile');
+        if (!profile || document.getElementById('btnDebugNfcTester')) return;
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
+        card.innerHTML = `
+            <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
+            <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
+            <button id="btnDebugNfcTester" class="btn btn-full"
+                style="background:#C62828;color:#fff;padding:12px"
+                onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
+        `;
+        // .card:has() werkt niet in oudere WebViews — gebruik manuele loop
+        let pinCard = null;
+        const cards = profile.querySelectorAll('.card');
+        for (const c of cards) {
+            if (c.querySelector('#profileOldPin')) { pinCard = c; break; }
+        }
+        if (pinCard) profile.insertBefore(card, pinCard);
+        else profile.appendChild(card);
+    },
+    // === EINDE DEBUG NFC TESTER ===
 
     checkForUpdate() {
         const btn = document.getElementById('btnCheckUpdate');
@@ -560,6 +702,9 @@ const app = {
     navigate(screenId, pushHistory = true) {
         if (pushHistory && this.currentScreen !== screenId) {
             this.screenHistory.push(this.currentScreen);
+            // Voeg ook een entry toe aan window.history zodat de Android
+            // back-knop deze stap kan terugzetten (zie popstate-handler in init).
+            try { history.pushState({ qeApp: true, screen: screenId }, '', location.pathname); } catch(_) {}
         }
 
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -608,13 +753,15 @@ const app = {
         // Vanaf betaalscherm/overschrijving: factuur is al aangemaakt, ga altijd naar planning
         if (this.currentScreen === 'screenPayment' || this.currentScreen === 'screenOverschrijving') {
             this.screenHistory = [];
+            try { history.replaceState({ qeApp: true }, '', location.pathname); } catch(_) {}
             this.navigate('screenPlanning', false);
             this.loadPlanning();
             return;
         }
+        // Trigger window.history.back() zodat zowel UI back-button als Android
+        // back-button via dezelfde popstate-handler lopen (alles in sync).
         if (this.screenHistory.length > 0) {
-            const prev = this.screenHistory.pop();
-            this.navigate(prev, false);
+            history.back();
         } else {
             this.navigate('screenPlanning', false);
         }
@@ -635,7 +782,7 @@ const app = {
         const dates = [today, tomorrow];
 
         strip.innerHTML = dates.map(d => {
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = this._localDateStr(d);
             const isToday = d.toDateString() === today.toDateString();
             const isActive = d.toDateString() === this.currentDate.toDateString();
             const label = isToday ? 'Vandaag' : 'Morgen';
@@ -686,7 +833,7 @@ const app = {
         const list = document.getElementById('workorderList');
         list.innerHTML = '<div class="spinner"></div>';
 
-        const dateStr = this.currentDate.toISOString().split('T')[0];
+        const dateStr = this._localDateStr(this.currentDate);
 
         try {
             const url = `api/planning.php?date=${dateStr}`;
@@ -714,7 +861,7 @@ const app = {
             document.getElementById('woCount').textContent = this.workorders.length;
 
             if (this.workorders.length === 0) {
-                const isToday = dateStr === new Date().toISOString().split('T')[0];
+                const isToday = dateStr === this._localDateStr();
                 list.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-icon">📋</div>
@@ -1247,7 +1394,7 @@ const app = {
             this.timer.elapsed = Date.now() - this.timer.startTime;
             this.timer.running = false;
             document.getElementById('btnTimerStart').style.display = '';
-            document.getElementById('btnTimerVerplaatsing').style.display = 'none'; // verplaatsing-UI uitgeschakeld
+            // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
             document.getElementById('btnTimerPause').style.display = 'none';
             this._saveTimerState();
         } else {
@@ -1282,6 +1429,11 @@ const app = {
         const type = this.timer.type || 'klant';
         const label = this._timerLabels[type] || type;
 
+        // Toon eerst loading zodat de modal direct verschijnt
+        document.getElementById('modalContent').innerHTML =
+            `<h3>${label} — controleer tijden</h3><div class="spinner" style="margin:20px auto"></div>`;
+        this.openModal();
+
         const hourOpts = (sel) => Array.from({length: 24}, (_, i) =>
             `<option value="${i}" ${i === sel ? 'selected' : ''}>${String(i).padStart(2,'0')}</option>`).join('');
         const minOpts = (sel) => Array.from({length: 60}, (_, m) =>
@@ -1289,15 +1441,13 @@ const app = {
         const pauzeOpts = [0, 15, 30, 45, 60].map(m =>
             `<option value="${m}" ${m === 0 ? 'selected' : ''}>${m} min</option>`).join('');
 
-        // Loading tonen, want werknemers ophalen kan even duren
-        document.getElementById('modalContent').innerHTML = `<h3>${label}</h3><div class="spinner" style="margin:20px auto"></div>`;
-        this.openModal();
-
-        // Werknemers ophalen — net als bij addManualHours
+        // Werknemers ophalen — zelfde flow als addManualHours, met fallback
+        // naar de ingelogde gebruiker als de dagplanning er geen heeft.
         const empIds = this.currentWO ? (this.currentWO.employeeIds || []) : [];
         let employees = [];
         if (empIds.length > 0) {
-            try { employees = await this._getEmployeeNames(empIds); } catch(e) {}
+            try { employees = await this._getEmployeeNames(empIds); }
+            catch(e) { console.warn('[App] Werknemers ophalen voor timer-popup mislukt:', e); }
         }
         if (employees.length === 0 && this.currentUser) {
             employees = [{ id: String(this.currentUser.robawsEmployeeId), name: this.currentUser.name || 'Ik' }];
@@ -1307,7 +1457,7 @@ const app = {
             <div class="form-group" style="margin-bottom:12px">
                 <label>👷 Werknemer</label>
                 <select class="form-input" id="tcEmployee">
-                    ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${e.name}</option>`).join('')}
+                    ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${this.escapeHtml(e.name)}</option>`).join('')}
                 </select>
             </div>` : '';
 
@@ -1345,14 +1495,14 @@ const app = {
         const fm = parseInt(document.getElementById('tcFromM').value);
         const th = parseInt(document.getElementById('tcToH').value);
         const tm = parseInt(document.getElementById('tcToM').value);
+        const pauze = parseInt(document.getElementById('tcPauze')?.value || 0);
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
         const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
         if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
-
-        // Pauze + werknemer (zelfde patroon als addManualHours)
-        const pauze = parseInt(document.getElementById('tcPauze')?.value || 0);
         const duration = Math.max(0, totalDuration - pauze);
+
+        // Werknemer ophalen (uit dropdown of ingelogde user)
         const empSelect = document.getElementById('tcEmployee');
         const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
         const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
@@ -1378,8 +1528,8 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
-        const pauzeText = pauze > 0 ? ` (${pauze}m pauze)` : '';
-        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeText}`);
+        const pauzeTxt = pauze > 0 ? ` (${pauze}min pauze)` : '';
+        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}`);
     },
 
     _discardTimer() {
@@ -1393,7 +1543,7 @@ const app = {
         document.getElementById('timerValue').textContent = '00:00:00';
         document.getElementById('timerLabel').textContent = 'Werkuren';
         document.getElementById('btnTimerStart').style.display = '';
-        document.getElementById('btnTimerVerplaatsing').style.display = 'none'; // verplaatsing-UI uitgeschakeld
+        // Verplaatsings-uren gedeactiveerd — knop blijft verborgen
         document.getElementById('btnTimerPause').style.display = 'none';
         document.getElementById('btnTimerStop').style.display = 'none';
     },
@@ -1805,10 +1955,27 @@ const app = {
 
         if (query.length < 2) { container.style.display = 'none'; return; }
 
+        // BUG-fix: vroegere implementatie liet oudere fetches doorlopen,
+        // waardoor out-of-order responses een nieuwer zoekresultaat
+        // konden overschrijven. Nu gebruiken we een AbortController per
+        // zoek-request en een query-id om alleen het laatste resultaat te
+        // tonen.
+        if (this._searchAbort) {
+            try { this._searchAbort.abort(); } catch(e) {}
+        }
+        const ctrl = new AbortController();
+        this._searchAbort = ctrl;
+        const myQueryId = (this._searchQueryId = (this._searchQueryId || 0) + 1);
+
         this.searchTimeout = setTimeout(async () => {
             try {
-                const res = await fetch(`api/articles.php?action=search&name=${encodeURIComponent(query)}&limit=20`);
+                const res = await fetch(
+                    `api/articles.php?action=search&name=${encodeURIComponent(query)}&limit=20`,
+                    { signal: ctrl.signal }
+                );
                 const data = await res.json();
+                // Alleen renderen als dit nog steeds de meest recente query is
+                if (myQueryId !== this._searchQueryId) return;
                 const items = data.items || [];
 
                 if (items.length === 0) {
@@ -1822,13 +1989,14 @@ const app = {
                             </div>
                             <div style="font-size:13px;color:var(--qe-grey);display:flex;justify-content:space-between">
                                 <span>${art.unit || 'stuk'}</span>
-                                <span class="monteur-hide" style="font-weight:500;color:var(--qe-darkblue)">${this.formatPrice(art.salePrice || art.unitPrice)}</span>
+                                <span class="monteur-hide" style="font-weight:500;color:var(--qe-darkblue)">${this.formatPrice(art.salePrice ?? art.unitPrice ?? 0)}</span>
                             </div>
                         </div>
                     `).join('');
                 }
                 container.style.display = 'block';
             } catch (err) {
+                if (err && err.name === 'AbortError') return; // genegeerd
                 container.innerHTML = '<p class="text-grey text-sm text-center" style="padding:12px">Zoeken mislukt</p>';
                 container.style.display = 'block';
             }
@@ -2620,20 +2788,32 @@ const app = {
         if (!input.files || !input.files.length || !this.currentWO) return;
         const files = Array.from(input.files);
         let loaded = 0;
+        let failed = 0;
 
+        // BUG-fix: vroeger werd loaded counter alleen verhoogd in de
+        // onload-callback. Bij FileReader-fouten of img-decode-fouten
+        // bleef de teller hangen → toast nooit getoond. Nu krijgt elke
+        // foto een gegarandeerde callback-aanroep (success of fail).
         files.forEach((file, i) => {
-            // Comprimeer foto's om geheugen te besparen
             this.compressPhoto(file, (dataUrl) => {
-                const name = file.name || `foto_${Date.now()}_${i}.jpg`;
-                this.woData[this.currentWO.id].photos.push({
-                    id: Date.now() + i,
-                    data: dataUrl,
-                    name: name,
-                });
+                if (dataUrl) {
+                    const name = file.name || `foto_${Date.now()}_${i}.jpg`;
+                    this.woData[this.currentWO.id].photos.push({
+                        id: Date.now() + i,
+                        data: dataUrl,
+                        name: name,
+                    });
+                } else {
+                    failed++;
+                }
                 loaded++;
                 if (loaded === files.length) {
                     this.renderPhotos();
-                    this.toast(`${files.length} foto('s) toegevoegd`);
+                    if (failed > 0) {
+                        this.toast(`${files.length - failed} foto('s) toegevoegd, ${failed} mislukt`);
+                    } else {
+                        this.toast(`${files.length} foto('s) toegevoegd`);
+                    }
                 }
             });
         });
@@ -2644,32 +2824,68 @@ const app = {
         const maxWidth = 1600;
         const maxHeight = 1600;
         const quality = 0.7;
+        // Veiligheid: cap inputbestand op 30 MB om OOM te voorkomen
+        if (file && file.size > 30 * 1024 * 1024) {
+            console.warn('[compressPhoto] bestand te groot:', file.size);
+            try { callback(null); } catch(e) {}
+            return;
+        }
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                // Bereken nieuwe dimensies
-                let w = img.width;
-                let h = img.height;
+        // BUG-fix: gebruik createImageBitmap met imageOrientation:'from-image'
+        // wanneer beschikbaar, zodat EXIF-rotatie van iPhone-foto's correct
+        // wordt toegepast. Anders komen foto's gedraaid op de werkbon.
+        const finishWithBitmap = (bitmap) => {
+            try {
+                let w = bitmap.width;
+                let h = bitmap.height;
                 if (w > maxWidth) { h = h * (maxWidth / w); w = maxWidth; }
                 if (h > maxHeight) { w = w * (maxHeight / h); h = maxHeight; }
-
                 const canvas = document.createElement('canvas');
                 canvas.width = Math.round(w);
                 canvas.height = Math.round(h);
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
+                ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                bitmap.close && bitmap.close();
                 callback(canvas.toDataURL('image/jpeg', quality));
-            };
-            img.onerror = () => {
-                // Fallback: gebruik origineel als compressie mislukt
-                callback(e.target.result);
-            };
-            img.src = e.target.result;
+            } catch(e) {
+                callback(null);
+            }
         };
-        reader.readAsDataURL(file);
+
+        if (typeof createImageBitmap === 'function') {
+            try {
+                createImageBitmap(file, { imageOrientation: 'from-image' })
+                    .then(finishWithBitmap)
+                    .catch(() => fallbackPath());
+                return;
+            } catch(e) { /* val terug */ }
+        }
+        fallbackPath();
+
+        function fallbackPath() {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        let w = img.width;
+                        let h = img.height;
+                        if (w > maxWidth) { h = h * (maxWidth / w); w = maxWidth; }
+                        if (h > maxHeight) { w = w * (maxHeight / h); h = maxHeight; }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = Math.round(w);
+                        canvas.height = Math.round(h);
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        callback(canvas.toDataURL('image/jpeg', quality));
+                    } catch(err) { callback(null); }
+                };
+                img.onerror = () => callback(null);
+                img.src = e.target.result;
+            };
+            reader.onerror = () => callback(null);
+            reader.readAsDataURL(file);
+        }
     },
 
     removePhoto(photoId) {
@@ -2786,7 +3002,7 @@ const app = {
             const sizeStr = doc.size > 0 ? this._formatFileSize(doc.size) : '';
             return `
                 <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:8px;cursor:pointer"
-                     onclick="app.downloadPlanDocument('${doc.id}', '${this.escapeHtml(doc.name).replace(/'/g, "\\'")}')"
+                     onclick="app.downloadPlanDocument('${doc.id}', '${this.escapeHtml(doc.name).replace(/'/g, "\\'")}')">
                     <span style="font-size:24px">${icon}</span>
                     <div style="flex:1;min-width:0">
                         <div style="font-size:14px;font-weight:500;color:var(--qe-darkblue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(doc.name)}</div>
@@ -3192,10 +3408,17 @@ const app = {
 
         // Bewaar vatTariffId op currentWO voor factuur-aanmaak
         // Robaws vat-tariff IDs: 1=21%, 2=12%, 3=0%, 4=6%
-        if (client.vatPercentage === 6) this.currentWO.vatTariffId = '4';
-        else if (client.vatPercentage === 21) this.currentWO.vatTariffId = '1';
-        else if (client.vatPercentage === 12) this.currentWO.vatTariffId = '2';
-        else if (client.vatPercentage === 0) this.currentWO.vatTariffId = '3';
+        // BUG-fix: Robaws kan vatPercentage als string ("6") teruggeven.
+        // De vorige === vergelijkingen faalden dan stilletjes en de
+        // factuur kreeg de default 6% (vatTariffId='4'), waardoor
+        // 21%-klanten een verkeerd tarief op hun factuur kregen.
+        const vatPctNum = (client.vatPercentage === null || client.vatPercentage === undefined)
+            ? null
+            : Number(client.vatPercentage);
+        if (vatPctNum === 6) this.currentWO.vatTariffId = '4';
+        else if (vatPctNum === 21) this.currentWO.vatTariffId = '1';
+        else if (vatPctNum === 12) this.currentWO.vatTariffId = '2';
+        else if (vatPctNum === 0) this.currentWO.vatTariffId = '3';
 
         this.navigate('screenWerkbon');
     },
@@ -3212,6 +3435,14 @@ const app = {
         }
 
         try {
+            // Garandeer dat we een Robaws userId hebben — voorkomt werkbonnen
+            // zonder verantwoordelijke (zie executeSubmitFlow voor uitleg).
+            try {
+                if (this.currentUser && !this.currentUser.robawsUserId) {
+                    await RobawsAPI.ensureUserId();
+                }
+            } catch(e) { /* server-side fallback in robaws-api.js */ }
+
             const res = await fetch('api/werkbon.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3224,12 +3455,12 @@ const app = {
                     userId: this.currentUser.robawsUserId,
                     clientName: (this.currentWO.client && this.currentWO.client.name) || '',
                     summary: this.currentWO.summary || 'Werkbon via QE App',
-                    date: this.currentDate.toISOString().split('T')[0],
+                    date: this._localDateStr(this.currentDate),
                     materials: data.materials.map(m => ({
                         articleId: m.id,
                         name: m.name,
                         quantity: m.quantity,
-                        unitPrice: m.salePrice || m.unitPrice,
+                        unitPrice: m.salePrice ?? m.unitPrice ?? 0,
                     })),
                     hours: this._roundHoursForSubmit(data.hours),
                     notes: data.notes,
@@ -3291,12 +3522,12 @@ const app = {
                 userId: this.currentUser.robawsUserId,
                 clientName: (this.currentWO.client && this.currentWO.client.name) || '',
                 summary: this.currentWO.summary || 'Werkbon via QE App',
-                date: this.currentDate.toISOString().split('T')[0],
+                date: this._localDateStr(this.currentDate),
                 materials: data.materials.map(m => ({
                     articleId: m.id,
                     name: m.name,
                     quantity: m.quantity,
-                    unitPrice: m.salePrice || m.unitPrice,
+                    unitPrice: m.salePrice ?? m.unitPrice ?? 0,
                     costPrice: m.costPrice || 0,
                 })),
                 hours: this._roundHoursForSubmit(data.hours),
@@ -3337,16 +3568,27 @@ const app = {
     signatureHasContent: false,
 
     initSignatureCanvas() {
-        const canvas = document.getElementById('signatureCanvas');
-        if (!canvas) return;
+        const oldCanvas = document.getElementById('signatureCanvas');
+        if (!oldCanvas) return;
 
-        // Stel canvas resolutie in op basis van werkelijke grootte
+        // BUG-fix: bij elke aanroep werden eerder nieuwe event-listeners
+        // aangehangen zonder de oude te verwijderen → memory leak +
+        // dubbele draw-events. Door het canvas-element te clonen verdwijnen
+        // alle bestaande listeners in één keer.
+        const canvas = oldCanvas.cloneNode(true);
+        oldCanvas.parentNode.replaceChild(canvas, oldCanvas);
+
+        // BUG-fix: DPR was hardcoded 2 → wazig op moderne telefoons (DPR 3)
+        // en oversampled op tablets (DPR 1). Gebruik de echte device pixel
+        // ratio, gecapt op 3 voor geheugen.
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
         const rect = canvas.getBoundingClientRect();
-        canvas.width = rect.width * 2;
-        canvas.height = rect.height * 2;
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
 
         const ctx = canvas.getContext('2d');
-        ctx.scale(2, 2);
+        ctx.scale(dpr, dpr);
         ctx.strokeStyle = '#001E45';
         ctx.lineWidth = 2.5;
         ctx.lineCap = 'round';
@@ -3361,22 +3603,23 @@ const app = {
             return { x: touch.clientX - r.left, y: touch.clientY - r.top };
         };
 
+        const self = this;
         const start = (e) => {
             e.preventDefault();
-            this.signatureDrawing = true;
+            self.signatureDrawing = true;
             const p = getPos(e);
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
         };
         const move = (e) => {
-            if (!this.signatureDrawing) return;
+            if (!self.signatureDrawing) return;
             e.preventDefault();
             const p = getPos(e);
             ctx.lineTo(p.x, p.y);
             ctx.stroke();
-            this.signatureHasContent = true;
+            self.signatureHasContent = true;
         };
-        const end = () => { this.signatureDrawing = false; };
+        const end = () => { self.signatureDrawing = false; };
 
         canvas.addEventListener('touchstart', start, { passive: false });
         canvas.addEventListener('touchmove', move, { passive: false });
@@ -3471,14 +3714,14 @@ const app = {
             userId: this.currentUser.robawsUserId,
             clientName: (this.currentWO.client && this.currentWO.client.name) || '',
             summary: this.currentWO.summary || 'Werkbon via QE App',
-            date: this.currentDate.toISOString().split('T')[0],
+            date: this._localDateStr(this.currentDate),
             // Regie-vinkje overnemen van de sales order (niet hardcoded true)
             timeAndMaterial: this.currentWO.timeAndMaterial ?? false,
             materials: data.materials.map(m => ({
                 articleId: m.id,
                 name: m.name,
                 quantity: m.quantity,
-                unitPrice: m.salePrice || m.unitPrice,
+                unitPrice: m.salePrice ?? m.unitPrice ?? 0,
             })),
             hours: this._roundHoursForSubmit(data.hours),
             notes: data.notes,
@@ -3567,6 +3810,16 @@ const app = {
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Verwerken...';
 
         try {
+            // === STAP 0: Garandeer dat we een Robaws userId hebben.
+            // Login probeert dit al, maar bij /users-fout of bij oude sessies
+            // kan robawsUserId nog null zijn. Hier doen we een laatste lookup
+            // zodat de werkbon NOOIT zonder verantwoordelijke arriveert.
+            try {
+                if (this.currentUser && !this.currentUser.robawsUserId) {
+                    await RobawsAPI.ensureUserId();
+                }
+            } catch(e) { /* val terug op server-side fallback in robaws-api.js */ }
+
             // === STAP 1: Werkbon versturen (met betaalmethode) ===
             this.toast('Werkbon versturen...');
             const payload = this._buildWerkbonPayload(data);
@@ -3604,7 +3857,7 @@ const app = {
                     articleId: m.id,
                     name: m.name,
                     quantity: m.quantity || 1,
-                    unitPrice: m.salePrice || m.unitPrice || 0,
+                    unitPrice: m.salePrice ?? m.unitPrice ?? 0,
                 })),
                 // Uren meesturen voor facturatie — alleen 'klant' uren factureren!
                 // Bij onderhoud: werkuren worden NIET gefactureerd (verkoopprijs = 0)
@@ -3709,6 +3962,13 @@ const app = {
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Versturen...';
 
         try {
+            // Garandeer dat we een Robaws userId hebben (zie executeSubmitFlow)
+            try {
+                if (this.currentUser && !this.currentUser.robawsUserId) {
+                    await RobawsAPI.ensureUserId();
+                }
+            } catch(e) { /* server-side fallback */ }
+
             // Werkbon versturen — zelfde endpoint, geen handtekening/factuur/betaling
             this.toast('Werkbon versturen...');
             const werkbonRes = await fetch('api/werkbon.php', {
@@ -3723,13 +3983,13 @@ const app = {
                     userId: this.currentUser.robawsUserId,
                     clientName: (this.currentWO.client && this.currentWO.client.name) || '',
                     summary: this.currentWO.summary || 'Werkbon via QE App',
-                    date: this.currentDate.toISOString().split('T')[0],
+                    date: this._localDateStr(this.currentDate),
                     timeAndMaterial: this.currentWO.timeAndMaterial ?? false,
                     materials: data.materials.map(m => ({
                         articleId: m.id,
                         name: m.name,
                         quantity: m.quantity,
-                        unitPrice: m.salePrice || m.unitPrice,
+                        unitPrice: m.salePrice ?? m.unitPrice ?? 0,
                     })),
                     hours: this._roundHoursForSubmit(data.hours),
                     notes: data.notes || '',
@@ -4302,6 +4562,18 @@ const app = {
         // Bewaar invoice data voor later gebruik
         this._currentPaymentInvoice = inv;
 
+        // BUG-fix: _lastInvoiceForRetry werd nergens gezet → markPaymentFailed
+        // kon de factuur niet bewaren in de openstaande lijst, waardoor de
+        // klant later niet meer kon betalen. We bewaren hier alle info die
+        // nodig is voor een retry: invoiceId, bedrag, OGM en logicId.
+        this._lastInvoiceForRetry = {
+            invoiceId: inv.id,
+            amount: amount,
+            ogm: inv.paymentInstruction || '',
+            invoiceLogicId: inv.logicId || '',
+            timestamp: Date.now(),
+        };
+
         const terminalInfo = terminal
             ? `<div style="font-size:12px;color:var(--qe-grey);margin-top:4px">
                     Terminal: ${this.escapeHtml(terminal.desc)}
@@ -4485,8 +4757,41 @@ const app = {
         }
     },
 
-    // Gebruiker bevestigt handmatig dat de betaling gelukt is (check via Viva Wallet app)
-    markPaymentSuccess(invoiceId, amount, invoiceLogicId) {
+    // Gebruiker bevestigt handmatig dat de betaling gelukt is.
+    // BUG-fix (mogelijke fraude): voorheen werd de factuur direct als
+    // betaald gemarkeerd zonder enige Viva-verificatie. Nu doen we eerst
+    // een check via de Viva API (find-by-ref op de OGM). Alleen als Viva
+    // bevestigt dat er een geslaagde transactie is, markeren we de factuur
+    // als betaald. Bij twijfel vragen we de technieker om het bewijs.
+    async markPaymentSuccess(invoiceId, amount, invoiceLogicId) {
+        const ogm = (this._lastInvoiceForRetry && this._lastInvoiceForRetry.ogm)
+            || (this._currentPaymentInvoice && this._currentPaymentInvoice.paymentInstruction)
+            || '';
+
+        // Probeer Viva-side verificatie als we een OGM hebben
+        if (ogm) {
+            try {
+                const res = await fetch('api/payment.php?action=find-by-ref&ref=' + encodeURIComponent(ogm));
+                const data = await res.json();
+                if (!data || !data.found || !data.paid) {
+                    const proceed = confirm(
+                        'Betaling niet teruggevonden bij Viva Wallet.\n\n' +
+                        'Weet je zeker dat de klant betaald heeft? Als de transactie net gebeurd is, ' +
+                        'kan het even duren voor ze in het systeem staat.\n\n' +
+                        'Klik OK om alsnog door te gaan, Annuleer om te wachten en later opnieuw te controleren.'
+                    );
+                    if (!proceed) return;
+                }
+            } catch(e) {
+                // Geen verbinding: laat de gebruiker zelf beslissen
+                const proceed = confirm(
+                    'Kan Viva Wallet niet bereiken om de betaling te verifiëren.\n\n' +
+                    'Doorgaan en factuur als betaald markeren?'
+                );
+                if (!proceed) return;
+            }
+        }
+
         if (invoiceId) {
             fetch('api/payment.php?action=mark-paid', {
                 method: 'POST',
@@ -5296,7 +5601,7 @@ const app = {
 
             Object.keys(grouped).sort().reverse().forEach(dateStr => {
                 const d = new Date(dateStr + 'T12:00:00');
-                const isToday = dateStr === new Date().toISOString().split('T')[0];
+                const isToday = dateStr === this._localDateStr();
                 const label = isToday ? 'Vandaag' : `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}`;
 
                 html += `<div class="section-header mt-16"><h3 style="font-size:14px">${label}</h3></div>`;
@@ -5530,15 +5835,26 @@ const app = {
     },
 
     async addCorrectieMaterial() {
-        // Hergebruik de bestaande materialen-zoek modal door currentWO tijdelijk te vervangen
+        // BUG-fix: vroegere implementatie pollte met setTimeout om te zien
+        // of de gebruiker iets had gekozen. Dat kon oneindig blijven draaien
+        // (bv. als de modal CSS-klasse niet 'show' kreeg) en hield
+        // currentWO in een fake state. Nu gebruiken we een explicit
+        // safety-timeout én een max van 60 seconden polling.
         const fakeWoId = '__correctie__';
         if (!this.woData[fakeWoId]) this.woData[fakeWoId] = { hours: [], materials: [], photos: [], notes: '' };
         this._origCurrentWO = this.currentWO;
         this.currentWO = { id: fakeWoId };
         this._showMaterialSearchModal();
-        // Wanneer de gebruiker een materiaal selecteert wordt het in woData[__correctie__].materials gezet.
-        // We pollen even tot er iets in zit, maar simpeler: we hooken het via setInterval.
+
         const startCount = this.woData[fakeWoId].materials.length;
+        const startedAt = Date.now();
+        const MAX_WAIT_MS = 60 * 1000; // hard limit
+
+        const restoreWO = () => {
+            this.currentWO = this._origCurrentWO;
+            this._origCurrentWO = null;
+        };
+
         const check = () => {
             const arr = this.woData[fakeWoId].materials;
             if (arr.length > startCount) {
@@ -5547,16 +5863,25 @@ const app = {
                     articleId: nieuw.id,
                     name: nieuw.name,
                     quantity: parseFloat(nieuw.quantity) || 1,
-                    unitPrice: parseFloat(nieuw.salePrice || nieuw.unitPrice) || 0,
+                    // BUG-fix: salePrice kan 0 zijn (gratis). Met `||` valt 0
+                    // door naar unitPrice; met `??` blijft 0 behouden.
+                    unitPrice: parseFloat(nieuw.salePrice ?? nieuw.unitPrice ?? 0) || 0,
                 });
-                this.currentWO = this._origCurrentWO;
-                this._origCurrentWO = null;
+                restoreWO();
                 this.renderCorrectie();
-            } else if (document.getElementById('modalOverlay').classList.contains('show')) {
+                return;
+            }
+            // Modal nog open én binnen tijdslimiet → opnieuw checken
+            const overlay = document.getElementById('modalOverlay');
+            const stillOpen = overlay && overlay.classList.contains('show');
+            const elapsed = Date.now() - startedAt;
+            if (stillOpen && elapsed < MAX_WAIT_MS) {
                 setTimeout(check, 400);
             } else {
-                this.currentWO = this._origCurrentWO;
-                this._origCurrentWO = null;
+                restoreWO();
+                if (elapsed >= MAX_WAIT_MS) {
+                    console.warn('[Correctie] addCorrectieMaterial timeout — currentWO hersteld');
+                }
             }
         };
         setTimeout(check, 400);
@@ -5575,7 +5900,17 @@ const app = {
         if (s.klantMin > 0) currentHours.push({ type: 'klant', duration: s.klantMin, startTime: '--:--', endTime: '--:--' });
         if (s.verplMin > 0) currentHours.push({ type: 'verplaatsing', duration: s.verplMin, startTime: '--:--', endTime: '--:--' });
 
-        const user = JSON.parse(localStorage.getItem('qe_user') || '{}');
+        // BUG-fix: oude code las uit localStorage.getItem('qe_user') wat hier
+        // niet betrouwbaar was — gebruik gewoon this.currentUser. Daarbij
+        // vragen we just-in-time de robawsUserId aan als die nog ontbreekt,
+        // zodat correctie-werkbonnen NOOIT zonder verantwoordelijke aankomen.
+        const user = this.currentUser || RobawsAPI.getLoggedInUser() || {};
+        if (user && user.robawsEmployeeId && !user.robawsUserId) {
+            try {
+                const resolved = await RobawsAPI.ensureUserId();
+                if (resolved) user.robawsUserId = resolved;
+            } catch(e) { /* offline: server-side fallback in robaws-api.js */ }
+        }
 
         const payload = {
             planningItemId: s.planning.planningItemId,
@@ -5679,10 +6014,6 @@ const app = {
     /**
      * Toon een fullscreen scan-resultaat overlay (groot SUCCES of MISLUKT).
      * Wordt aangeroepen vanuit QEClock.onNfcScan na elke NFC-scan.
-     * @param {boolean} success
-     * @param {string} message - subtekst (bv. "Ingeklokt om 06:29 — Bureel")
-     * @param {Function} [onDone] - callback nadat overlay gesloten is
-     * @param {number} [duration] - hoelang zichtbaar (ms); default 2200 succes / 6000 fout
      */
     showScanResult(success, message, onDone, duration) {
         const overlay = document.getElementById('scanResult');
@@ -5690,12 +6021,10 @@ const app = {
         const title = document.getElementById('scanResultTitle');
         const msgEl = document.getElementById('scanResultMsg');
         if (!overlay) {
-            // Geen overlay div in HTML — fallback naar toast
             this.toast(message);
             if (typeof onDone === 'function') { try { onDone(); } catch(_) {} }
             return;
         }
-
         if (success) {
             overlay.style.background = 'rgba(46,125,50,0.97)';
             overlay.style.color = '#ffffff';
@@ -5709,14 +6038,7 @@ const app = {
         }
         msgEl.textContent = message || '';
         overlay.style.display = 'flex';
-
-        // Vibratie als bevestiging
-        try {
-            if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]);
-        } catch(_) {}
-
-        // MISLUKT blijft langer zichtbaar zodat de foutreden te lezen is.
-        // Tikken op overlay sluit hem direct.
+        try { if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]); } catch(_) {}
         const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
         let closed = false;
         const close = () => {
@@ -5747,7 +6069,7 @@ const app = {
     async _pollForNewPlanning() {
         if (!navigator.onLine || !this.currentUser) return;
         try {
-            const date = new Date().toISOString().split('T')[0];
+            const date = this._localDateStr();
             const result = await RobawsAPI.getPlanning(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
             const items = (result.items || []).filter(it => !it.hasWerkbon);
             const count = items.length;

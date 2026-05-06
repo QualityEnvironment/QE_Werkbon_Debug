@@ -22,9 +22,9 @@ const RobawsAPI = {
     // Bron: auth.php user_mapping + Robaws gebruikersbeheer
     EMPLOYEES: {
         // Techniekers
-        'glycera@qe.be':             { employeeId: 7,  userId: null,  name: 'Glycera',    role: 'technieker' },
+        'glycera@qe.be':             { employeeId: 7,  userId: 10,    name: 'Glycera',    role: 'technieker' },
         'sascha@qe.be':              { employeeId: 9,  userId: 18,    name: 'Sascha',     role: 'technieker' },
-        'daxleekens@qe.be':          { employeeId: 10, userId: null,  name: 'Dax',        role: 'technieker' },
+        'daxleekens@qe.be':          { employeeId: 10, userId: 9,     name: 'Dax',        role: 'technieker' },
         'olivier.puchacz@qe.be':     { employeeId: 12, userId: 13,    name: 'Olivier',    role: 'technieker' },
         'yassine@qe.be':             { employeeId: 30, userId: 20,    name: 'Yassine',    role: 'technieker' },
         // Monteurs
@@ -33,16 +33,16 @@ const RobawsAPI = {
         'jelle@qe.be':               { employeeId: 3,  userId: 14,    name: 'Jelle',      role: 'monteur' },
         'wim@qe.be':                 { employeeId: 4,  userId: 22,    name: 'Wim',        role: 'monteur' },
         'jens@qe.be':                { employeeId: 5,  userId: 23,    name: 'Jens',       role: 'monteur' },
-        'herve@qe.be':               { employeeId: 8,  userId: null,  name: 'Herve',      role: 'monteur' },
+        'herve@qe.be':               { employeeId: 8,  userId: 15,    name: 'Herve',      role: 'monteur' },
         'keng@qe.be':                { employeeId: 11, userId: 17,    name: 'Keng',       role: 'monteur' },
         'joshua@qe.be':              { employeeId: 13, userId: 16,    name: 'Joshua',     role: 'monteur' },
         // Bureel / kantoor
         'vince@qe.be':               { employeeId: 16, userId: 5,     name: 'Vince',      role: 'bureel' },
         'bjorn@qe.be':               { employeeId: 19, userId: 4,     name: 'Bjorn',      role: 'bureel' },
         'bart@qe.be':                { employeeId: 20, userId: 7,     name: 'Bart',       role: 'bureel' },
-        'felicity@qe.be':            { employeeId: 21, userId: null,  name: 'Felicity',   role: 'bureel' },
+        'felicity@qe.be':            { employeeId: 21, userId: 6,     name: 'Felicity',   role: 'bureel' },
         'rolf@qe.be':                { employeeId: 22, userId: 2,     name: 'Rolf',       role: 'bureel' },
-        'els@qe.be':                 { employeeId: null, userId: null, name: 'Els',       role: 'bureel' },
+        'els@qe.be':                 { employeeId: 23, userId: 3,     name: 'Els',        role: 'bureel' },
     },
 
     // === AUTH HEADERS ===
@@ -105,8 +105,15 @@ const RobawsAPI = {
         });
         // PUT returns 204 No Content on success
         if (res.status === 204) return { code: 204, data: null };
-        const data = await res.json();
-        return { code: res.status, data };
+        // BUG-fix: bij Cloudflare/HTML 502/504 crashte `await res.json()`
+        // op niet-JSON inhoud. Nu eerst tekst lezen en daarna parsen.
+        const txt = await res.text();
+        try {
+            const data = txt ? JSON.parse(txt) : null;
+            return { code: res.status, data };
+        } catch(e) {
+            return { code: res.status, data: { raw: txt } };
+        }
     },
 
     async uploadFile(endpoint, file, fileName) {
@@ -126,8 +133,14 @@ const RobawsAPI = {
             },
             body: formData,
         });
-        const data = await res.json();
-        return { code: res.status, data };
+        // BUG-fix: zelfde JSON-parse safety als bij put().
+        const txt = await res.text();
+        try {
+            const data = txt ? JSON.parse(txt) : null;
+            return { code: res.status, data };
+        } catch(e) {
+            return { code: res.status, data: { raw: txt } };
+        }
     },
 
     // Document downloaden (retourneert { blobUrl, contentType })
@@ -161,6 +174,145 @@ const RobawsAPI = {
     // =============================================
     // HELPERS
     // =============================================
+
+    /**
+     * Probeer de Robaws userId van een werknemer dynamisch op te halen.
+     * Doorzoekt achtereenvolgens:
+     *   1. lokale cache (qe_emp_cache_<email>)
+     *   2. employee-record (employees/{id}) → userId / user.id
+     *   3. /users met filters (employeeId, dan email)
+     *   4. /users zonder filter (volledige scan, gepagineerd)
+     * Returns userId (string/number) of null.
+     *
+     * Wordt gebruikt om "werkbon zonder verantwoordelijke" te voorkomen
+     * wanneer login hem niet kon oplossen.
+     */
+    async _resolveUserIdForEmployee(employeeId, emailHint) {
+        if (!employeeId) return null;
+        const empIdStr = String(employeeId);
+
+        // 1) Probeer via /employees/{id}
+        try {
+            const empRes = await this.get(`employees/${empIdStr}`);
+            if (empRes.code === 200 && empRes.data) {
+                const direct = empRes.data.userId
+                    || (empRes.data.user && empRes.data.user.id)
+                    || null;
+                if (direct) return direct;
+                if (!emailHint) emailHint = (empRes.data.email || '').toLowerCase();
+            }
+        } catch(e) { /* ga door */ }
+
+        // 2) Probeer /users?employeeId=...
+        try {
+            const filtered = await this.get(`users?employeeId=${encodeURIComponent(empIdStr)}&limit=10`);
+            if (filtered.code === 200 && filtered.data) {
+                const list = filtered.data.items || (Array.isArray(filtered.data) ? filtered.data : []);
+                const m = list.find(u => u && (
+                    String(u.employeeId || '') === empIdStr ||
+                    (u.employee && String(u.employee.id || '') === empIdStr)
+                ));
+                if (m && m.id) return m.id;
+            }
+        } catch(e) { /* ga door */ }
+
+        // 3) Probeer /users?email=...
+        if (emailHint) {
+            try {
+                const byEmail = await this.get(`users?email=${encodeURIComponent(emailHint)}&limit=10`);
+                if (byEmail.code === 200 && byEmail.data) {
+                    const list = byEmail.data.items || (Array.isArray(byEmail.data) ? byEmail.data : []);
+                    const m = list.find(u => u && (u.email || u.emailAddress || u.username || '').toLowerCase() === emailHint);
+                    if (m && m.id) return m.id;
+                }
+            } catch(e) { /* ga door */ }
+        }
+
+        // 4) Volledige scan op /users (gepagineerd, max 5 pagina's)
+        try {
+            let page = 0;
+            do {
+                const r = await this.get(`users?limit=100&page=${page}`);
+                if (r.code !== 200 || !r.data) break;
+                const list = r.data.items || (Array.isArray(r.data) ? r.data : []);
+                if (list.length === 0) break;
+                let m = list.find(u => u && (
+                    String(u.employeeId || '') === empIdStr ||
+                    (u.employee && String(u.employee.id || '') === empIdStr)
+                ));
+                if (!m && emailHint) {
+                    m = list.find(u => u && (u.email || u.emailAddress || u.username || '').toLowerCase() === emailHint);
+                }
+                if (m && m.id) return m.id;
+                page++;
+                if (page >= (r.data.totalPages || 1)) break;
+            } while (page < 5);
+        } catch(e) { /* opgeven */ }
+
+        return null;
+    },
+
+    /**
+     * Garandeer dat de ingelogde gebruiker een robawsUserId heeft.
+     * Als die ontbreekt, los hem op via _resolveUserIdForEmployee en
+     * persist de aangevulde user terug in localStorage zodat volgende
+     * submits hem direct kunnen gebruiken (geen extra round-trip).
+     * Returns het userId (number/string) of null.
+     */
+    async ensureUserId() {
+        const user = this.getLoggedInUser();
+        if (!user) return null;
+        if (user.robawsUserId) return user.robawsUserId;
+        if (!user.robawsEmployeeId) return null;
+        const resolved = await this._resolveUserIdForEmployee(user.robawsEmployeeId, user.email);
+        if (resolved) {
+            user.robawsUserId = resolved;
+            try { localStorage.setItem('qe_user', JSON.stringify(user)); } catch(e) {}
+            // Cache ook bijwerken zodat offline-fallback de userId heeft
+            try {
+                const cacheKey = 'qe_emp_cache_' + (user.email || '').toLowerCase();
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    const c = JSON.parse(cached);
+                    c.userId = resolved;
+                    localStorage.setItem(cacheKey, JSON.stringify(c));
+                }
+            } catch(e) {}
+            // Zorg dat ook de in-memory app.currentUser bijgewerkt is
+            try {
+                if (typeof window !== 'undefined' && window.app && window.app.currentUser) {
+                    window.app.currentUser.robawsUserId = resolved;
+                }
+            } catch(e) {}
+            console.log('[RobawsAPI] robawsUserId alsnog opgehaald:', resolved);
+        }
+        return resolved;
+    },
+
+    /**
+     * Brussel-aware "YYYY-MM-DD" string. Vervangt het foute patroon
+     * `new Date().toISOString().split('T')[0]` dat UTC-datum gaf
+     * en daardoor rond middernacht (22:00 UTC = 00:00 CEST) de
+     * verkeerde dag teruggaf — werkbonnen op verkeerde datum.
+     */
+    _localDateStr(d, offsetDays) {
+        const base = (d instanceof Date) ? d : new Date();
+        const t = new Date(base.getTime() + (offsetDays ? offsetDays * 86400000 : 0));
+        try {
+            // 'en-CA' geeft "YYYY-MM-DD" formaat
+            return new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Europe/Brussels',
+                year: 'numeric', month: '2-digit', day: '2-digit',
+            }).format(t);
+        } catch(e) {
+            // Fallback voor oude WebViews zonder Intl-Brussel-tz
+            const y = t.getFullYear();
+            const m = String(t.getMonth() + 1).padStart(2, '0');
+            const day = String(t.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+    },
+
     formatAddress(addr) {
         if (!addr) return '';
         if (typeof addr === 'string') return addr;
@@ -283,25 +435,20 @@ const RobawsAPI = {
         if (isMonteur) { normalRole = 'monteur'; normalRoleName = 'Monteur'; }
         else if (isBureel) { normalRole = 'bureel'; normalRoleName = 'Bureel'; }
 
-        // Stap 4: userId ophalen (gelinkte gebruiker)
+        // Stap 4: userId ophalen (gelinkte gebruiker) — via gedeelde helper
+        // zodat we exact dezelfde fallbacks gebruiken bij elke submit.
         let resolvedUserId = null;
         try {
-            // Via employee object
             if (employee.userId) resolvedUserId = employee.userId;
-            if (!resolvedUserId && employee.user && employee.user.id) resolvedUserId = employee.user.id;
-
-            // Fallback: /users doorzoeken
-            if (!resolvedUserId) {
-                const usersRes = await this.get('users');
-                if (usersRes.code === 200 && usersRes.data) {
-                    const usersList = usersRes.data.items || usersRes.data || [];
-                    let match = usersList.find(u => u.employeeId && String(u.employeeId) === String(employee.id));
-                    if (!match) match = usersList.find(u => u.employee && u.employee.id && String(u.employee.id) === String(employee.id));
-                    if (!match) match = usersList.find(u => (u.email || u.emailAddress || u.username || '').toLowerCase() === emailLower);
-                    if (match) resolvedUserId = match.id;
-                }
+            else if (employee.user && employee.user.id) resolvedUserId = employee.user.id;
+            else {
+                resolvedUserId = await this._resolveUserIdForEmployee(employee.id, emailLower);
             }
         } catch(e) { console.warn('[RobawsAPI] userId lookup fout:', e); }
+        if (!resolvedUserId) {
+            console.warn('[RobawsAPI] WAARSCHUWING: geen Robaws userId gevonden voor', emailLower,
+                '— werkbonnen/facturen zullen dynamisch een lookup doen tijdens submit.');
+        }
 
         const empName = [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.name || emailLower;
 
@@ -315,6 +462,12 @@ const RobawsAPI = {
         };
         console.log('[RobawsAPI] Login OK:', empName, '→ employeeId:', employee.id, ', userId:', resolvedUserId || 'GEEN');
         localStorage.setItem('qe_user', JSON.stringify(user));
+
+        // Vernieuw de avatar-cache vanuit Robaws (achtergrond, niet awaited
+        // zodat de login-flow niet wacht op de download). Tijdens app-gebruik
+        // gebruikt get-avatar gewoon de lokale cache.
+        this.refreshAvatarFromRobaws(emailLower, employee.id).catch(() => {});
+
         return { success: true, user };
     },
 
@@ -476,70 +629,223 @@ const RobawsAPI = {
     async uploadEmployeePhoto(employeeId, file, fileName = 'Foto.jpg') {
         return await this.uploadFile(`employees/${employeeId}/documents`, file, fileName);
     },
+    /**
+     * Haal de profielfoto-blob op voor een werknemer.
+     *
+     * Returns:
+     *   - Blob       → foto succesvol opgehaald
+     *   - null       → werknemer heeft GEEN profielfoto in Robaws (documents-
+     *                  lijst is bereikbaar maar bevat geen foto/photo/avatar)
+     *   - throws     → kon documents-lijst of bestand niet ophalen (offline,
+     *                  redirect, fout). Caller MOET de bestaande cache
+     *                  behouden, NIET wissen.
+     *
+     * BUG-fix: voorheen was er geen onderscheid tussen "geen foto" en "fout",
+     * waardoor `refreshAvatarFromRobaws` de cache wiste bij elke netwerkfout.
+     * Bovendien gebruiken we nu de native Java-bridge voor de download omdat
+     * de directe fetch naar /documents/{id} in de WebView een redirect naar
+     * de Robaws login-pagina krijgt.
+     */
     async getEmployeePhotoBlob(employeeId) {
-        try {
-            const res = await this.get(`employees/${employeeId}/documents`);
-            if (res.code !== 200 || !res.data) return null;
-            const items = res.data.items || res.data || [];
-            // Zoek meest recente document met "foto" of "photo" in de naam
-            const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
-            if (!photos.length) return null;
-            photos.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-            const doc = photos[0];
-            if (!doc.id) return null;
-            // Download de inhoud via /documents/{id}/preview of /documents/{id}
-            const url = this.BASE_URL + '/documents/' + doc.id;
-            const dlRes = await fetch(url, { headers: this.getHeaders() });
-            if (!dlRes.ok) return null;
-            const blob = await dlRes.blob();
-            return blob;
-        } catch(e) { return null; }
+        // Stap 1: documents-lijst ophalen
+        const res = await this.get(`employees/${employeeId}/documents`);
+        if (res.code !== 200 || !res.data) {
+            const e = new Error('Documents-lijst niet bereikbaar (code ' + res.code + ')');
+            e.code = 'DOCS_UNREACHABLE';
+            throw e;
+        }
+        const items = res.data.items || res.data || [];
+        // Zoek alle documents met "foto/photo/profile/avatar" in de naam
+        const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
+        if (!photos.length) return null;  // explicit: geen foto in Robaws
+
+        // Sorteer op createdAt desc (nieuwste eerst). Bij gelijke createdAt:
+        // sorteer op naam desc (zodat Foto_2026-05-05_... vóór Foto_2026-04-01_... komt).
+        photos.sort((a, b) => {
+            const dateCmp = (b.createdAt || '').localeCompare(a.createdAt || '');
+            if (dateCmp !== 0) return dateCmp;
+            return (b.name || '').localeCompare(a.name || '');
+        });
+        const doc = photos[0];
+        if (!doc.id) return null;
+
+        // Stap 2: download het bestand. Eerst native bridge (omzeilt redirect),
+        // anders directe fetch als laatste poging.
+        if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
+            try {
+                const result = QEBridge.downloadRobawsDocument(
+                    String(doc.id), this.API_KEY, this.API_SECRET, this.TENANT
+                );
+                if (result && result.length > 0) {
+                    const pipeIdx = result.indexOf('|');
+                    const contentType = pipeIdx > 0 ? result.substring(0, pipeIdx) : 'image/jpeg';
+                    const base64 = pipeIdx > 0 ? result.substring(pipeIdx + 1) : result;
+                    const binary = atob(base64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    return new Blob([bytes], { type: contentType });
+                }
+                // Native bridge gaf lege string → throw (fout, geen "geen foto")
+                const e = new Error('Native download gaf lege response');
+                e.code = 'DOWNLOAD_EMPTY';
+                throw e;
+            } catch(e) {
+                // Native bridge faalde — val terug op fetch
+                console.warn('[RobawsAPI] Native photo-download mislukt, val terug op fetch:', e.message);
+            }
+        }
+
+        // Fallback: directe fetch (werkt in een browser/PWA-context)
+        const url = this.BASE_URL + '/documents/' + doc.id;
+        const dlRes = await fetch(url, { headers: this.getHeaders() });
+        if (!dlRes.ok) {
+            const e = new Error('Document download faalde (HTTP ' + dlRes.status + ')');
+            e.code = 'DOWNLOAD_FAILED';
+            throw e;
+        }
+        const blob = await dlRes.blob();
+        // Sanity check: WebView krijgt soms HTML-redirect terug met content-type text/html
+        if (blob.type && blob.type.startsWith('text/html')) {
+            const e = new Error('Document download gaf HTML terug (redirect naar login?)');
+            e.code = 'DOWNLOAD_REDIRECTED';
+            throw e;
+        }
+        return blob;
     },
     setLocalAvatar(email, dataUrl) {
-        // Avatar wordt geresized naar 256x256 thumbnail vóór opslag — voorkomt
-        // localStorage quota-fouten met grote foto's en versnelt rendering.
-        const tryStore = (url) => {
-            try { localStorage.setItem('qe_avatar_' + email.toLowerCase(), url); return true; }
-            catch(e) { console.warn('[Avatar] localStorage opslag mislukt:', e.message); return false; }
-        };
-        if (!dataUrl || typeof dataUrl !== 'string') return;
-        // Direct opslaan als het al klein is (< 50KB)
-        if (dataUrl.length < 50000) { tryStore(dataUrl); return; }
-        // Anders resizen via canvas
         try {
-            const img = new Image();
-            img.onload = () => {
-                try {
-                    const size = 256;
-                    const canvas = document.createElement('canvas');
-                    canvas.width = size;
-                    canvas.height = size;
-                    const ctx = canvas.getContext('2d');
-                    // Cover-fit: midden uitsnede
-                    const ratio = Math.max(size / img.width, size / img.height);
-                    const w = img.width * ratio;
-                    const h = img.height * ratio;
-                    ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-                    const small = canvas.toDataURL('image/jpeg', 0.85);
-                    if (!tryStore(small)) {
-                        // Quota nog vol? Probeer 128 px
-                        canvas.width = 128; canvas.height = 128;
-                        ctx.drawImage(img, (128 - w/2) / 2, (128 - h/2) / 2, w/2, h/2);
-                        tryStore(canvas.toDataURL('image/jpeg', 0.75));
-                    }
-                } catch(e) { tryStore(dataUrl); }
-            };
-            img.onerror = () => tryStore(dataUrl);
-            img.src = dataUrl;
-        } catch(e) { tryStore(dataUrl); }
+            localStorage.setItem('qe_avatar_' + email.toLowerCase(), dataUrl);
+            return true;
+        } catch(e) {
+            // BUG-fix: vroeger werd de quota-fout stilzwijgend geslikt → bij
+            // refresh was de cache leeg en verscheen de foto niet meer.
+            // Loggen zodat we het in de DevTools-console kunnen zien.
+            console.warn('[RobawsAPI] Avatar opslaan in localStorage mislukt (' + e.name +
+                '): mogelijk quota overschreden. dataUrl was ' +
+                (dataUrl ? dataUrl.length : 0) + ' tekens lang.');
+            return false;
+        }
     },
     getLocalAvatar(email) {
         return localStorage.getItem('qe_avatar_' + email.toLowerCase()) || null;
     },
+    clearLocalAvatar(email) {
+        try { localStorage.removeItem('qe_avatar_' + email.toLowerCase()); } catch(e){}
+    },
+
+    /**
+     * Schaal een dataUrl af naar maximaal NxN, JPEG met opgegeven quality.
+     * Wordt gebruikt om profielfoto's te thumbnaillen voor lokale cache.
+     * Resolved met de geresizede dataUrl, of bij fout met de originele
+     * dataUrl als fallback.
+     */
+    _resizeImageDataUrl(dataUrl, maxSize, quality) {
+        maxSize = maxSize || 256;
+        quality = quality || 0.85;
+        return new Promise((resolve) => {
+            try {
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        let w = img.naturalWidth || img.width;
+                        let h = img.naturalHeight || img.height;
+                        if (w > maxSize || h > maxSize) {
+                            if (w >= h) { h = Math.round(h * (maxSize / w)); w = maxSize; }
+                            else { w = Math.round(w * (maxSize / h)); h = maxSize; }
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, w, h);
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    } catch(e) {
+                        console.warn('[RobawsAPI] Image resize mislukt:', e.message);
+                        resolve(dataUrl);
+                    }
+                };
+                img.onerror = () => {
+                    console.warn('[RobawsAPI] Image load mislukt voor resize');
+                    resolve(dataUrl);
+                };
+                img.src = dataUrl;
+            } catch(e) {
+                resolve(dataUrl);
+            }
+        });
+    },
+
+    /**
+     * Cache een avatar in localStorage als kleine thumbnail (256x256).
+     * Voorkomt dat het quota wordt overschreden door grote profielfoto's.
+     * Returns de gecachete (geresizede) dataUrl, of null bij fout.
+     */
+    async cacheAvatarFromDataUrl(email, dataUrl) {
+        if (!dataUrl) return null;
+        let toCache = dataUrl;
+        try {
+            toCache = await this._resizeImageDataUrl(dataUrl, 256, 0.85);
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar resize mislukt, val terug op origineel:', e.message);
+        }
+        const ok = this.setLocalAvatar(email, toCache);
+        return ok ? toCache : null;
+    },
+
+    /**
+     * Vernieuw de lokaal gecachete avatar door hem opnieuw uit Robaws op te
+     * halen. Wordt aangeroepen ná een succesvolle login zodat een wijziging
+     * van profielfoto via de admin (of via een ander toestel) door komt.
+     * Tijdens normaal app-gebruik gebruikt de app gewoon de lokale cache —
+     * geen Robaws-call meer per app-start.
+     *
+     * Belangrijke semantiek (zie getEmployeePhotoBlob):
+     *   - blob       → foto opgehaald, cache vervangen
+     *   - null       → Robaws bereikbaar maar werknemer heeft geen foto;
+     *                  cache wissen zodat de fallback-initiaal verschijnt
+     *   - throws     → ophalen mislukt (offline, redirect, fout); cache
+     *                  ABSOLUUT NIET wissen, want we weten niet zeker of
+     *                  er een foto is.
+     */
+    async refreshAvatarFromRobaws(email, employeeId) {
+        if (!employeeId) return;
+        let blob;
+        try {
+            blob = await this.getEmployeePhotoBlob(employeeId);
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar refresh mislukt, lokale cache behouden:', e.message);
+            return;
+        }
+        if (blob === null) {
+            // Robaws is bereikbaar én heeft echt geen foto bij deze werknemer
+            this.clearLocalAvatar(email);
+            console.log('[RobawsAPI] Geen foto in Robaws — lokale cache gewist');
+            return;
+        }
+        try {
+            const dataUrl = await new Promise(res => {
+                const r = new FileReader();
+                r.onload = () => res(r.result);
+                r.readAsDataURL(blob);
+            });
+            // Resize naar thumbnail voor cache (anders quota-issue)
+            await this.cacheAvatarFromDataUrl(email, dataUrl);
+            console.log('[RobawsAPI] Avatar verfrist vanuit Robaws bij login');
+        } catch(e) {
+            console.warn('[RobawsAPI] Avatar omzetten naar dataUrl mislukt:', e.message);
+        }
+    },
 
     getLoggedInUser() {
         const stored = localStorage.getItem('qe_user');
-        return stored ? JSON.parse(stored) : null;
+        if (!stored) return null;
+        try {
+            return JSON.parse(stored);
+        } catch(e) {
+            console.warn('[RobawsAPI] qe_user corrupt — wordt gewist:', e.message);
+            try { localStorage.removeItem('qe_user'); } catch(_) {}
+            return null;
+        }
     },
 
     logout() {
@@ -581,20 +887,6 @@ const RobawsAPI = {
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
-        // SECURITY: ownership-check — voorkom dat we per ongeluk een PUT
-        // doen op de registratie van een andere werknemer (bv. als de
-        // lokale sessie nog een verkeerde robawsId bevat). Sta geen update
-        // toe als de registratie niet aan de ingelogde gebruiker toebehoort.
-        const me = this.getLoggedInUser();
-        if (me && me.robawsEmployeeId) {
-            const ownerId = existing.data.employeeId
-                || (existing.data.employee && existing.data.employee.id);
-            if (ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
-                console.error('[RobawsAPI] WEIGER update — registratie', id,
-                    'is van werknemer', ownerId, 'niet van mij (', me.robawsEmployeeId, ')');
-                throw new Error(`Registratie ${id} hoort bij een andere werknemer (${ownerId})`);
-            }
-        }
         const body = { ...existing.data, ...updates };
         // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
@@ -612,12 +904,12 @@ const RobawsAPI = {
      */
     async getTimeRegistrations(employeeId, date) {
         // BUG-fix: vroeger 1 pagina van 100 zonder sort. Robaws default sort is
-        // ascending op id (oudste eerst), dus hedendaagse registraties vielen
-        // soms uit de respons. Resultaat: app dacht dat een werknemer niet
-        // ingeklokt was → maakte een 2e registratie aan.
-        // Fix: sort=id:desc (nieuwste eerst), paginate met early-stop, en
-        // GOOI een fout bij niet-200 zodat caller (syncWithRobaws) de lokale
-        // sessie niet wist op basis van een mislukte fetch.
+        // ascending op id (oudste eerst), dus hedendaagse registraties stonden
+        // op latere pagina's en verdwenen uit de respons. Resultaat: app dacht
+        // dat een werknemer niet ingeklokt was → maakte een 2e registratie aan.
+        // Fix: sort=id:desc (nieuwste eerst), paginate met early-stop, en GOOI
+        // een fout bij niet-200 zodat caller (syncWithRobaws) geen lokale
+        // sessie wist op basis van een mislukte fetch.
         let allItems = [];
         let page = 0;
         const maxPages = 10;
@@ -628,8 +920,8 @@ const RobawsAPI = {
             }
             if (!res.data || !res.data.items || res.data.items.length === 0) break;
             allItems.push(...res.data.items);
-            // Vroeg stoppen: als oudste item op deze pagina al voor de
-            // gevraagde datum is, hoeven we niet verder te paginen
+            // Vroeg stoppen: als oudste item op deze pagina al voor de gevraagde
+            // datum is, hoeven we niet verder te paginen
             const oldestOnPage = res.data.items[res.data.items.length - 1];
             const oldestDate = (oldestOnPage.startDate || '').substring(0, 10);
             if (oldestDate && oldestDate < date) break;
@@ -638,18 +930,10 @@ const RobawsAPI = {
         }
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
-            if (itemDate !== date) return false;
-            // SECURITY-fix: vroeger was item zonder employeeId een match
-            // (`!itemEmpId || ...`). Robaws geeft het veld soms niet terug,
-            // waardoor andermans open registratie als de eigen ingeklokte
-            // tijd verscheen — en bij uitklokken werd andermans reg gesloten.
-            // Nu VEREISEN we een expliciete employeeId match.
+            // Dubbele check: alleen registraties van deze werknemer
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-            if (!itemEmpId) {
-                console.warn('[RobawsAPI] Tijdsregistratie zonder employeeId genegeerd, id=', item.id);
-                return false;
-            }
-            return String(itemEmpId) === String(employeeId);
+            const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
+            return itemDate === date && empMatch;
         });
     },
 
@@ -657,7 +941,7 @@ const RobawsAPI = {
      * Haal alle tijdsregistraties op voor vandaag (alle werknemers, voor admin).
      */
     async getAllTimeRegistrationsToday() {
-        const today = new Date().toISOString().split('T')[0];
+        const today = this._localDateStr();
         let allItems = [];
         let page = 0;
         const maxPages = 20;
@@ -677,6 +961,7 @@ const RobawsAPI = {
             page++;
             if (res.data.totalPages && page >= res.data.totalPages) break;
         }
+        // Filter op vandaag
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
             return itemDate === today;
@@ -818,9 +1103,9 @@ const RobawsAPI = {
      */
     async getTimeRegistrationHistory(employeeId, days = 30) {
         // BUG-fix: zelfde issue als getTimeRegistrations — sort=id:desc + early
-        // stop op datum, en deduplicatie op id. Robaws geeft soms dezelfde
-        // items op meerdere pagina's terug, wat in "Mijn registraties" tot
-        // dubbele entries leidde.
+        // stop op datum, en deduplicatie op id. Robaws bleek soms dezelfde
+        // items op meerdere pagina's terug te geven (totalPages incorrect),
+        // wat in "Mijn registraties" tot dubbele entries leidde.
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffStr = cutoff.toISOString();
@@ -835,12 +1120,14 @@ const RobawsAPI = {
                 throw new Error(`Robaws time-registrations history fetch faalde (code ${res.code})`);
             }
             if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            // Deduplicatie op id (Robaws geeft soms overlappende pagina's)
             for (const it of res.data.items) {
                 if (it.id != null && !seenIds.has(String(it.id))) {
                     seenIds.add(String(it.id));
                     allItems.push(it);
                 }
             }
+            // Vroeg stoppen wanneer oudste item op deze pagina al voor cutoff is
             const oldestOnPage = res.data.items[res.data.items.length - 1];
             if (oldestOnPage.startDate && oldestOnPage.startDate < cutoffStr) break;
             page++;
@@ -849,11 +1136,9 @@ const RobawsAPI = {
 
         return allItems
             .filter(item => {
-                if (!(item.startDate >= cutoffStr)) return false;
-                // SECURITY-fix: strikt employeeId match (zie getTimeRegistrations)
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                if (!itemEmpId) return false;
-                return String(itemEmpId) === String(employeeId);
+                const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
+                return item.startDate >= cutoffStr && empMatch;
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
     },
@@ -888,8 +1173,8 @@ const RobawsAPI = {
     // PLANNING
     // =============================================
     async getPlanning(employeeId, date, userId = null) {
-        const today = new Date().toISOString().split('T')[0];
-        const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+        const today = this._localDateStr();
+        const tomorrow = this._localDateStr(null, 1);
         if (date !== today && date !== tomorrow) date = today;
 
         // Haal planning items op met paginatie
@@ -1050,7 +1335,7 @@ const RobawsAPI = {
         let page = 0;
 
         try {
-            const sinceDate = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+            const sinceDate = this._localDateStr(null, -7);
             do {
                 const result = await this.get(`work-orders?limit=100&page=${page}&sort=createdAt:desc`);
                 const items = result.data.items || [];
@@ -1248,8 +1533,32 @@ const RobawsAPI = {
                 title: finalTitle,
                 status: 'nakijken',
             };
-            // Verantwoordelijke: userId (opgezocht bij login via /users endpoint)
-            if (userId) body.assignedUserId = toStr(userId);
+            // Verantwoordelijke: userId (opgezocht bij login via /users endpoint).
+            // Als userId ontbreekt (login kon hem niet oplossen), probeer alsnog
+            // via een live lookup zodat de werkbon NOOIT zonder verantwoordelijke
+            // in Robaws belandt.
+            let resolvedUserIdForWO = userId;
+            if (!resolvedUserIdForWO) {
+                try {
+                    resolvedUserIdForWO = await this._resolveUserIdForEmployee(employeeId);
+                    if (resolvedUserIdForWO) {
+                        // Werk de in-memory user bij zodat volgende submits hem hebben
+                        const u = this.getLoggedInUser();
+                        if (u && !u.robawsUserId) {
+                            u.robawsUserId = resolvedUserIdForWO;
+                            try { localStorage.setItem('qe_user', JSON.stringify(u)); } catch(e) {}
+                            try {
+                                if (typeof window !== 'undefined' && window.app && window.app.currentUser) {
+                                    window.app.currentUser.robawsUserId = resolvedUserIdForWO;
+                                }
+                            } catch(e) {}
+                        }
+                        log.push('userId dynamisch opgehaald: ' + resolvedUserIdForWO);
+                    }
+                } catch(e) { log.push('userId lookup fout: ' + e.message); }
+            }
+            if (resolvedUserIdForWO) body.assignedUserId = toStr(resolvedUserIdForWO);
+            else log.push('WAARSCHUWING: werkbon zonder assignedUserId (userId niet vindbaar)');
             if (notes) body.remark = notes;
             if (date) body.date = date;
             if (clientId) body.clientId = toStr(clientId);
@@ -1530,8 +1839,28 @@ const RobawsAPI = {
             title: finalTitle,
             status: 'nakijken',
         };
-        // Verantwoordelijke: userId (opgezocht bij login via /users endpoint)
-        if (userId) putBody.assignedUserId = toStr(userId);
+        // Verantwoordelijke: userId. Live fallback als hij ontbreekt.
+        let resolvedUserIdForCorr = userId;
+        if (!resolvedUserIdForCorr) {
+            try {
+                resolvedUserIdForCorr = await this._resolveUserIdForEmployee(employeeId);
+                if (resolvedUserIdForCorr) {
+                    const u = this.getLoggedInUser();
+                    if (u && !u.robawsUserId) {
+                        u.robawsUserId = resolvedUserIdForCorr;
+                        try { localStorage.setItem('qe_user', JSON.stringify(u)); } catch(e) {}
+                        try {
+                            if (typeof window !== 'undefined' && window.app && window.app.currentUser) {
+                                window.app.currentUser.robawsUserId = resolvedUserIdForCorr;
+                            }
+                        } catch(e) {}
+                    }
+                    log.push('userId dynamisch opgehaald: ' + resolvedUserIdForCorr);
+                }
+            } catch(e) { log.push('userId lookup fout: ' + e.message); }
+        }
+        if (resolvedUserIdForCorr) putBody.assignedUserId = toStr(resolvedUserIdForCorr);
+        else log.push('WAARSCHUWING: correctie-werkbon zonder assignedUserId');
         if (date) putBody.date = date;
         if (clientId) putBody.clientId = toStr(clientId);
         if (planningItemId) putBody.planningItemId = toStr(planningItemId);
@@ -1827,8 +2156,8 @@ const RobawsAPI = {
     // =============================================
     async getUitgevoerdPlanningen(employeeId, userId) {
         // 1. Planning-items van afgelopen 7 dagen voor deze monteur
-        const today = new Date().toISOString().split('T')[0];
-        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        const today = this._localDateStr();
+        const sevenDaysAgo = this._localDateStr(null, -7);
 
         let allPlanningen = [];
         let page = 0;
@@ -1855,7 +2184,7 @@ const RobawsAPI = {
         if (planningenInScope.length === 0) return { items: [] };
 
         // 2. Alle werkbons van afgelopen 7 dagen ophalen → mappen op planningItemId
-        const sinceDate = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        const sinceDate = this._localDateStr(null, -7);
         const werkbonsPerPlanning = {};
         let woPage = 0;
         do {
@@ -1949,8 +2278,16 @@ const RobawsAPI = {
                 } catch(e) {}
             }
 
-            // Origineel werkbon = de eerste (oudste) — dat is de "echte" werkbon, latere zijn al correcties
-            const origineel = wos.sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+            // Origineel werkbon = de eerste (oudste) — dat is de "echte" werkbon, latere zijn al correcties.
+            // BUG-fix: vroegere code sorteerde lexicografisch ('10' < '2'), waardoor
+            // willekeurig de verkeerde werkbon als "origineel" werd gekozen. Nu
+            // sorteren we numeriek op id (Robaws geeft sequentiële ints).
+            const origineel = wos.sort((a, b) => {
+                const na = Number(a.id), nb = Number(b.id);
+                if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+                // fallback voor non-numerieke ids
+                return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+            })[0];
 
             result.push({
                 planningItemId: p.id,
@@ -1992,7 +2329,7 @@ const RobawsAPI = {
         const workOrders = [];
         let page = 0;
         // Toon werkbonnen van de afgelopen 14 dagen
-        const sinceDate = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+        const sinceDate = this._localDateStr(null, -14);
 
         // Stap 1: Werkbonnen ophalen — enkel van deze ingelogde gebruiker
         // (filter op assignedUserId = de Robaws userId van de technieker)
@@ -2010,8 +2347,15 @@ const RobawsAPI = {
                 // De API geeft enkel werk-orders terug; planning-items zitten in /planning-items.
                 // Extra zekerheid: skip items zonder id/title.
                 if (!wo.id) continue;
-                // Dubbele check op assignedUserId (voor het geval het filter niet werd gerespecteerd)
-                if (userId && wo.assignedUserId && String(wo.assignedUserId) !== String(userId)) continue;
+                // Dubbele check op assignedUserId (voor het geval het filter niet werd gerespecteerd).
+                // BUG-fix: vroeger werden werkbonnen ZONDER assignedUserId niet
+                // weggefilterd → gebruiker zag andermans werkbonnen die per
+                // ongeluk geen verantwoordelijke hadden. Nu strict: als userId
+                // gegeven is, eis een match (en filter dus zonder ook weg).
+                if (userId) {
+                    if (!wo.assignedUserId) continue;
+                    if (String(wo.assignedUserId) !== String(userId)) continue;
+                }
                 workOrders.push({
                     id: wo.id,
                     logicId: wo.logicId || null,
@@ -2093,7 +2437,7 @@ const RobawsAPI = {
             type: 'INVOICE',
             clientId: toStr(clientId),
             companyId: toStr(companyId),
-            date: new Date().toISOString().split('T')[0],
+            date: this._localDateStr(),
             paymentConditionId: toStr(paymentConditionId),
             booked: false,
         });
@@ -2114,26 +2458,30 @@ const RobawsAPI = {
             // Status "Technieker" — zodat kantoor facturen van de app kan nakijken
             invFull.status = 'Technieker';
 
-            // Verantwoordelijke = de ingelogde technieker (niet standaard Rolf)
-            // Als userId null is, probeer dynamisch op te halen via employeeId
+            // Verantwoordelijke = de ingelogde technieker (niet standaard Rolf).
+            // Centrale helper gebruikt dezelfde fallback-strategie als submitWerkbon
+            // én persisteert het resultaat in qe_user, zodat we het maar één keer
+            // hoeven op te lossen per sessie.
             let resolvedUserId = userId;
             if (!resolvedUserId) {
                 try {
                     const currentUser = this.getLoggedInUser();
                     if (currentUser && currentUser.robawsEmployeeId) {
-                        const empRes = await this.get(`employees/${currentUser.robawsEmployeeId}`);
-                        if (empRes.code === 200 && empRes.data) {
-                            resolvedUserId = empRes.data.userId || (empRes.data.user && empRes.data.user.id) || null;
+                        resolvedUserId = await this._resolveUserIdForEmployee(
+                            currentUser.robawsEmployeeId, currentUser.email
+                        );
+                        if (resolvedUserId) {
+                            currentUser.robawsUserId = resolvedUserId;
+                            try { localStorage.setItem('qe_user', JSON.stringify(currentUser)); } catch(e) {}
+                            try {
+                                if (typeof window !== 'undefined' && window.app && window.app.currentUser) {
+                                    window.app.currentUser.robawsUserId = resolvedUserId;
+                                }
+                            } catch(e) {}
+                            console.log('[Factuur] UserId dynamisch opgehaald:', resolvedUserId);
+                        } else {
+                            console.warn('[Factuur] WAARSCHUWING: geen userId vindbaar — factuur zal zonder verantwoordelijke aangemaakt worden');
                         }
-                        if (!resolvedUserId) {
-                            const usersRes = await this.get('users');
-                            if (usersRes.code === 200 && usersRes.data) {
-                                const usersList = usersRes.data.items || usersRes.data || [];
-                                const match = usersList.find(u => u.employeeId && String(u.employeeId) === String(currentUser.robawsEmployeeId));
-                                if (match) resolvedUserId = match.id;
-                            }
-                        }
-                        if (resolvedUserId) console.log('[Factuur] UserId dynamisch opgehaald:', resolvedUserId);
                     }
                 } catch(e) { console.warn('[Factuur] UserId lookup mislukt:', e); }
             }
@@ -2334,10 +2682,21 @@ const RobawsAPI = {
             const linesRes = await this.get(`sales-invoices/${invoiceId}/line-items`);
             const lines = (linesRes.data && linesRes.data.items) || [];
             let computedExcl = 0, computedIncl = 0;
-            const vatRates = { '1': 0, '3': 0, '2': 0.12, '4': 0.06, '5': 0.21 };
+            // BUG-fix: vorige map had '1': 0 wat conflicteert met app.js
+            // (waar '1' = 21%). Bovendien viel een onbekend tarief stilletjes
+            // terug op 6% — dat gaf foute totalen voor 21%-klanten.
+            // We ondersteunen nu zowel '1' als '5' als 21% (Robaws blijkt
+            // historisch beide te gebruiken) en loggen een waarschuwing
+            // i.p.v. stille foute berekening.
+            const vatRates = { '1': 0.21, '2': 0.12, '3': 0, '4': 0.06, '5': 0.21 };
             for (const l of lines) {
                 const lineExcl = (Number(l.quantity) || 0) * (Number(l.price) || 0) * (1 - (Number(l.discount) || 0) / 100);
-                const vatRate = vatRates[String(l.vatTariffId)] ?? 0.06;
+                const tariffKey = String(l.vatTariffId);
+                let vatRate = vatRates[tariffKey];
+                if (vatRate === undefined) {
+                    console.warn('[Factuur] Onbekend vatTariffId:', tariffKey, '— gerekend met 0% (controleer in Robaws)');
+                    vatRate = 0;
+                }
                 computedExcl += lineExcl;
                 computedIncl += lineExcl * (1 + vatRate);
             }
@@ -2459,35 +2818,25 @@ const RobawsAPI = {
         // Probeer signatureName op te slaan.
         // BELANGRIJK: Robaws v2 PUT is een VOLLEDIGE replace (geen PATCH).
         // Een PUT met enkel { signatureName } zet alle andere velden terug op null.
-        // Daarom eerst GET, dan alle bestaande velden + signatureName mee PUT'en.
+        //
+        // BUG-fix: vroegere code bouwde een eigen body met alleen een
+        // selectie van velden — daardoor verloren we extraFields, notes,
+        // tags, responsibleEmployeeId enz. bij elke handtekening-upload.
+        // Nu spreaden we het GET-resultaat als basis en zetten enkel
+        // signatureName + metadata-velden bij. Read-only/auto-velden die
+        // Robaws niet accepteert in een PUT verwijderen we expliciet.
         if (signatureName) {
             try {
                 const cur = await this.get(`work-orders/${workOrderId}`);
                 if (cur.code === 200 && cur.data) {
-                    const d = cur.data;
-                    const toStr = v => (v == null || v === '') ? null : String(v);
-                    const body = {
-                        title: d.title,
-                        date: d.date,
-                        status: d.status,
-                        remark: d.remark,
-                        timeAndMaterial: d.timeAndMaterial,
-                        clientReference: d.clientReference,
-                        signatureName: signatureName,
-                    };
-                    if (d.assignedUserId != null) body.assignedUserId = toStr(d.assignedUserId);
-                    if (d.clientId != null)      body.clientId      = toStr(d.clientId);
-                    if (d.endClientId != null)   body.endClientId   = toStr(d.endClientId);
-                    if (d.planningItemId != null) body.planningItemId = toStr(d.planningItemId);
-                    if (d.salesOrderId != null)  body.salesOrderId  = toStr(d.salesOrderId);
-                    if (d.projectId != null)     body.projectId     = toStr(d.projectId);
-                    if (d.companyId != null)     body.companyId     = toStr(d.companyId);
-                    if (Array.isArray(d.installationIds) && d.installationIds.length) {
-                        body.installationIds = d.installationIds.map(toStr);
-                    }
-                    if (d.address && (d.address.addressLine1 || d.address.city || d.address.postalCode)) {
-                        body.address = d.address;
-                    }
+                    const body = { ...cur.data, signatureName };
+                    // Robaws genereert deze velden zelf — niet meesturen in PUT
+                    delete body.id;
+                    delete body.createdAt;
+                    delete body.updatedAt;
+                    delete body.createdBy;
+                    delete body.updatedBy;
+                    delete body.logicId;
                     await this.put(`work-orders/${workOrderId}`, body);
                 }
             } catch(e) { /* niet fataal */ }
