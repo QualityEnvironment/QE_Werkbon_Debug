@@ -717,6 +717,31 @@ window.QEClock = {
         // Update in Robaws (endDate + hours + breakDuration toevoegen)
         const breakMinutes = Math.round(pauseHours * 60);
         if (session.robawsId) {
+            // SECURITY: pre-flight ownership-check — voorkomt dat we per
+            // ongeluk andermans registratie afsluiten als de lokale sessie
+            // ooit een verkeerde robawsId heeft opgevangen.
+            try {
+                const me = RobawsAPI.getLoggedInUser();
+                const existing = await RobawsAPI.get(`time-registrations/${session.robawsId}`);
+                const ownerId = existing.data && (existing.data.employeeId
+                    || (existing.data.employee && existing.data.employee.id));
+                if (me && ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
+                    console.error('[Clock] Sessie verwees naar andermans registratie',
+                        session.robawsId, '— sessie wordt gewist');
+                    const sessionKey = this._getSessionKey();
+                    if (sessionKey) localStorage.removeItem(sessionKey);
+                    if (window.app) {
+                        app.toast('Deze registratie hoort bij iemand anders — sessie gereset', true);
+                    }
+                    return {
+                        ok: false,
+                        message: 'Deze registratie hoort bij iemand anders\n(werknemer ' + ownerId + '). Sessie is gereset — scan opnieuw om correct in te klokken.',
+                        refresh: true,
+                    };
+                }
+            } catch(e) {
+                console.warn('[Clock] Pre-flight ownership-check mislukt:', e.message);
+            }
             try {
                 const updateData = {
                     endDate: endISO,
@@ -948,34 +973,55 @@ window.QEClock = {
     // OFFLINE SYNC
     // =============================================
 
+    _pendingSyncKey() {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || !user.email) return null;
+        return `qe_clock_pending_${user.email}`;
+    },
+
+    _readPendingSync() {
+        const key = this._pendingSyncKey();
+        if (!key) return { key: null, items: [] };
+        let items = [];
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) items = JSON.parse(raw);
+            if (!Array.isArray(items)) items = [];
+        } catch(e) { items = []; }
+        return { key, items };
+    },
+
     _addPendingSync(item) {
         // BUG-fix: parse zonder try/catch crashte bij corrupte storage.
-        let pending = [];
-        try {
-            const raw = localStorage.getItem('qe_clock_pending');
-            if (raw) pending = JSON.parse(raw);
-            if (!Array.isArray(pending)) pending = [];
-        } catch(e) {
-            console.warn('[Clock] qe_clock_pending corrupt — opnieuw beginnen');
-            pending = [];
-        }
-        pending.push({ ...item, timestamp: this._now().toISOString() });
-        try { localStorage.setItem('qe_clock_pending', JSON.stringify(pending)); } catch(e) {
+        // SECURITY: queue is per-user en heeft ownerEmployeeId zodat user B
+        // nooit user A's pending acties uitvoert.
+        const { key, items } = this._readPendingSync();
+        if (!key) return;
+        const user = RobawsAPI.getLoggedInUser();
+        const myId = user ? String(user.robawsEmployeeId) : null;
+        const safe = { ...item, ownerEmployeeId: myId, employeeId: myId, timestamp: this._now().toISOString() };
+        items.push(safe);
+        try { localStorage.setItem(key, JSON.stringify(items)); } catch(e) {
             console.warn('[Clock] localStorage vol bij pending-sync:', e.message);
         }
     },
 
     async syncPending() {
-        let pending = [];
-        try {
-            const raw = localStorage.getItem('qe_clock_pending');
-            if (raw) pending = JSON.parse(raw);
-            if (!Array.isArray(pending)) pending = [];
-        } catch(e) {
-            console.warn('[Clock] qe_clock_pending corrupt — wissen en doorgaan');
-            try { localStorage.removeItem('qe_clock_pending'); } catch(_) {}
+        const { key, items: pending } = this._readPendingSync();
+        if (!key || pending.length === 0) return;
+
+        const user = RobawsAPI.getLoggedInUser();
+        const myId = user ? String(user.robawsEmployeeId) : null;
+        // SECURITY: alleen items van DEZE user verwerken — legacy items
+        // zonder ownerEmployeeId droppen (zouden van andere user kunnen zijn)
+        const myItems = pending.filter(it => it.ownerEmployeeId && String(it.ownerEmployeeId) === myId);
+        if (myItems.length === 0) {
+            try { localStorage.setItem(key, JSON.stringify([])); } catch(_) {}
             return;
         }
+        // Hergebruik 'pending' als myItems voor de loop hieronder
+        pending.length = 0;
+        pending.push(...myItems);
         if (pending.length === 0) return;
 
         console.log('[Clock] Syncing', pending.length, 'pending items');
@@ -1028,7 +1074,7 @@ window.QEClock = {
             }
         }
 
-        try { localStorage.setItem('qe_clock_pending', JSON.stringify(remaining)); } catch(e) {}
+        try { localStorage.setItem(key, JSON.stringify(remaining)); } catch(e) {}
         if (remaining.length === 0) {
             console.log('[Clock] Alle pending items gesynchroniseerd ✓');
         } else {
@@ -1057,9 +1103,11 @@ window.QEClock = {
 
             return res.data.items
                 .filter(item => {
+                    if (!(item.startDate >= cutoffStr)) return false;
+                    // SECURITY-fix: strikt employeeId match
                     const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                    const empMatch = !itemEmpId || String(itemEmpId) === empId;
-                    return item.startDate >= cutoffStr && empMatch;
+                    if (!itemEmpId) return false;
+                    return String(itemEmpId) === empId;
                 })
                 .sort((a, b) => b.startDate.localeCompare(a.startDate));
         } catch (e) {
@@ -1099,6 +1147,19 @@ window.QEClock = {
         }
 
         try {
+            // SECURITY: extra paranoid check — drop registraties die niet
+            // aan de ingelogde werknemer toebehoren. Laatste verdedigingslinie.
+            const myEmpId = String(user.robawsEmployeeId);
+            robawsRegs = robawsRegs.filter(r => {
+                const empId = r.employeeId || (r.employee && r.employee.id);
+                if (!empId) return false;
+                if (String(empId) !== myEmpId) {
+                    console.warn('[Clock] Registratie van andere werknemer genegeerd in sync:', r.id);
+                    return false;
+                }
+                return true;
+            });
+
             // Geen registraties in Robaws? Wis de lokale sessie volledig
             // (alleen na bevestigde succesvolle fetch — zie boven)
             if (robawsRegs.length === 0) {
@@ -1181,6 +1242,12 @@ window.QEClock = {
     // =============================================
 
     async getAllAttendanceToday() {
+        // SECURITY: defense-in-depth — alleen kantoor-rol mag het overzicht
+        const me = RobawsAPI.getLoggedInUser();
+        if (!me || me.role !== 'bureel') {
+            console.warn('[Clock] getAllAttendanceToday geweigerd: rol =', me && me.role);
+            return [];
+        }
         try {
             const allRegs = await RobawsAPI.getAllTimeRegistrationsToday();
 

@@ -887,6 +887,20 @@ const RobawsAPI = {
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
+        // SECURITY: ownership-check — voorkom dat we per ongeluk een PUT
+        // doen op de registratie van een andere werknemer (bv. als de
+        // lokale sessie nog een verkeerde robawsId bevat). Sta geen update
+        // toe als de registratie niet aan de ingelogde gebruiker toebehoort.
+        const me = this.getLoggedInUser();
+        if (me && me.robawsEmployeeId) {
+            const ownerId = existing.data.employeeId
+                || (existing.data.employee && existing.data.employee.id);
+            if (ownerId && String(ownerId) !== String(me.robawsEmployeeId)) {
+                console.error('[RobawsAPI] WEIGER update — registratie', id,
+                    'is van werknemer', ownerId, 'niet van mij (', me.robawsEmployeeId, ')');
+                throw new Error(`Registratie ${id} hoort bij een andere werknemer (${ownerId})`);
+            }
+        }
         const body = { ...existing.data, ...updates };
         // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
@@ -930,10 +944,18 @@ const RobawsAPI = {
         }
         return allItems.filter(item => {
             const itemDate = (item.startDate || '').substring(0, 10);
-            // Dubbele check: alleen registraties van deze werknemer
+            if (itemDate !== date) return false;
+            // SECURITY-fix: vroeger werd item zonder employeeId als match
+            // beschouwd. Robaws geeft het veld soms niet terug — een werknemer
+            // kreeg dan andermans open registratie te zien als zijn eigen
+            // ingeklokte tijd, en kon die ongewild afsluiten via NFC. Nu
+            // VEREISEN we een expliciete employeeId match.
             const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-            const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-            return itemDate === date && empMatch;
+            if (!itemEmpId) {
+                console.warn('[RobawsAPI] Tijdsregistratie zonder employeeId genegeerd, id=', item.id);
+                return false;
+            }
+            return String(itemEmpId) === String(employeeId);
         });
     },
 
@@ -1136,9 +1158,11 @@ const RobawsAPI = {
 
         return allItems
             .filter(item => {
+                if (!(item.startDate >= cutoffStr)) return false;
+                // SECURITY-fix: strikt employeeId match (zie getTimeRegistrations)
                 const itemEmpId = item.employeeId || (item.employee && item.employee.id);
-                const empMatch = !itemEmpId || String(itemEmpId) === String(employeeId);
-                return item.startDate >= cutoffStr && empMatch;
+                if (!itemEmpId) return false;
+                return String(itemEmpId) === String(employeeId);
             })
             .sort((a, b) => b.startDate.localeCompare(a.startDate));
     },

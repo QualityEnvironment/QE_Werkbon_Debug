@@ -402,6 +402,34 @@ const app = {
         return (name || '?').trim().charAt(0).toUpperCase() || '?';
     },
 
+    /**
+     * Force-refresh avatar uit Robaws (skip cache). Wordt aangeroepen bij login
+     * zodat een gewijzigde profielfoto op een ander toestel ook hier opduikt.
+     * Wist NOOIT de cache als Robaws faalt.
+     */
+    async refreshAvatarFromRobaws() {
+        if (!this.currentUser || !this.currentUser.email) return;
+        try {
+            const email = this.currentUser.email.toLowerCase();
+            const backup = localStorage.getItem('qe_avatar_' + email);
+            try { localStorage.removeItem('qe_avatar_' + email); } catch(_) {}
+            const res = await fetch('api/profile.php?action=get-avatar');
+            const data = await res.json();
+            if (data && data.dataUrl) {
+                this._avatarDataUrl = data.dataUrl;
+                const imgHeader = document.getElementById('headerAvatarImg');
+                const fbHeader = document.getElementById('headerAvatarFallback');
+                if (imgHeader) { imgHeader.src = data.dataUrl; imgHeader.style.display = ''; }
+                if (fbHeader) fbHeader.style.display = 'none';
+                console.log('[App] Avatar ververst uit Robaws');
+            } else if (backup) {
+                try { localStorage.setItem('qe_avatar_' + email, backup); } catch(_) {}
+            }
+        } catch (e) {
+            console.warn('[App] refreshAvatarFromRobaws faalde — cache behouden:', e.message);
+        }
+    },
+
     async refreshAvatar() {
         const name = this.currentUser?.name || '';
         const initial = this._initial(name);
