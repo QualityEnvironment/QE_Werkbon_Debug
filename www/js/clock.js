@@ -413,23 +413,6 @@ window.QEClock = {
     },
 
     async onNfcScan(tagId) {
-        // 🔧 DEBUG v52: zichtbaar feedback dat de scan binnenkomt in JS,
-        // zodat we kunnen pinpoint-en waar het misloopt. Verwijder na test.
-        try {
-            const screen = (window.app && window.app.currentScreen) || '?';
-            const msg = '🔧 v52 SCAN: ' + String(tagId||'').slice(0,16) + ' op ' + screen;
-            if (window.app && window.app.toast) {
-                window.app.toast(msg);
-            } else {
-                // Fallback: alert (window.app nog niet ready)
-                console.error('🔧 [v52] window.app niet beschikbaar bij scan');
-                try { alert(msg + ' (geen app.toast)'); } catch(_) {}
-            }
-            console.log('🔧 [v52] onNfcScan binnengekomen:', tagId, 'scherm:', screen);
-        } catch(e) {
-            console.error('🔧 [v52] debug-trace fout:', e);
-        }
-
         // BUG-fix: tagId normaliseren (lowercase + trim) zodat hex-casing
         // verschillen tussen Android en Robaws-cache geen mismatch geven.
         const normalizedTagId = String(tagId || '').trim().toLowerCase();

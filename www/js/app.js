@@ -6234,4 +6234,7 @@ const app = {
     },
 };
 
+// Zet app expliciet op window zodat screen-guards in clock.js werken
+window.app = app;
+
 document.addEventListener('DOMContentLoaded', () => app.init());
