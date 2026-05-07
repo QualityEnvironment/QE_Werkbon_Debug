@@ -340,6 +340,8 @@ const app = {
                 'qe_submitted_wos',
                 'qe_timer_state',
                 'qe_timer_correction',
+            
+                'qe_clock_pending_',       // v72: per-user pending sync queue (prefix-match)
             ];
             const planItemPrefix = 'planItem_';
             const clockSessionPrefix = 'qe_clock_v2_';
@@ -6403,21 +6405,34 @@ const app = {
         this._saveWoData();
     },
 
-    /** v69: knip GPS-URL en scan-tijd weg uit het remark-veld.
-     * Splits op ' — ' (em-dash) OF ' - ' (gewone hyphen met spaties).
-     * Tag-namen zonder spaties rond hyphens (bv. "1-XXD-141") blijven intact
-     * omdat de regex \s+ aan beide kanten verplicht maakt.
+    /** v72: multi-line aware. Voor Tijdsregistratie-werkbonnen kan de remark
+     * meerdere klok-in/klok-uit regels bevatten + eventueel mens-gerichte
+     * notities. Strategie:
+     *   1. Splits op nieuwe regels.
+     *   2. Voor elke regel: strip 'klok-(in|uit):\s*' prefix en knip vanaf
+     *      de eerste " — " of " - http" (whitespace verplicht).
+     *   3. Concatenate de schone delen, gescheiden door '\n'.
+     *   4. Lege regels worden weggegooid.
+     * Tag-namen zonder spaties rond interne hyphens (bv. "1-XXD-141") blijven
+     * intact omdat we \s+ aan beide kanten van de separator verplichten.
      */
     _publicRemark(remark) {
         if (!remark) return '';
-        const s = String(remark);
-        // Match " — " of " - " (whitespace verplicht aan beide kanten)
-        const m = s.match(/^(.*?)\s+[\u2014-]\s+/);
-        if (m) return m[1].trim();
-        // Geen separator gevonden — als hele string een URL bevat, knip vóór "http"
-        const httpIdx = s.indexOf('http');
-        if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-—]+$/, '').trim();
-        return s.trim();
+        const cleanLine = (line) => {
+            let s = String(line || '').replace(/^\s*klok-(in|uit):\s*/i, '');
+            const m = s.match(/^(.*?)\s+[\u2014-]\s+/);
+            if (m) return m[1].trim();
+            const httpIdx = s.indexOf('http');
+            if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-\u2014]+$/, '').trim();
+            return s.trim();
+        };
+        const lines = String(remark).split(/\r?\n/).map(cleanLine).filter(Boolean);
+        // Dedupliceer opeenvolgende identieke entries (bv. 2x "Bureau" voor in+uit)
+        const dedup = [];
+        for (const l of lines) {
+            if (dedup.length === 0 || dedup[dedup.length - 1] !== l) dedup.push(l);
+        }
+        return dedup.join('\n');
     },
 
     // ========================================

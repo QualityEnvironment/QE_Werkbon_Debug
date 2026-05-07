@@ -3197,31 +3197,50 @@ const RobawsAPI = {
     },
 
     /**
-     * v62: zoek de OPEN tijdsregistratie-werkbon van vandaag voor een user.
-     * Robaws is hier leidend — er hoort er maar 1 te zijn per dag per user
-     * (status="Tijdsregistratie" + assignedUserId=user + date=today).
-     * Returns null als er geen is.
+     * v62/v72: zoek tijdsregistratie-werkbon van vandaag voor een user.
+     * Robaws is hier leidend — er hoort er maar 1 te zijn per dag per user.
+     * Status whitelist: 'tijdsregistratie' OR 'tijdsregistratie gecontrolleerd'.
+     * v72: paginate eerste 3 pagina's (sort=id:desc — recent gemaakte werkbonnen
+     * vooraan) en filter optioneel op "open" (Uitgeklokt nog leeg).
+     * @param {string|number} userId  - de Robaws userId
+     * @param {boolean} [onlyOpen]    - true = alleen werkbonnen met lege Uitgeklokt
      */
-    async getTodaysOpenTimeRegistrationWorkOrder(userId) {
+    async getTodaysOpenTimeRegistrationWorkOrder(userId, onlyOpen) {
         if (!userId) return null;
         const today = this._localDateStr();
-        // Korte fetch — eerste pagina is meestal genoeg
-        const res = await this.get('work-orders?limit=100&sort=date:desc');
-        if (res.code !== 200 || !res.data || !res.data.items) return null;
-        const items = res.data.items.filter(wo => {
+        const allItems = [];
+        const seen = new Set();
+        for (let p = 0; p < 3; p++) {
+            const res = await this.get(`work-orders?limit=100&page=${p}&sort=id:desc`);
+            if (res.code !== 200 || !res.data || !res.data.items || res.data.items.length === 0) break;
+            for (const wo of res.data.items) {
+                if (wo.id == null || seen.has(String(wo.id))) continue;
+                seen.add(String(wo.id));
+                allItems.push(wo);
+            }
+            if (res.data.totalPages && p + 1 >= res.data.totalPages) break;
+        }
+        const items = allItems.filter(wo => {
             const status = String(wo.status || '').toLowerCase();
-            if (!status.includes('tijdsregistratie')) return false;
+            // v72: whitelist i.p.v. substring (toleranter voor andere tijdsregistratie-* statussen
+            // is een feature, niet een bug — beide bekende statussen accepteren)
+            const validStatus = (status === 'tijdsregistratie' || status === 'tijdsregistratie gecontrolleerd');
+            if (!validStatus) return false;
             if ((wo.date || '').substring(0, 10) !== today) return false;
-            const itemUserId = wo.assignedUserId
-                || (wo.assignedUser && wo.assignedUser.id);
-            return itemUserId && String(itemUserId) === String(userId);
+            const itemUserId = wo.assignedUserId || (wo.assignedUser && wo.assignedUser.id);
+            if (!itemUserId || String(itemUserId) !== String(userId)) return false;
+            if (onlyOpen) {
+                const uitg = (wo.extraFields && wo.extraFields.Uitgeklokt
+                    && wo.extraFields.Uitgeklokt.stringValue || '').trim();
+                if (uitg) return false;
+            }
+            return true;
         });
         if (items.length === 0) return null;
         if (items.length > 1) {
             console.warn('[RobawsAPI] Meer dan 1 tijdsregistratie-werkbon vandaag voor user',
-                userId, '- nieuwste eerste; ID:', items.map(i => i.id).join(','));
+                userId, '- nieuwste eerste; IDs:', items.map(i => i.id).join(','));
         }
-        // Sorteer op id desc — nieuwste werkbon eerst (mocht er per ongeluk dubbel zijn)
         items.sort((a, b) => String(b.id).localeCompare(String(a.id)));
         return items[0];
     },
