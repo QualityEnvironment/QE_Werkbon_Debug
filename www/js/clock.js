@@ -562,14 +562,26 @@ window.QEClock = {
 
         // v62: Robaws is leidend. Check eerst of er VANDAAG al een werkbon
         // bestaat voor deze user. Zo ja, hergebruik die ID. Zo nee, maak nieuwe.
+        // v71: race-mitigation — als de eerste check NIETS oplevert, doe een
+        // willekeurige korte delay (50-400ms) en check opnieuw, om te voorkomen
+        // dat 2 toestellen tegelijk een werkbon aanmaken.
         const _user = RobawsAPI.getLoggedInUser();
         const _userId = _user ? (_user.robawsUserId || _user.userId) : null;
         if (!session.workOrderId && _userId) {
             try {
-                const existing = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(_userId);
+                let existing = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(_userId);
                 if (existing && existing.id) {
                     session.workOrderId = existing.id;
                     console.log('[Clock] Bestaande werkbon van vandaag gevonden:', existing.id);
+                } else {
+                    // v71: jitter + double-check tegen race condition
+                    const jitter = 50 + Math.floor(Math.random() * 350);
+                    await new Promise(r => setTimeout(r, jitter));
+                    existing = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(_userId);
+                    if (existing && existing.id) {
+                        session.workOrderId = existing.id;
+                        console.log('[Clock] Werkbon gevonden in 2e check (race-fix):', existing.id);
+                    }
                 }
             } catch(e) {
                 console.warn('[Clock] Kon Robaws niet checken voor bestaande werkbon:', e.message);
@@ -1278,9 +1290,12 @@ window.QEClock = {
         session.registrationType = tijdLabel;  // compat met oude UI
         session.startTime        = ingeklokt || session.startTime;
         session.active           = isActive;
-        // v68: gebruik em-dash separator (' \u2014 ') zoals _clockIn schrijft.
-        // Voorheen split op ' - ' (hyphen) gaf hele remark incl. GPS in tagName.
-        session.tagName          = (wo.remark || '').split(' \u2014 ')[0].trim() || session.tagName || 'Bureau';
+        // v71: strip klok-in:/klok-uit: prefix EN GPS-deel om enkel tag-naam te krijgen.
+        // Sinds v70 begint elke regel met "klok-in: <tag> — <gps> — <tijd>".
+        // We pakken regel 1, strippen prefix, en splitsen op em-dash.
+        const _firstLine = String(wo.remark || '').split(/\r?\n/)[0] || '';
+        const _stripped  = _firstLine.replace(/^\s*klok-(in|uit):\s*/i, '');
+        session.tagName          = _stripped.split(' \u2014 ')[0].trim() || session.tagName || 'Bureau';
         if (uitgeklokt) {
             session.endTime = uitgeklokt;
         }
@@ -1441,4 +1456,17 @@ window.QEClock = {
         if (!session || !session.active) return null;
         return session.tagName;
     },
+    /**
+     * v71 shim: getAllAttendanceToday is bewust verwijderd in v62 (samen met
+     * de time-registrations endpoint). De admin-sectie van het Klok-scherm
+     * roept hem nog aan. Voor nu return een lege array zodat het scherm niet
+     * crasht. Een toekomstige versie kan dit herimplementeren via
+     * getMyTimeRegistrationWorkOrders voor alle users (vereist admin-rechten
+     * en respect voor rate-limit).
+     */
+    async getAllAttendanceToday() {
+        console.warn('[Clock] getAllAttendanceToday: niet geïmplementeerd in werkbon-flow — return []');
+        return [];
+    },
+
 };

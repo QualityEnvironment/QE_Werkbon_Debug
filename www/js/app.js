@@ -4480,7 +4480,11 @@ const app = {
         }
 
         // ── Pending sync count ──
-        const pendingCount = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]').length;
+        // v71: pending queue is per user (qe_clock_pending_<email>), niet global
+        const _pcUser = RobawsAPI.getLoggedInUser();
+        const _pcKey = _pcUser ? `qe_clock_pending_${_pcUser.email}` : null;
+        let pendingCount = 0;
+        try { pendingCount = _pcKey ? (JSON.parse(localStorage.getItem(_pcKey) || '[]').length) : 0; } catch(_) {}
         const pendingEl = document.getElementById('clockPendingCount');
         if (pendingEl) {
             pendingEl.textContent = pendingCount > 0
@@ -5410,14 +5414,47 @@ const app = {
                 const inS = ef.Ingeklokt && ef.Ingeklokt.stringValue;
                 const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
                 if (!inS || !outS) return 0;
-                const inMin = m(inS);
-                const outMin = round5m(m(outS));
-                const startMin = inMin <= userStartuurMin ? userStartuurMin : round5m(inMin);
-                const mins = outMin - startMin - userPauze;
-                if (mins <= 0) return 0;
-                // v69: rond af naar 0.5 (billableHours-stijl) zodat dit overeenkomt
-                // met wat in het aanpassing-scherm uit te.hours wordt getoond.
-                const rawHours = mins / 60;
+
+                // v71: parse de werkbon-remark voor multiple klok-in/klok-uit cycli.
+                // Format: "klok-in: tag — gps — HH:MM\nklok-uit: ... — HH:MM" repeating.
+                // Voorbeeld dag met pauze tussen 12:00-13:00:
+                //   klok-in 06:45, klok-uit 12:00, klok-in 13:00, klok-uit 17:00 = 9.25u
+                // i.p.v. naïef 17:00 - 06:45 = 10.25u (- 60 pauze = 9.25 — toevallig OK,
+                // maar bij langere gaps gaat het mis).
+                let totalMins = 0;
+                const lines = String(wo.remark || '').split(/\r?\n/);
+                const cycles = [];
+                let pendingIn = null;
+                for (const line of lines) {
+                    const inM = line.match(/klok-in:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
+                    const outM = line.match(/klok-uit:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
+                    if (inM) pendingIn = m(inM[1]);
+                    else if (outM && pendingIn !== null) {
+                        cycles.push([pendingIn, m(outM[1])]);
+                        pendingIn = null;
+                    }
+                }
+                if (cycles.length > 0) {
+                    // Toepassen: alleen op eerste cyclus startuur-correctie wanneer scan
+                    // voor startuur, voor andere cycli round5(actual). End altijd round5.
+                    let bureauApplied = false;  // alleen bij eerste cycle
+                    for (let i = 0; i < cycles.length; i++) {
+                        let [s, e] = cycles[i];
+                        const sMin = (i === 0 && s <= userStartuurMin) ? userStartuurMin : round5m(s);
+                        const eMin = round5m(e);
+                        if (eMin > sMin) totalMins += (eMin - sMin);
+                    }
+                    totalMins -= userPauze;
+                } else {
+                    // Geen cycli geparseerd (oudere werkbonnen) → fallback op Ingeklokt/Uitgeklokt
+                    const inMin = m(inS);
+                    const outMin = round5m(m(outS));
+                    const startMin = inMin <= userStartuurMin ? userStartuurMin : round5m(inMin);
+                    totalMins = outMin - startMin - userPauze;
+                }
+                if (totalMins <= 0) return 0;
+                // v69: ceil naar 0.5 (billableHours-stijl) voor consistency met aanpassing-scherm.
+                const rawHours = totalMins / 60;
                 return Math.ceil(rawHours * 2) / 2;
             };
             let totalHours = 0;
