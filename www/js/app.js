@@ -5376,20 +5376,24 @@ const app = {
                 if (getField(wo, 'Tijd') === 'Te laat') lateCount++;
             }
 
-            // Som van uren = som van time-entries; we doen één extra request per
-            // werkbon. Voor een maand met ~22 werkdagen is dat behapbaar.
+            // v66: GEEN per-werkbon time-entries fetch meer — Robaws rate-limit
+            // sloeg toe bij ~80 calls per render. We berekenen uren uit
+            // Ingeklokt/Uitgeklokt extraFields minus 60 min standaardpauze.
+            // L&L badge wordt voorlopig niet meer getoond (zou per-werkbon
+            // fetch vereisen). Uren komen dichtbij genoeg voor het overzicht.
+            const teByWoId = {};  // leeg — niet meer gebruikt voor uren
             let totalHours = 0;
-            const teByWoId = {};
+            const computeHours = (wo) => {
+                const ef = wo.extraFields || {};
+                const inS = ef.Ingeklokt && ef.Ingeklokt.stringValue;
+                const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
+                if (!inS || !outS) return 0;
+                const m = (s) => { const x = String(s).match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
+                const mins = m(outS) - m(inS) - 60;  // 60 min pauze standaard
+                return Math.max(0, Math.round(mins / 60 * 100) / 100);
+            };
             for (const wo of workOrders) {
-                try {
-                    const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
-                    if (teRes.code === 200 && teRes.data && teRes.data.items) {
-                        teByWoId[wo.id] = teRes.data.items;
-                        for (const te of teRes.data.items) {
-                            totalHours += parseFloat(te.hours || 0);
-                        }
-                    }
-                } catch(_) { /* skip */ }
+                totalHours += computeHours(wo);
             }
 
             let html = '';
@@ -5433,9 +5437,7 @@ const app = {
                 if (wos.length > 0) {
                     let dayTotal = 0;
                     for (const wo of wos) {
-                        for (const te of (teByWoId[wo.id] || [])) {
-                            dayTotal += parseFloat(te.hours || 0);
-                        }
+                        dayTotal += computeHours(wo);
                     }
                     html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
                         <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
@@ -5464,9 +5466,8 @@ const app = {
                             return String(aId) === String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
                         });
 
-                        // GPS link uit opmerkingen halen
-                        const gpsMatch = String(wo.remark || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
-                        const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
+                        // v67: GPS-link verbergen voor werknemer (zit alleen in werkbon-remark voor kantoor)
+                        const gpsLink = '';
                         const llBadge = hasLL ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 L&amp;L</span>' : '';
 
                         // v64: kaartje opent het aanpassing-aanvraag scherm
@@ -5551,7 +5552,7 @@ const app = {
                             <div style="font-size:13px;color:var(--qe-grey)">${tijd} · ${totalHours.toFixed(2)} uur</div>
                         </div>
                     </div>
-                    ${wo.remark ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${this.escapeHtml(wo.remark)}</div>` : ''}
+                    ${(() => { const pub = this._publicRemark(wo.remark); return pub ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${this.escapeHtml(pub)}</div>` : ''; })()}
                     <div style="font-size:11px;color:var(--qe-grey);margin-top:8px">Werkbon #${wo.id}</div>
                 </div>
 
@@ -6336,6 +6337,17 @@ const app = {
         if (span) span.style.textDecoration = checked ? 'line-through' : 'none';
 
         this._saveWoData();
+    },
+
+    /** v67: knip GPS-URL en scan-tijd weg uit het remark-veld zodat
+     * de werknemer enkel de tag-naam (Bureau / nummerplaat) ziet.
+     * Format: "Bureau — https://maps.google.com/?q=... — 07:30"  →  "Bureau"
+     */
+    _publicRemark(remark) {
+        if (!remark) return '';
+        const s = String(remark);
+        const idx = s.indexOf(' — ');
+        return (idx >= 0 ? s.substring(0, idx) : s).trim();
     },
 
     // ========================================

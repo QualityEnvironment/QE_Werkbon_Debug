@@ -3138,28 +3138,37 @@ const RobawsAPI = {
      * enkel hun eigen kaarten zien.
      */
     async getMyTimeRegistrationWorkOrders(userId, monthPrefix) {
-        // v65: sort=id:desc i.p.v. date:desc — onze migratie-werkbonnen
-        // (id 1248+) zijn de meest recent aangemaakte en staan dus vooraan,
-        // ongeacht hun werkbon-datum. Bij sort=date:desc stonden toekomstige
-        // planning-werkbonnen vooraan en kwam onze 4/5 werkbon niet in de
-        // eerste 20 pagina's voor.
+        // v66: maxPages drastisch verlaagd naar 8 + smart break om rate-limit
+        // (HTTP 429) te vermijden. Sort=id:desc behouden — onze recente
+        // werkbonnen staan vooraan; 800 werkbonnen is ruim genoeg.
+        // Smart break: stop zodra 2 opeenvolgende pages 0 nieuwe Tijdsregistratie
+        // werkbonnen voor monthPrefix opleveren.
         let allItems = [];
         const seenIds = new Set();
         let page = 0;
-        const maxPages = 30;  // tot 3000 werkbonnen
+        const maxPages = 8;
+        let emptyPagesInRow = 0;
         while (page < maxPages) {
             const res = await this.get(`work-orders?limit=100&page=${page}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Tijdsregistratie-werkbonnen fetch faalde (${res.code})`);
             }
             if (!res.data || !res.data.items || res.data.items.length === 0) break;
+            let foundOnPage = 0;
             for (const it of res.data.items) {
-                if (it.id != null && !seenIds.has(String(it.id))) {
-                    seenIds.add(String(it.id));
-                    allItems.push(it);
+                if (it.id == null || seenIds.has(String(it.id))) continue;
+                seenIds.add(String(it.id));
+                allItems.push(it);
+                // Tel matching items (status + datum) op voor smart break
+                const status = String(it.status || '').toLowerCase();
+                const dateMonth = (it.date || '').substring(0, 7);
+                if (status.includes('tijdsregistratie') && dateMonth === monthPrefix) {
+                    foundOnPage++;
                 }
             }
-            // Geen date-based early-stop meer; sort=id:desc heeft geen date-volgorde garantie
+            if (foundOnPage === 0) emptyPagesInRow++;
+            else emptyPagesInRow = 0;
+            if (emptyPagesInRow >= 2) break;
             page++;
             if (res.data.totalPages && page >= res.data.totalPages) break;
         }
