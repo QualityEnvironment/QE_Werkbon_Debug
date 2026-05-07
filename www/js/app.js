@@ -5414,7 +5414,11 @@ const app = {
                 const outMin = round5m(m(outS));
                 const startMin = inMin <= userStartuurMin ? userStartuurMin : round5m(inMin);
                 const mins = outMin - startMin - userPauze;
-                return Math.max(0, Math.round(mins / 60 * 100) / 100);
+                if (mins <= 0) return 0;
+                // v69: rond af naar 0.5 (billableHours-stijl) zodat dit overeenkomt
+                // met wat in het aanpassing-scherm uit te.hours wordt getoond.
+                const rawHours = mins / 60;
+                return Math.ceil(rawHours * 2) / 2;
             };
             let totalHours = 0;
             for (const wo of workOrders) totalHours += computeHours(wo);
@@ -6362,15 +6366,21 @@ const app = {
         this._saveWoData();
     },
 
-    /** v67: knip GPS-URL en scan-tijd weg uit het remark-veld zodat
-     * de werknemer enkel de tag-naam (Bureau / nummerplaat) ziet.
-     * Format: "Bureau — https://maps.google.com/?q=... — 07:30"  →  "Bureau"
+    /** v69: knip GPS-URL en scan-tijd weg uit het remark-veld.
+     * Splits op ' — ' (em-dash) OF ' - ' (gewone hyphen met spaties).
+     * Tag-namen zonder spaties rond hyphens (bv. "1-XXD-141") blijven intact
+     * omdat de regex \s+ aan beide kanten verplicht maakt.
      */
     _publicRemark(remark) {
         if (!remark) return '';
         const s = String(remark);
-        const idx = s.indexOf(' — ');
-        return (idx >= 0 ? s.substring(0, idx) : s).trim();
+        // Match " — " of " - " (whitespace verplicht aan beide kanten)
+        const m = s.match(/^(.*?)\s+[\u2014-]\s+/);
+        if (m) return m[1].trim();
+        // Geen separator gevonden — als hele string een URL bevat, knip vóór "http"
+        const httpIdx = s.indexOf('http');
+        if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-—]+$/, '').trim();
+        return s.trim();
     },
 
     // ========================================
