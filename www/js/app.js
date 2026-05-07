@@ -164,11 +164,10 @@ const app = {
             try { localStorage.removeItem('qe_pending_payments'); } catch (e) {}
             localStorage.setItem('qe_pending_cleanup_v2', '1');
         }
-        // Check of er al een sessie is.
-        // v78: extra safeguard — als auth.check faalt maar localStorage 'qe_user'
-        // bestaat, gebruik die als fallback. Voorkomt dat een hard-restart
-        // (bv. na OTA update) de gebruiker uitlogt terwijl localStorage nog
-        // gewoon de loggegevens bevat.
+        // Check of er al een sessie is. v79: de v78 localStorage-fallback is
+        // weer verwijderd — op verzoek van de gebruiker moet een OTA update
+        // forced logout veroorzaken zodat ze met verse PIN herinloggen.
+        // De forced logout zelf gebeurt in MainActivity.java vlak voor System.exit.
         try {
             const res = await fetch('api/auth.php?action=check');
             const data = await res.json();
@@ -176,33 +175,10 @@ const app = {
                 this.currentUser = data.user;
                 this.showApp();
             } else {
-                // Fallback: lees direct uit localStorage
-                let cached = null;
-                try {
-                    const raw = localStorage.getItem('qe_user');
-                    if (raw) cached = JSON.parse(raw);
-                } catch(_) {}
-                if (cached && cached.email) {
-                    console.log('[App] auth.check leverde geen sessie, fallback op localStorage qe_user:', cached.email);
-                    this.currentUser = cached;
-                    this.showApp();
-                } else {
-                    this.showLogin();
-                }
-            }
-        } catch (e) {
-            // Network error — probeer ook localStorage
-            let cached = null;
-            try {
-                const raw = localStorage.getItem('qe_user');
-                if (raw) cached = JSON.parse(raw);
-            } catch(_) {}
-            if (cached && cached.email) {
-                this.currentUser = cached;
-                this.showApp();
-            } else {
                 this.showLogin();
             }
+        } catch (e) {
+            this.showLogin();
         }
 
         // Offline detection
@@ -4332,17 +4308,42 @@ const app = {
         const clockTime = QEClock.getClockTime();
         const isLate = QEClock.isLate();
 
-        if (isActive || clockTime) {
-            // Ingeklokt of al gescand vandaag
+        // v79: planning statusbar moet 4 staten kunnen tonen:
+        //   - Nog niet ingeklokt (NFC niet gescand vandaag)
+        //   - Ingeklokt (actief, hoofd-shift loopt)
+        //   - L&L actief (📦 prominent)
+        //   - Uitgeklokt (🏁 finish-vlag)
+        const llActive = session && session.llActive;
+        const llStartTxt = session && session.llStartTime ? session.llStartTime : '';
+        if (llActive) {
+            // L&L actief — krijgt voorrang in de statusbar
+            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
+                'background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-left:4px solid #1565c0';
+            icon.textContent = '📦';
+            text.textContent = 'Bezig met Laden & Lossen';
+            text.style.color = '#0d47a1';
+            sub.textContent = llStartTxt ? ('Gestart om ' + llStartTxt) : 'Actief';
+            sub.style.color = '#1565c0';
+        } else if (isActive) {
+            // Ingeklokt (hoofd-shift)
             const lateClass = isLate ? 'background:linear-gradient(135deg,#fff3e0,#ffccbc)' : 'background:linear-gradient(135deg,#e8f5e9,#c8e6c9)';
             bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
             icon.textContent = isLate ? '⚠️' : '✅';
             const activeTag = QEClock.getActiveTagName();
             const cleanTag = this._publicRemark(activeTag);
-            text.textContent = isActive ? `Actief sinds ${session.startTime}` : `Ingeklokt om ${clockTime}`;
+            text.textContent = `Actief sinds ${session.startTime}`;
             text.style.color = isLate ? '#e65100' : '#2e7d32';
-            sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Uitgeklokt');
+            sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Ingeklokt');
             sub.style.color = isLate ? '#e65100' : '#2e7d32';
+        } else if (clockTime) {
+            // Uitgeklokt — 🏁 finish-vlag
+            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
+                'background:linear-gradient(135deg,#e8eaf6,#c5cae9);border-left:4px solid #001E45';
+            icon.textContent = '🏁';
+            text.textContent = `Uitgeklokt — ${clockTime}`;
+            text.style.color = '#001E45';
+            sub.textContent = 'Klaar voor vandaag';
+            sub.style.color = '#3f51b5';
         } else {
             // Nog niet ingeclockt
             const isLateNow = QEClock.isLate();
@@ -4448,15 +4449,12 @@ const app = {
         } else {
             const isLateNow = QEClock.isLate();
             if (clockTime) {
-                // v78: prominente finish-vlag bij Uitgeklokt
                 bigStatus.textContent = '🏁';
-                bigStatus.style.fontSize = '72px';
-                bigText.textContent = 'Uitgeklokt 🏁';
+                bigText.textContent = 'Uitgeklokt';
                 bigText.style.color = 'var(--qe-darkblue)';
                 bigTime.textContent = `Eerste scan: ${clockTime}`;
             } else {
                 bigStatus.textContent = isLateNow ? '🚨' : '⏰';
-                bigStatus.style.fontSize = '64px';
                 bigText.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
                 bigText.style.color = isLateNow ? '#c62828' : 'var(--qe-darkblue)';
                 bigTime.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
