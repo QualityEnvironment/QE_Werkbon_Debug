@@ -811,9 +811,12 @@ window.QEClock = {
         }
         const klokUitLine = `klok-uit: ${tag.name} \u2014 ${outGpsText} \u2014 ${endTimeRaw}`;
 
-        // 1. Update Uitgeklokt op werkbon (afgerond eind) + remark-append
+        // v77: Uitgeklokt-veld krijgt EXACTE klok-tijd (endTimeRaw), niet de
+        // afgeronde tijd. De afgeronde tijd zit in de werknemer-uren rij
+        // (time-entry endTime). Zo zie je in de werkbon zowel de werkelijke
+        // scan-tijd als de betaalde uren.
         try {
-            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, entryEnd, klokUitLine);
+            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw, klokUitLine);
         } catch(e) {
             console.warn('[Clock] Uitgeklokt update faalde:', e.message);
         }
@@ -1392,16 +1395,26 @@ window.QEClock = {
             }];
         }
 
-        // v76: detecteer open L&L time-entry → zet session.llActive zodat UI het toont
+        // v77: detecteer open L&L time-entry. Een entry is "open" als:
+        //   (a) endTime is null/ontbreekt, OF
+        //   (b) endTime is {hour:0, minute:0} EN hours is 0
+        // Dit voorkomt dat een midnight-entry of een net-aangemaakte open entry
+        // ten onrechte als afgesloten wordt beschouwd.
         try {
             const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
             if (teRes.code === 200 && teRes.data && teRes.data.items) {
                 const llArt = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
-                const openLL = teRes.data.items.find(te => {
+                const llItems = teRes.data.items.filter(te => {
                     const aId = te.articleId || (te.article && te.article.id);
-                    if (String(aId) !== llArt) return false;
-                    const hasEnd = te.endTime && (te.endTime.hour || te.endTime.minute);
-                    return !hasEnd;
+                    return String(aId) === llArt;
+                });
+                console.log('[Clock] L&L detect: found', llItems.length, 'L&L entries op werkbon', wo.id);
+                const openLL = llItems.find(te => {
+                    const ee = te.endTime;
+                    const eeIsNull = !ee || (ee.hour == null && ee.minute == null);
+                    const eeIsZero = ee && ee.hour === 0 && ee.minute === 0;
+                    const hoursZero = !te.hours || parseFloat(te.hours) === 0;
+                    return eeIsNull || (eeIsZero && hoursZero);
                 });
                 if (openLL) {
                     session.llActive = true;
@@ -1410,6 +1423,8 @@ window.QEClock = {
                         session.llStartTime = String(openLL.startTime.hour).padStart(2,'0') +
                             ':' + String(openLL.startTime.minute || 0).padStart(2,'0');
                     }
+                    console.log('[Clock] L&L ACTIEF gedetecteerd: te#' + openLL.id +
+                        ' start=' + session.llStartTime);
                 } else {
                     session.llActive = false;
                     session.llActiveTeId = null;
