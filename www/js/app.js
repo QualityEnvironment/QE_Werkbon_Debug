@@ -164,7 +164,11 @@ const app = {
             try { localStorage.removeItem('qe_pending_payments'); } catch (e) {}
             localStorage.setItem('qe_pending_cleanup_v2', '1');
         }
-        // Check of er al een sessie is
+        // Check of er al een sessie is.
+        // v78: extra safeguard — als auth.check faalt maar localStorage 'qe_user'
+        // bestaat, gebruik die als fallback. Voorkomt dat een hard-restart
+        // (bv. na OTA update) de gebruiker uitlogt terwijl localStorage nog
+        // gewoon de loggegevens bevat.
         try {
             const res = await fetch('api/auth.php?action=check');
             const data = await res.json();
@@ -172,11 +176,33 @@ const app = {
                 this.currentUser = data.user;
                 this.showApp();
             } else {
-                this.showLogin();
+                // Fallback: lees direct uit localStorage
+                let cached = null;
+                try {
+                    const raw = localStorage.getItem('qe_user');
+                    if (raw) cached = JSON.parse(raw);
+                } catch(_) {}
+                if (cached && cached.email) {
+                    console.log('[App] auth.check leverde geen sessie, fallback op localStorage qe_user:', cached.email);
+                    this.currentUser = cached;
+                    this.showApp();
+                } else {
+                    this.showLogin();
+                }
             }
         } catch (e) {
-            // Geen sessie of fout — toon login
-            this.showLogin();
+            // Network error — probeer ook localStorage
+            let cached = null;
+            try {
+                const raw = localStorage.getItem('qe_user');
+                if (raw) cached = JSON.parse(raw);
+            } catch(_) {}
+            if (cached && cached.email) {
+                this.currentUser = cached;
+                this.showApp();
+            } else {
+                this.showLogin();
+            }
         }
 
         // Offline detection
@@ -4383,6 +4409,16 @@ const app = {
         const bigText = document.getElementById('clockBigText');
         const bigTime = document.getElementById('clockBigTime');
 
+        // v78: L&L active block wordt onafhankelijk gerenderd, ook als main session inactief.
+        const llActiveHtml = session && session.llActive ? `
+            <div style="margin-top:10px;padding:14px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:8px;display:flex;align-items:center;gap:12px">
+                <span style="font-size:28px">📦</span>
+                <div>
+                    <div style="font-size:15px;font-weight:700;color:#0d47a1">Bezig met Laden &amp; Lossen</div>
+                    <div style="font-size:12px;color:#1565c0;opacity:0.9;margin-top:2px">Gestart om ${session.llStartTime || '?'} — scan de L&amp;L tag opnieuw om te stoppen</div>
+                </div>
+            </div>` : '';
+
         if (isActive) {
             const isLate = session.registrationType === 'Te laat';
             const isLL = session.registrationType === 'Laden & Lossen';
@@ -4392,20 +4428,10 @@ const app = {
             const _cleanTag = this._publicRemark(session.tagName);
             bigTime.textContent = `${session.startTime} — ${_cleanTag}${isLate ? ' (te laat)' : ''}`;
 
-            // Verberg NFC instructie, toon actieve sessie
             document.getElementById('clockNfcCard').style.display = 'none';
             const activeEl = document.getElementById('clockActiveSession');
             if (activeEl) {
                 activeEl.style.display = 'block';
-                // v63: L&L actief indicator. session.llActive = lopende laden&lossen sub-sessie
-                const llActiveBlock = session.llActive ? `
-                    <div style="margin-top:10px;padding:10px 12px;background:#e3f2fd;border-left:3px solid #1565c0;border-radius:6px;display:flex;align-items:center;gap:10px">
-                        <span style="font-size:18px">📦</span>
-                        <div>
-                            <div style="font-size:13px;font-weight:600;color:#1565c0">Laden &amp; Lossen actief</div>
-                            <div style="font-size:11px;color:#1565c0;opacity:0.8">Gestart om ${session.llStartTime || '?'} — scan L&amp;L tag opnieuw om te stoppen</div>
-                        </div>
-                    </div>` : '';
                 document.getElementById('clockActiveContent').innerHTML = `
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                         <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">🔄 Actieve registratie</h3>
@@ -4416,18 +4442,21 @@ const app = {
                         <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${this._publicRemark(session.tagName)}</span></div>
                     </div>
                     <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
-                    ${llActiveBlock}
+                    ${llActiveHtml}
                 `;
             }
         } else {
             const isLateNow = QEClock.isLate();
             if (clockTime) {
+                // v78: prominente finish-vlag bij Uitgeklokt
                 bigStatus.textContent = '🏁';
-                bigText.textContent = 'Uitgeklokt';
+                bigStatus.style.fontSize = '72px';
+                bigText.textContent = 'Uitgeklokt 🏁';
                 bigText.style.color = 'var(--qe-darkblue)';
                 bigTime.textContent = `Eerste scan: ${clockTime}`;
             } else {
                 bigStatus.textContent = isLateNow ? '🚨' : '⏰';
+                bigStatus.style.fontSize = '64px';
                 bigText.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
                 bigText.style.color = isLateNow ? '#c62828' : 'var(--qe-darkblue)';
                 bigTime.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
@@ -4442,16 +4471,27 @@ const app = {
                         <div style="font-size:32px;margin-bottom:8px">📵</div>
                         <div style="font-size:15px;font-weight:600;margin-bottom:4px">NFC niet beschikbaar</div>
                         <div style="font-size:13px;color:var(--qe-grey)">Zet NFC aan in je telefoon-instellingen</div>
+                        ${llActiveHtml}
                     </div>`;
             } else {
                 nfcCard.innerHTML = `
                     <div style="font-size:32px;margin-bottom:8px">📱</div>
                     <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
-                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>`;
+                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
+                    ${llActiveHtml}
+                `;
             }
-            // Verberg actieve sessie
+            // v78: actieve sessie card alleen tonen als L&L actief is (zonder main shift)
             const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) activeEl.style.display = 'none';
+            if (activeEl) {
+                if (session && session.llActive) {
+                    activeEl.style.display = 'block';
+                    document.getElementById('clockActiveContent').innerHTML = llActiveHtml ||
+                        '<p style="color:var(--qe-grey)">Geen actieve sessie</p>';
+                } else {
+                    activeEl.style.display = 'none';
+                }
+            }
         }
 
         // ── Voltooide sessies vandaag ──
