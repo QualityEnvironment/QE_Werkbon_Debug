@@ -1259,7 +1259,9 @@ window.QEClock = {
         session.registrationType = tijdLabel;  // compat met oude UI
         session.startTime        = ingeklokt || session.startTime;
         session.active           = isActive;
-        session.tagName          = (wo.remark || '').split(' - ')[0] || session.tagName || 'Bureau';
+        // v68: gebruik em-dash separator (' \u2014 ') zoals _clockIn schrijft.
+        // Voorheen split op ' - ' (hyphen) gaf hele remark incl. GPS in tagName.
+        session.tagName          = (wo.remark || '').split(' \u2014 ')[0].trim() || session.tagName || 'Bureau';
         if (uitgeklokt) {
             session.endTime = uitgeklokt;
         }

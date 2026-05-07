@@ -4310,9 +4310,10 @@ const app = {
             bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
             icon.textContent = isLate ? '⚠️' : '✅';
             const activeTag = QEClock.getActiveTagName();
+            const cleanTag = this._publicRemark(activeTag);
             text.textContent = isActive ? `Actief sinds ${session.startTime}` : `Ingeklokt om ${clockTime}`;
             text.style.color = isLate ? '#e65100' : '#2e7d32';
-            sub.textContent = isLate ? 'Te laat!' : (activeTag || 'Uitgeklokt');
+            sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Uitgeklokt');
             sub.style.color = isLate ? '#e65100' : '#2e7d32';
         } else {
             // Nog niet ingeclockt
@@ -4386,7 +4387,8 @@ const app = {
             bigStatus.textContent = isLL ? '📦' : (isLate ? '⚠️' : '✅');
             bigText.textContent = isLL ? 'Laden & Lossen' : 'Ingeklokt';
             bigText.style.color = isLate ? '#e65100' : 'var(--qe-green)';
-            bigTime.textContent = `${session.startTime} — ${session.tagName}${isLate ? ' (te laat)' : ''}`;
+            const _cleanTag = this._publicRemark(session.tagName);
+            bigTime.textContent = `${session.startTime} — ${_cleanTag}${isLate ? ' (te laat)' : ''}`;
 
             // Verberg NFC instructie, toon actieve sessie
             document.getElementById('clockNfcCard').style.display = 'none';
@@ -4409,7 +4411,7 @@ const app = {
                     </div>
                     <div style="display:flex;gap:16px;margin-bottom:8px">
                         <div><span style="font-size:12px;color:var(--qe-grey)">Start</span><br><span style="font-size:15px;font-weight:600">${session.startTime}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${session.tagName}</span></div>
+                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${this._publicRemark(session.tagName)}</span></div>
                     </div>
                     <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
                     ${llActiveBlock}
@@ -4464,7 +4466,7 @@ const app = {
                         <span>${typeIcon}</span>
                         <div>
                             <div style="font-size:14px;font-weight:500">${s.type}</div>
-                            <div style="font-size:11px;color:var(--qe-grey)">${s.tagName || ''}</div>
+                            <div style="font-size:11px;color:var(--qe-grey)">${this._publicRemark(s.tagName)}</div>
                         </div>
                     </div>
                     <div style="text-align:right">
@@ -5376,25 +5378,46 @@ const app = {
                 if (getField(wo, 'Tijd') === 'Te laat') lateCount++;
             }
 
-            // v66: GEEN per-werkbon time-entries fetch meer — Robaws rate-limit
-            // sloeg toe bij ~80 calls per render. We berekenen uren uit
-            // Ingeklokt/Uitgeklokt extraFields minus 60 min standaardpauze.
-            // L&L badge wordt voorlopig niet meer getoond (zou per-werkbon
-            // fetch vereisen). Uren komen dichtbij genoeg voor het overzicht.
-            const teByWoId = {};  // leeg — niet meer gebruikt voor uren
-            let totalHours = 0;
+            // v68: gepresteerde uren = (entry_eind − entry_start) − pauze.
+            // entry_start = max(Ingeklokt, startuur werknemer) afgerond op 5min als te laat.
+            // entry_eind = Uitgeklokt afgerond op 5min. Pauze = werknemer-veld.
+            // Geen per-werkbon time-entries fetch (zou rate-limit triggeren).
+            const teByWoId = {};
+            const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
+            const round5m = (mins) => Math.round(mins / 5) * 5;
+            // Haal pauze + startuur 1x van ingelogde user
+            let userStartuurMin = 7 * 60;  // 07:00 default
+            let userPauze = 60;
+            try {
+                const empRes = await RobawsAPI.get(`employees/${user.robawsEmployeeId}`);
+                if (empRes.code === 200 && empRes.data && empRes.data.extraFields) {
+                    for (const [name, fdata] of Object.entries(empRes.data.extraFields)) {
+                        const low = name.toLowerCase();
+                        if (low.includes('startuur')) {
+                            const v = RobawsAPI._extractFieldVal(fdata);
+                            if (v && /^\d{1,2}:\d{2}/.test(v)) userStartuurMin = m(v);
+                        } else if (low.includes('pauze')) {
+                            const v = RobawsAPI._extractFieldVal(fdata);
+                            const num = String(v).match(/(\d+)/);
+                            if (num) userPauze = parseInt(num[1], 10) || 60;
+                        }
+                    }
+                }
+            } catch(_) {}
+
             const computeHours = (wo) => {
                 const ef = wo.extraFields || {};
                 const inS = ef.Ingeklokt && ef.Ingeklokt.stringValue;
                 const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
                 if (!inS || !outS) return 0;
-                const m = (s) => { const x = String(s).match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
-                const mins = m(outS) - m(inS) - 60;  // 60 min pauze standaard
+                const inMin = m(inS);
+                const outMin = round5m(m(outS));
+                const startMin = inMin <= userStartuurMin ? userStartuurMin : round5m(inMin);
+                const mins = outMin - startMin - userPauze;
                 return Math.max(0, Math.round(mins / 60 * 100) / 100);
             };
-            for (const wo of workOrders) {
-                totalHours += computeHours(wo);
-            }
+            let totalHours = 0;
+            for (const wo of workOrders) totalHours += computeHours(wo);
 
             let html = '';
 
