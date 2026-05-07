@@ -3112,7 +3112,58 @@ const RobawsAPI = {
      * @param {number} [opts.breakMinutes]  Pauze in minuten
      * @param {string|number} opts.articleId  Uurcode-id (185 of 19786)
      */
-    async addWorkHoursTimeEntry(opts) {
+    /**
+     * v73: POST een L&L time-entry direct bij start (alleen startTime, geen endTime).
+     * Returns het time-entry id zodat we het kunnen updaten bij eind-scan.
+     */
+    async postOpenLLTimeEntry(opts) {
+        const { workOrderId, employeeId, startTime } = opts;
+        const te = {
+            employeeId: String(employeeId),
+            articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
+        };
+        if (startTime) {
+            const [sh, sm] = startTime.split(':').map(Number);
+            te.startTime = { hour: sh || 0, minute: sm || 0 };
+        }
+        // Geen endTime, geen hours — die worden later geupdate.
+        const res = await this.post(`work-orders/${workOrderId}/time-entries`, te);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('POST L&L time-entry faalde: ' + res.code + ' ' +
+                JSON.stringify(res.data).slice(0, 200));
+        }
+        return res.data && res.data.id;
+    },
+
+    /**
+     * v73: PUT update een bestaande L&L time-entry met endTime + hours.
+     * Robaws v2 ondersteunt PUT op /work-orders/{id}/time-entries/{teId}.
+     */
+    async closeOpenLLTimeEntry(workOrderId, teId, opts) {
+        const { startTime, endTime } = opts;
+        const body = {
+            articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
+        };
+        if (startTime) {
+            const [sh, sm] = startTime.split(':').map(Number);
+            body.startTime = { hour: sh || 0, minute: sm || 0 };
+        }
+        if (endTime) {
+            const [eh, em] = endTime.split(':').map(Number);
+            body.endTime = { hour: eh || 0, minute: em || 0 };
+        }
+        if (startTime && endTime) {
+            const [sh, sm] = startTime.split(':').map(Number);
+            const [eh, em] = endTime.split(':').map(Number);
+            const minutes = ((eh || 0) * 60 + (em || 0)) - ((sh || 0) * 60 + (sm || 0));
+            const hrs = Math.max(0, Math.round(minutes / 60 * 100) / 100);
+            body.hours = hrs;
+            body.billableHours = this._roundUpHalfHour(hrs);
+        }
+        return await this.put(`work-orders/${workOrderId}/time-entries/${teId}`, body);
+    },
+
+        async addWorkHoursTimeEntry(opts) {
         const { workOrderId, employeeId, startTime, endTime, breakMinutes, articleId } = opts;
         const te = {
             employeeId: String(employeeId),

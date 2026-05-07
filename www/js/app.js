@@ -5390,7 +5390,9 @@ const app = {
             // Geen per-werkbon time-entries fetch (zou rate-limit triggeren).
             const teByWoId = {};
             const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
-            const round5m = (mins) => Math.round(mins / 5) * 5;
+            // v74: kwartier-afronding (in=up, uit=down)
+            const roundUp15 = (mins) => Math.ceil(mins / 15) * 15;
+            const roundDown15 = (mins) => Math.floor(mins / 15) * 15;
             // Haal pauze + startuur 1x van ingelogde user
             let userStartuurMin = 7 * 60;  // 07:00 default
             let userPauze = 60;
@@ -5417,12 +5419,8 @@ const app = {
                 const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
                 if (!inS || !outS) return 0;
 
-                // v71: parse de werkbon-remark voor multiple klok-in/klok-uit cycli.
-                // Format: "klok-in: tag — gps — HH:MM\nklok-uit: ... — HH:MM" repeating.
-                // Voorbeeld dag met pauze tussen 12:00-13:00:
-                //   klok-in 06:45, klok-uit 12:00, klok-in 13:00, klok-uit 17:00 = 9.25u
-                // i.p.v. naïef 17:00 - 06:45 = 10.25u (- 60 pauze = 9.25 — toevallig OK,
-                // maar bij langere gaps gaat het mis).
+                // v74: kwartier-afronding. In = round UP 15min (Bureau: max met startuur).
+                //       Uit = round DOWN 15min. Geldig voor multi-cycle dagen ook.
                 let totalMins = 0;
                 const lines = String(wo.remark || '').split(/\r?\n/);
                 const cycles = [];
@@ -5437,21 +5435,21 @@ const app = {
                     }
                 }
                 if (cycles.length > 0) {
-                    // Toepassen: alleen op eerste cyclus startuur-correctie wanneer scan
-                    // voor startuur, voor andere cycli round5(actual). End altijd round5.
-                    let bureauApplied = false;  // alleen bij eerste cycle
                     for (let i = 0; i < cycles.length; i++) {
                         let [s, e] = cycles[i];
-                        const sMin = (i === 0 && s <= userStartuurMin) ? userStartuurMin : round5m(s);
-                        const eMin = round5m(e);
+                        // Eerste cycle: max(roundUp15, startuur). Andere: roundUp15.
+                        const sMin = (i === 0)
+                            ? Math.max(roundUp15(s), userStartuurMin)
+                            : roundUp15(s);
+                        const eMin = roundDown15(e);
                         if (eMin > sMin) totalMins += (eMin - sMin);
                     }
                     totalMins -= userPauze;
                 } else {
-                    // Geen cycli geparseerd (oudere werkbonnen) → fallback op Ingeklokt/Uitgeklokt
+                    // Fallback voor oudere werkbonnen (zonder klok-in/-uit regels)
                     const inMin = m(inS);
-                    const outMin = round5m(m(outS));
-                    const startMin = inMin <= userStartuurMin ? userStartuurMin : round5m(inMin);
+                    const outMin = roundDown15(m(outS));
+                    const startMin = Math.max(roundUp15(inMin), userStartuurMin);
                     totalMins = outMin - startMin - userPauze;
                 }
                 if (totalMins <= 0) return 0;
