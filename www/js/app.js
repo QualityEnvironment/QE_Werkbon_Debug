@@ -164,10 +164,31 @@ const app = {
             try { localStorage.removeItem('qe_pending_payments'); } catch (e) {}
             localStorage.setItem('qe_pending_cleanup_v2', '1');
         }
-        // Check of er al een sessie is. v79: de v78 localStorage-fallback is
-        // weer verwijderd — op verzoek van de gebruiker moet een OTA update
-        // forced logout veroorzaken zodat ze met verse PIN herinloggen.
-        // De forced logout zelf gebeurt in MainActivity.java vlak voor System.exit.
+        // v79: Force logout bij OTA update — versie-detectie in JS zelf.
+        // Dit werkt onafhankelijk van MainActivity.java (zodat ook v78-gebruikers
+        // die de OTA naar v79 ontvangen direct uitgelogd worden, zonder APK-rebuild).
+        // We vergelijken de huidige versie met de laatst gezien versie in localStorage.
+        // Mismatch → qe_user wissen vóór de auth-check, zodat showLogin() opkomt.
+        try {
+            const verRes = await fetch('version.json?_=' + Date.now());
+            const verJson = await verRes.json();
+            const currentVer = String(verJson.version || '');
+            const lastVer = localStorage.getItem('qe_last_seen_version');
+            const hasUser = !!localStorage.getItem('qe_user');
+            if (currentVer && hasUser && (lastVer == null || lastVer !== currentVer)) {
+                console.log('[App] OTA update gedetecteerd (v' + lastVer + ' → v' + currentVer + ') — forced logout');
+                try { localStorage.removeItem('qe_user'); } catch(_) {}
+            }
+            if (currentVer) {
+                try { localStorage.setItem('qe_last_seen_version', currentVer); } catch(_) {}
+            }
+        } catch(e) {
+            console.warn('[App] Versie-check faalde (geen OTA forced logout):', e && e.message);
+        }
+
+        // Check of er al een sessie is. De auth-check leest qe_user uit localStorage
+        // via api-bridge.js — als de OTA-detectie hierboven qe_user heeft gewist,
+        // valt deze automatisch terug op showLogin().
         try {
             const res = await fetch('api/auth.php?action=check');
             const data = await res.json();
