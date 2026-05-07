@@ -630,8 +630,9 @@ window.QEClock = {
             gpsText = 'GPS niet beschikbaar';
         }
 
-        // Opmerking voor werkbon = tag-naam (bv. "Bureau" of nummerplaat) + GPS
-        const opmerking = `${tag.name} - ${gpsText}`;
+        // v70: opmerking krijgt "klok-in: " prefix + tijd, om bij clock-out
+        // een 2e regel "klok-uit: ..." aan te kunnen toevoegen.
+        const opmerking = `klok-in: ${tag.name} \u2014 ${gpsText} \u2014 ${time}`;
 
         // Sessie bijwerken
         const currentUser = RobawsAPI.getLoggedInUser();
@@ -741,11 +742,18 @@ window.QEClock = {
         const actualStartMin = toMinutes(session.startTime);
         const expectedStartMin = toMinutes(expectedStart);
         let entryStartMin;
-        if (actualStartMin <= expectedStartMin) {
-            // Vroeg ingeklokt -> startuur werknemer gebruiken (geen rounding nodig)
+        // v70: startuur-correctie ALLEEN bij Bureau-scan. Bij camionet/L&L
+        // scan wordt entry_start gewoon afgerond op 5min (de werknemer is
+        // dan al onderweg/aan het werk, niet meer afhankelijk van startuur).
+        const useStartuurCorrection = (session.tagType === 'bureau');
+        if (useStartuurCorrection && actualStartMin <= expectedStartMin) {
+            // Vroeg ingeklokt op kantoor -> startuur werknemer gebruiken
             entryStartMin = expectedStartMin;
+        } else if (useStartuurCorrection) {
+            // Te laat op kantoor -> afgerond op 5 min
+            entryStartMin = round5(actualStartMin);
         } else {
-            // Te laat -> afgerond op 5 min
+            // Camionet of L&L -> altijd actual start, afgerond op 5 min
             entryStartMin = round5(actualStartMin);
         }
         const entryEndMin = round5(toMinutes(endTimeRaw));
@@ -758,9 +766,20 @@ window.QEClock = {
             '-> entry ' + entryStart + ' -> ' + entryEnd,
             '(pauze ' + pauseMinutes + 'min, bron ' + pauseSource + ')');
 
-        // 1. Update Uitgeklokt op werkbon (afgerond eind)
+        // v70: bij clock-out ook een 2e regel "klok-uit: ..." aan de werkbon-remark
+        // toevoegen, met huidige GPS + tijd. Krijg GPS van de uit-scan zelf.
+        let outGpsText = '';
         try {
-            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, entryEnd);
+            const pos2 = await this._getGPS();
+            outGpsText = `https://maps.google.com/?q=${pos2.latitude.toFixed(6)},${pos2.longitude.toFixed(6)}`;
+        } catch(_) {
+            outGpsText = 'GPS niet beschikbaar';
+        }
+        const klokUitLine = `klok-uit: ${tag.name} \u2014 ${outGpsText} \u2014 ${endTimeRaw}`;
+
+        // 1. Update Uitgeklokt op werkbon (afgerond eind) + remark-append
+        try {
+            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, entryEnd, klokUitLine);
         } catch(e) {
             console.warn('[Clock] Uitgeklokt update faalde:', e.message);
         }

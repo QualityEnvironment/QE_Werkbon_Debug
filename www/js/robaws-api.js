@@ -3065,16 +3065,24 @@ const RobawsAPI = {
         return { workOrderId, raw: putRes.data || woFull };
     },
 
-    /** Update Uitgeklokt-tijd op een tijdsregistratie-werkbon. v59: GET-then-PUT. */
-    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt) {
+    /**
+     * Update Uitgeklokt-tijd op een tijdsregistratie-werkbon.
+     * v59: GET-then-PUT (partial PUT zou andere velden wissen).
+     * v70: optioneel een extra regel aan de werkbon-remark appenden
+     *      (gebruikt voor "klok-uit: ..." regel).
+     */
+    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark) {
         const getRes = await this.get(`work-orders/${workOrderId}`);
         if (getRes.code !== 200 || !getRes.data) {
             throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
         }
         const wo = getRes.data;
         wo.extraFields = wo.extraFields || {};
-        // v60: Variant A — geen type/group, partial PUT zou andere velden wissen
         wo.extraFields['Uitgeklokt'] = { stringValue: uitgeklokt || '' };
+        if (appendRemark) {
+            const existing = String(wo.remark || '').trim();
+            wo.remark = existing ? (existing + '\n' + appendRemark) : appendRemark;
+        }
         try { localStorage.setItem('qe_last_uitg_put_req', JSON.stringify(wo)); } catch(_) {}
         const putRes = await this.put(`work-orders/${workOrderId}`, wo);
         try { localStorage.setItem('qe_last_uitg_put_res', JSON.stringify({code: putRes.code, data: putRes.data})); } catch(_) {}
