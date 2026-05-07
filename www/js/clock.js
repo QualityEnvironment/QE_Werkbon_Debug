@@ -901,8 +901,18 @@ window.QEClock = {
         // Geval 1: lopende L&L → afsluiten via PUT op de open time-entry.
         if (session.llActive) {
             const llStart = session.llStartTime;
-            const llEnd = fromMinutes(round5(toMinutes(time)));
-            const llStartRounded = fromMinutes(round5(toMinutes(llStart)));
+            // v76: L&L duur altijd naar BOVEN afgerond op kwartier, minimum 15 min.
+            // Werknemer krijgt voor 7 min laden toch een volle kwartier.
+            const startMinRaw = toMinutes(llStart);
+            const endMinRaw = toMinutes(time);
+            const actualDuration = Math.max(0, endMinRaw - startMinRaw);
+            const billableDuration = Math.max(15, Math.ceil(actualDuration / 15) * 15);
+            // Start blijft op 5 min afgerond (dichtbij de werkelijkheid).
+            // End = start + billable_duration (zo blijft het kwartier-veelvoud).
+            const startMinForDisplay = round5(startMinRaw);
+            const endMinForDisplay = startMinForDisplay + billableDuration;
+            const llEnd = fromMinutes(endMinForDisplay);
+            const llStartRounded = fromMinutes(startMinForDisplay);
             try {
                 if (session.llActiveTeId) {
                     // v73: PUT update met endTime
@@ -1382,9 +1392,38 @@ window.QEClock = {
             }];
         }
 
+        // v76: detecteer open L&L time-entry → zet session.llActive zodat UI het toont
+        try {
+            const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
+            if (teRes.code === 200 && teRes.data && teRes.data.items) {
+                const llArt = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
+                const openLL = teRes.data.items.find(te => {
+                    const aId = te.articleId || (te.article && te.article.id);
+                    if (String(aId) !== llArt) return false;
+                    const hasEnd = te.endTime && (te.endTime.hour || te.endTime.minute);
+                    return !hasEnd;
+                });
+                if (openLL) {
+                    session.llActive = true;
+                    session.llActiveTeId = openLL.id;
+                    if (openLL.startTime && (openLL.startTime.hour != null)) {
+                        session.llStartTime = String(openLL.startTime.hour).padStart(2,'0') +
+                            ':' + String(openLL.startTime.minute || 0).padStart(2,'0');
+                    }
+                } else {
+                    session.llActive = false;
+                    session.llActiveTeId = null;
+                    session.llStartTime = null;
+                }
+            }
+        } catch(e) {
+            console.warn('[Clock] L&L detectie mislukt:', e.message);
+        }
+
         this._saveSession(session);
         console.log('[Clock] Sessie gesynced vanuit Robaws-werkbon', wo.id,
-            '— actief:', isActive, ', start:', ingeklokt, ', eind:', uitgeklokt);
+            '— actief:', isActive, ', start:', ingeklokt, ', eind:', uitgeklokt,
+            ', L&L actief:', !!session.llActive);
     },
 
     // =============================================

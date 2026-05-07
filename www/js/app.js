@@ -5388,7 +5388,17 @@ const app = {
             // entry_start = max(Ingeklokt, startuur werknemer) afgerond op 5min als te laat.
             // entry_eind = Uitgeklokt afgerond op 5min. Pauze = werknemer-veld.
             // Geen per-werkbon time-entries fetch (zou rate-limit triggeren).
+            // v76: fetch time-entries per werkbon (max 31 dagen × ~1 werkbon = haalbaar
+            // binnen rate-limit). Resultaat cached in teByWoId. Toont L&L cycli + uren.
             const teByWoId = {};
+            for (const wo of workOrders) {
+                try {
+                    const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
+                    if (teRes.code === 200 && teRes.data && teRes.data.items) {
+                        teByWoId[wo.id] = teRes.data.items;
+                    }
+                } catch(_) { /* skip */ }
+            }
             const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
             // v74: kwartier-afronding (in=up, uit=down)
             const roundUp15 = (mins) => Math.ceil(mins / 15) * 15;
@@ -5523,16 +5533,23 @@ const app = {
                                 typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
                         }
 
-                        // L&L badge tonen als er een time-entry is met L&L articleId
+                        // v76: L&L badge + extra info — toont aantal L&L cycli en totale uren
                         const teList = teByWoId[wo.id] || [];
-                        const hasLL = teList.some(te => {
+                        const llArtId = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
+                        const llEntries = teList.filter(te => {
                             const aId = te.articleId || (te.article && te.article.id);
-                            return String(aId) === String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
+                            return String(aId) === llArtId;
                         });
+                        const hasLL = llEntries.length > 0;
+                        let llHours = 0;
+                        for (const te of llEntries) llHours += parseFloat(te.hours || 0);
 
                         // v67: GPS-link verbergen voor werknemer (zit alleen in werkbon-remark voor kantoor)
                         const gpsLink = '';
-                        const llBadge = hasLL ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 L&amp;L</span>' : '';
+                        const llBadge = hasLL
+                            ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 ' +
+                              llEntries.length + '× L&amp;L · ' + llHours.toFixed(2) + 'u</span>'
+                            : '';
 
                         // v64: kaartje opent het aanpassing-aanvraag scherm
                         html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
