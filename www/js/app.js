@@ -3994,28 +3994,47 @@ const app = {
 
             const workOrderId = werkbonResult.workOrderId;
 
-            // v93: Eenmalige artikels → taak voor Felicity (userId 6)
-            // De artikels staan NIET op de werkbon als line-item (geen Robaws articleId).
-            // Felicity moet ze in Robaws aanmaken en de werkbon aanvullen.
-            try {
-                const customArticles = (data.materials || []).filter(m => m.isCustom);
-                if (customArticles.length > 0 && workOrderId) {
+            // v93/v94: Eenmalige artikels → toevoegen als line-item op WERKBON (zonder articleId)
+            // + taak voor Felicity (userId 6) zodat zij het echte artikel in Robaws aanmaakt.
+            const customArticles = (data.materials || []).filter(m => m.isCustom);
+            if (customArticles.length > 0 && workOrderId) {
+                for (const m of customArticles) {
+                    try {
+                        const li = {
+                            type: 'LINE',
+                            description: m.name || 'Eenmalig artikel',
+                            quantity: parseFloat(m.quantity || 1),
+                            price: parseFloat(m.salePrice || m.unitPrice || 0),
+                        };
+                        const r = await RobawsAPI.post(`work-orders/${workOrderId}/line-items`, li);
+                        if (r.code !== 200 && r.code !== 201) {
+                            console.warn('[App] custom article werkbon line-item POST faalde:', r.code, r.data);
+                        } else {
+                            console.log('[App] custom article toegevoegd aan werkbon:', m.name);
+                        }
+                    } catch (e) {
+                        console.warn('[App] custom article werkbon line-item exception:', e && e.message);
+                    }
+                }
+                // Felicity-taak
+                try {
                     const lines = customArticles.map(m => {
                         const price = parseFloat(m.salePrice || m.unitPrice || 0).toFixed(2);
                         const qty = parseFloat(m.quantity || 1);
                         return `• ${m.name} — ${qty}× à €${price}`;
                     });
-                    const desc = 'Eenmalige artikels op deze werkbon — gelieve aan te maken in Robaws ' +
-                        'en als line-item toe te voegen aan de werkbon.\n\n' + lines.join('\n');
+                    const desc = 'Eenmalige artikels op deze werkbon — gelieve het echte artikel ' +
+                        'in Robaws aan te maken en de line-item op werkbon + factuur te corrigeren.' +
+                        '\n\n' + lines.join('\n');
                     await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                         title: '✏️ Eenmalig artikel toevoegen aan Robaws',
                         description: desc,
                         assignedUserId: 6, // Felicity
                     });
                     console.log('[App] Felicity-taak aangemaakt voor', customArticles.length, 'eenmalige artikels');
+                } catch (e) {
+                    console.warn('[App] Felicity-taak aanmaken mislukt (niet kritiek):', e && e.message);
                 }
-            } catch (e) {
-                console.warn('[App] Felicity-taak aanmaken mislukt (niet kritiek):', e && e.message);
             }
 
             // === STAP 2: Foto's + handtekening ===
@@ -4075,6 +4094,34 @@ const app = {
             // Waarschuw als er line-item fouten waren
             if (invoiceResult.errors && invoiceResult.errors.length > 0) {
                 console.warn('[Factuur] Errors bij toevoegen lijnen:', invoiceResult.errors);
+            }
+
+            // v94: Eenmalige artikels ook toevoegen als line-item op de FACTUUR
+            // (zonder articleId — Felicity corrigeert later naar het echte artikel).
+            const customArticlesForInvoice = (data.materials || []).filter(m => m.isCustom);
+            const invoiceId = (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.id) || null;
+            if (customArticlesForInvoice.length > 0 && invoiceId) {
+                const vatTariffId = this.currentWO.vatTariffId || '4';
+                for (const m of customArticlesForInvoice) {
+                    try {
+                        const li = {
+                            type: 'LINE',
+                            description: m.name || 'Eenmalig artikel',
+                            quantity: parseFloat(m.quantity || 1),
+                            price: parseFloat(m.salePrice || m.unitPrice || 0),
+                            vatTariffId: String(vatTariffId),
+                        };
+                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
+                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
+                        if (r.code !== 200 && r.code !== 201) {
+                            console.warn('[App] custom article factuur line-item POST faalde:', r.code, r.data);
+                        } else {
+                            console.log('[App] custom article toegevoegd aan factuur:', m.name);
+                        }
+                    } catch (e) {
+                        console.warn('[App] custom article factuur line-item exception:', e && e.message);
+                    }
+                }
             }
 
             this._markWOSubmitted(data);
