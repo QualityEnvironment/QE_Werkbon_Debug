@@ -2986,12 +2986,16 @@ const RobawsAPI = {
         overuren: 2,
     },
 
-    /** v83: mobilityTypeId waarden voor commute-entries in Robaws.
-     *  -3 = "chauffeur zonder passagiers" (default voor werknemers).
-     *  Andere waarden bestaan ook (passagier, fiets, ...) maar voor de monteur-app
-     *  gebruiken we standaard chauffeur zonder passagiers. */
+    /** v83/v95: mobilityTypeId waarden voor commute-entries in Robaws.
+     *   -1 = chauffeur (met passagiers)
+     *   -2 = passagier
+     *   -3 = chauffeur zonder passagiers (default voor werknemers)
+     */
     MOBILITY_TYPE_IDS: {
-        chauffeur: -3,
+        chauffeurMetPassagiers: -1,
+        passagier: -2,
+        chauffeur: -3,                  // = chauffeur zonder passagiers (legacy alias, default)
+        chauffeurZonderPassagiers: -3,
     },
 
     /** YYYY-MM-DD -> DD/MM/YYYY voor titel */

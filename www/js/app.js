@@ -6800,33 +6800,55 @@ const app = {
      */
     async promptKilometers(workOrderId, employeeId) {
         return new Promise((resolve) => {
-            // Bouw modal
+            // Bouw modal — v95: mobility-keuze + woonwerk-fiets checkbox
             let m = document.getElementById('kmPromptModal');
             if (m) m.remove();
             m = document.createElement('div');
             m.id = 'kmPromptModal';
             m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px';
             m.innerHTML = `
-                <div style="background:#fff;border-radius:16px;max-width:400px;width:100%;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
-                    <div style="font-size:20px;font-weight:700;color:var(--qe-darkblue);margin-bottom:8px;display:flex;align-items:center;gap:8px">
+                <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:92vh;overflow-y:auto">
+                    <div style="font-size:20px;font-weight:700;color:#1A237E;margin-bottom:6px;display:flex;align-items:center;gap:8px">
                         🚐 Kilometers vandaag
                     </div>
-                    <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px">
+                    <div style="font-size:13px;color:#666;margin-bottom:14px">
                         Hoeveel kilometers heb je heen en terug afgelegd?
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
                         <div>
-                            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:4px">Heen (km)</label>
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Heen (km)</label>
                             <input id="kmHeenInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:14px;font-size:18px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600">
+                                style="width:100%;padding:12px;font-size:17px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
                         </div>
                         <div>
-                            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:4px">Terug (km)</label>
+                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Terug (km)</label>
                             <input id="kmTerugInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:14px;font-size:18px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600">
+                                style="width:100%;padding:12px;font-size:17px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
                         </div>
                     </div>
-                    <button id="kmPromptSubmit" style="width:100%;padding:14px;background:var(--qe-darkblue);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600">
+
+                    <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Mobiliteit</label>
+                    <div id="kmMobilityRadio" style="display:grid;gap:6px;margin-bottom:14px">
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                            <input type="radio" name="kmMobility" value="-3" checked style="margin:0">
+                            <span>🚐 Chauffeur zonder passagiers</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                            <input type="radio" name="kmMobility" value="-1" style="margin:0">
+                            <span>🚐👥 Chauffeur (met passagiers)</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                            <input type="radio" name="kmMobility" value="-2" style="margin:0">
+                            <span>🧍 Passagier</span>
+                        </label>
+                    </div>
+
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:#fff8e1">
+                        <input id="kmFietsInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
+                        <span>🚲 Woonwerk-verkeer met de <strong>fiets</strong></span>
+                    </label>
+
+                    <button id="kmPromptSubmit" style="width:100%;padding:14px;background:#1A237E;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer">
                         Opslaan
                     </button>
                     <div id="kmPromptError" style="font-size:12px;color:#c62828;margin-top:8px;text-align:center;display:none"></div>
@@ -6835,6 +6857,7 @@ const app = {
 
             const heenEl = document.getElementById('kmHeenInput');
             const terugEl = document.getElementById('kmTerugInput');
+            const fietsEl = document.getElementById('kmFietsInput');
             const errEl = document.getElementById('kmPromptError');
             const btn = document.getElementById('kmPromptSubmit');
 
@@ -6844,23 +6867,52 @@ const app = {
             const submit = async () => {
                 const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
                 const terug = Math.max(0, Math.round(parseFloat(terugEl.value) || 0));
+                const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
+                const mobilityTypeId = mobRadio ? parseInt(mobRadio.value, 10) : -3;
+                const fiets = !!(fietsEl && fietsEl.checked);
+
                 btn.disabled = true;
                 btn.textContent = 'Opslaan...';
                 errEl.style.display = 'none';
 
                 try {
+                    // Stap 1: commute-entry voor de auto-km
                     const r = await RobawsAPI.addCommuteEntry({
                         workOrderId,
                         employeeId,
                         distance: heen,
                         returnDistance: terug,
+                        mobilityTypeId: mobilityTypeId,
                     });
                     if (r.code !== 200 && r.code !== 201) {
                         throw new Error('Robaws (' + r.code + ')');
                     }
+
+                    // Stap 2: als woonwerk-fiets aangevinkt → set extraField op werkbon
+                    // (kantoor kan filteren voor fietsvergoeding HR/fiscaal)
+                    if (fiets) {
+                        try {
+                            const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`);
+                            if (woFull.code === 200 && woFull.data) {
+                                woFull.data.extraFields = woFull.data.extraFields || {};
+                                woFull.data.extraFields['Woonwerk fiets'] = {
+                                    type: 'CHECKBOX',
+                                    group: null,
+                                    booleanValue: true,
+                                };
+                                await RobawsAPI.put(`work-orders/${workOrderId}`, woFull.data);
+                                console.log('[App] Woonwerk-fiets gemarkeerd op werkbon', workOrderId);
+                            }
+                        } catch (eFiets) {
+                            console.warn('[App] Woonwerk-fiets veld update faalde (niet kritiek):',
+                                eFiets && eFiets.message);
+                        }
+                    }
+
                     // Succes → modal weg
                     m.remove();
-                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km');
+                    const fietsTxt = fiets ? ' · 🚲 fiets gemarkeerd' : '';
+                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km' + fietsTxt);
                     resolve(true);
                 } catch (e) {
                     console.warn('[App] km POST faalde:', e && e.message);
