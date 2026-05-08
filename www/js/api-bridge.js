@@ -37,22 +37,11 @@ const APIBridge = {
         }));
     },
 
-    // Parse JSON body van een POST request.
-    // - String body: geparsed als JSON
-    // - FormData: omgezet naar plain object (single-valued keys; voor
-    //   meerwaardige keys gebruik de raw FormData op options.body)
-    // - Geen body: leeg object
-    // Vroeger werd bij FormData `null` teruggegeven, waardoor handlers met
-    // een `if (!body)` check een 400 gaven op legitieme uploads.
+    // Parse JSON body van een POST request
     async parseBody(options) {
-        if (!options || !options.body) return {};
-        if (typeof options.body === 'string') {
-            try { return JSON.parse(options.body); } catch (e) { return {}; }
-        }
-        if (options.body instanceof FormData) {
-            const obj = {};
-            for (const [k, v] of options.body.entries()) obj[k] = v;
-            return obj;
+        if (options.body) {
+            if (typeof options.body === 'string') return JSON.parse(options.body);
+            if (options.body instanceof FormData) return null; // FormData apart behandelen
         }
         return {};
     },
@@ -195,7 +184,7 @@ const APIBridge = {
         if (action === 'check-email') {
             const body = await this.parseBody(options);
             const email = (body.email || '').toLowerCase().trim();
-            // Primair: Robaws — lijst-endpoint bevat extraFields met Pincode.
+            // Via Robaws checken — lijst-endpoint bevat extraFields
             try {
                 const res = await RobawsAPI.get(`employees?email=${encodeURIComponent(email)}&limit=10`);
                 const items = (res.data && res.data.items) || [];
@@ -208,18 +197,21 @@ const APIBridge = {
                     console.log('[APIBridge] check-email:', email, 'hasPin:', hasPin);
                     return this.jsonResponse({ known: true, hasPin });
                 }
-                // API werkte maar email niet gevonden
-                return this.jsonResponse({ known: false }, 200);
             } catch(e) {
-                // Robaws onbereikbaar → val terug op lokale cache van eerdere
-                // online login op dit toestel. Geen hardcoded mapping meer.
-                const cached = !!localStorage.getItem('qe_emp_cache_' + email);
-                if (cached) {
+                // Robaws onbereikbaar → fallback naar lokale mapping + lokale PIN cache
+                const knownLocal = !!RobawsAPI.EMPLOYEES[email];
+                if (knownLocal) {
                     const hasLocalPin = await RobawsAPI.hasPin(email);
                     return this.jsonResponse({ known: true, hasPin: hasLocalPin });
                 }
-                return this.jsonResponse({ known: false }, 200);
             }
+            // Laatste fallback: lokale mapping
+            const knownLocal = !!RobawsAPI.EMPLOYEES[email];
+            if (knownLocal) {
+                const hasLocalPin = await RobawsAPI.hasPin(email);
+                return this.jsonResponse({ known: true, hasPin: hasLocalPin });
+            }
+            return this.jsonResponse({ known: false }, 200);
         }
 
         // Stap 2: login met PIN — alles via Robaws (PIN uit extra veld op werknemer)

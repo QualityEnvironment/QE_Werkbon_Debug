@@ -16,12 +16,34 @@ const RobawsAPI = {
     API_SECRET: 'xmFYgMmDi4xFLiPZy8qCslSKbCmSDIgIErmTWJZ5',
     TENANT: 'qualityenvironment',
 
-    // Werknemerinfo komt volledig uit Robaws. De vroegere hardcoded
-    // EMPLOYEES-mapping is verwijderd: bij login wordt het werknemerrecord
-    // (incl. employeeId, userId, rol) uit Robaws gehaald en lokaal gecachet
-    // via qe_emp_cache_<email>. Bij offline-fallback gebruikt _loginFallback
-    // alleen die cache, dus elke werknemer moet één keer online ingelogd
-    // zijn voordat offline-login werkt op dat toestel.
+    // === MEDEWERKERS MAPPING ===
+    // userId = Robaws USER id (voor assignedUserId/verantwoordelijke)
+    // employeeId = Robaws EMPLOYEE id (voor time-entries/planning)
+    // Bron: auth.php user_mapping + Robaws gebruikersbeheer
+    EMPLOYEES: {
+        // Techniekers
+        'glycera@qe.be':             { employeeId: 7,  userId: 10,    name: 'Glycera',    role: 'technieker' },
+        'sascha@qe.be':              { employeeId: 9,  userId: 18,    name: 'Sascha',     role: 'technieker' },
+        'daxleekens@qe.be':          { employeeId: 10, userId: 9,     name: 'Dax',        role: 'technieker' },
+        'olivier.puchacz@qe.be':     { employeeId: 12, userId: 13,    name: 'Olivier',    role: 'technieker' },
+        'yassine@qe.be':             { employeeId: 30, userId: 20,    name: 'Yassine',    role: 'technieker' },
+        // Monteurs
+        'levi@qe.be':                { employeeId: 1,  userId: 8,     name: 'Levi',       role: 'bureel' },
+        'stefan@qe.be':              { employeeId: 2,  userId: 21,    name: 'Stefan',     role: 'monteur' },
+        'jelle@qe.be':               { employeeId: 3,  userId: 14,    name: 'Jelle',      role: 'monteur' },
+        'wim@qe.be':                 { employeeId: 4,  userId: 22,    name: 'Wim',        role: 'monteur' },
+        'jens@qe.be':                { employeeId: 5,  userId: 23,    name: 'Jens',       role: 'monteur' },
+        'herve@qe.be':               { employeeId: 8,  userId: 15,    name: 'Herve',      role: 'monteur' },
+        'keng@qe.be':                { employeeId: 11, userId: 17,    name: 'Keng',       role: 'monteur' },
+        'joshua@qe.be':              { employeeId: 13, userId: 16,    name: 'Joshua',     role: 'monteur' },
+        // Bureel / kantoor
+        'vince@qe.be':               { employeeId: 16, userId: 5,     name: 'Vince',      role: 'bureel' },
+        'bjorn@qe.be':               { employeeId: 19, userId: 4,     name: 'Bjorn',      role: 'bureel' },
+        'bart@qe.be':                { employeeId: 20, userId: 7,     name: 'Bart',       role: 'bureel' },
+        'felicity@qe.be':            { employeeId: 21, userId: 6,     name: 'Felicity',   role: 'bureel' },
+        'rolf@qe.be':                { employeeId: 22, userId: 2,     name: 'Rolf',       role: 'bureel' },
+        'els@qe.be':                 { employeeId: 23, userId: 3,     name: 'Els',        role: 'bureel' },
+    },
 
     // === AUTH HEADERS ===
     getHeaders() {
@@ -291,39 +313,6 @@ const RobawsAPI = {
         }
     },
 
-    // ---- EMPLOYEE NAMES CACHE ----
-    // Vervangt de oude hardcoded EMPLOYEES.name lookup. Wordt opgebouwd
-    // bij elke succesvolle Robaws-call die een naam returnt (login,
-    // _resolveUserIdForEmployee, planning) en als JSON-blob in localStorage
-    // gepersisteerd.
-    _employeeNameCache: null,
-
-    _loadEmployeeNameCache() {
-        if (this._employeeNameCache) return this._employeeNameCache;
-        try {
-            const raw = localStorage.getItem('qe_employee_names');
-            this._employeeNameCache = raw ? JSON.parse(raw) : {};
-        } catch(e) {
-            this._employeeNameCache = {};
-        }
-        return this._employeeNameCache;
-    },
-
-    cacheEmployeeName(employeeId, name) {
-        if (!employeeId || !name) return;
-        const cache = this._loadEmployeeNameCache();
-        const key = String(employeeId);
-        if (cache[key] === name) return;
-        cache[key] = name;
-        try { localStorage.setItem('qe_employee_names', JSON.stringify(cache)); } catch(e) {}
-    },
-
-    getCachedEmployeeName(employeeId) {
-        if (!employeeId) return null;
-        const cache = this._loadEmployeeNameCache();
-        return cache[String(employeeId)] || null;
-    },
-
     formatAddress(addr) {
         if (!addr) return '';
         if (typeof addr === 'string') return addr;
@@ -370,12 +359,16 @@ const RobawsAPI = {
             }
         } catch(e) {
             console.error('[RobawsAPI] Fout bij werknemers ophalen:', e);
-            // Robaws onbereikbaar → val terug op lokale cache (vorige login)
+            // Fallback naar hardcoded EMPLOYEES als Robaws onbereikbaar
             return this._loginFallback(emailLower, pin);
         }
 
         if (!employee) {
-            // API werkt, maar geen werknemer met dit email — definitief afwijzen.
+            // Laatste poging: fallback mapping
+            if (this.EMPLOYEES[emailLower]) {
+                console.warn('[RobawsAPI] Werknemer niet gevonden via API, fallback naar EMPLOYEES mapping');
+                return this._loginFallback(emailLower, pin);
+            }
             return { success: false, error: 'Onbekend emailadres' };
         }
 
@@ -458,8 +451,6 @@ const RobawsAPI = {
         }
 
         const empName = [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.name || emailLower;
-        // Naam in lokale cache zodat planning-views ook offline werknemers herkennen
-        this.cacheEmployeeName(employee.id, empName);
 
         const user = {
             name: empName,
@@ -524,44 +515,50 @@ const RobawsAPI = {
         return { success: true };
     },
 
-    // Fallback login wanneer Robaws onbereikbaar is.
-    // Werkt UITSLUITEND op lokaal gecachte gegevens van een eerdere
-    // succesvolle online login (qe_emp_cache_<email> + qe_pin_<email>).
-    // Een werknemer die op dit toestel nog nooit online heeft ingelogd,
-    // kan dus offline niet inloggen — dat is opzettelijk: anders zou
-    // hardcoded fallback-data altijd bypass-mogelijkheid creëren.
+    // Fallback login als Robaws onbereikbaar is (gebruikt lokaal gecachte PIN + werknemerdata)
     async _loginFallback(email, pin) {
+        // Eerst proberen met lokaal gecachte werknemerdata
         const cached = localStorage.getItem('qe_emp_cache_' + email);
-        if (!cached) {
-            return { success: false, error: 'Geen verbinding met Robaws en geen lokale gegevens voor dit account' };
-        }
+        const emp = this.EMPLOYEES[email];
+
+        // PIN check via lokale cache
         const hasLocalPin = await this.hasPin(email);
-        if (!hasLocalPin) {
-            return { success: false, error: 'Geen verbinding met Robaws en geen lokale PIN' };
+        if (hasLocalPin) {
+            const ok = await this.verifyPin(email, pin);
+            if (!ok) return { success: false, error: 'PIN onjuist' };
+        } else if (!cached && !emp) {
+            return { success: false, error: 'Geen verbinding met Robaws en geen lokale gegevens' };
         }
-        const ok = await this.verifyPin(email, pin);
-        if (!ok) return { success: false, error: 'PIN onjuist' };
 
-        let c;
-        try { c = JSON.parse(cached); } catch(e) {
-            return { success: false, error: 'Lokale werknemersgegevens beschadigd' };
+        let user;
+        if (cached) {
+            const c = JSON.parse(cached);
+            const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || email;
+            const roleKey = (c.planningGroupName || '').toLowerCase();
+            const isMonteur = roleKey.includes('monteur');
+            const isBureel = roleKey.includes('kantoor') || roleKey.includes('bureel') || roleKey.includes('service');
+            let role = 'technieker';
+            if (isMonteur) role = 'monteur';
+            else if (isBureel) role = 'bureel';
+
+            user = {
+                name: name,
+                email: email,
+                robawsEmployeeId: c.id,
+                robawsUserId: c.userId || null,
+                role: role,
+                roleName: role.charAt(0).toUpperCase() + role.slice(1),
+            };
+        } else if (emp) {
+            user = {
+                name: emp.name,
+                email: email,
+                robawsEmployeeId: emp.employeeId,
+                robawsUserId: emp.userId || null,
+                role: emp.role || 'technieker',
+                roleName: emp.role || 'Technieker',
+            };
         }
-        const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || email;
-        const roleKey = (c.planningGroupName || '').toLowerCase();
-        const isMonteur = roleKey.includes('monteur');
-        const isBureel = roleKey.includes('kantoor') || roleKey.includes('bureel') || roleKey.includes('service');
-        let role = 'technieker';
-        if (isMonteur) role = 'monteur';
-        else if (isBureel) role = 'bureel';
-
-        const user = {
-            name,
-            email,
-            robawsEmployeeId: c.id,
-            robawsUserId: c.userId || null,
-            role,
-            roleName: role.charAt(0).toUpperCase() + role.slice(1),
-        };
 
         console.log('[RobawsAPI] Offline fallback login:', user.name);
         localStorage.setItem('qe_user', JSON.stringify(user));
@@ -593,6 +590,36 @@ const RobawsAPI = {
     },
     clearPin(email) {
         localStorage.removeItem('qe_pin_' + email.toLowerCase());
+    },
+
+    // Pre-seed PINs: zet standaard PINs voor alle medewerkers als er
+    // nog geen PIN in localStorage staat. Wordt 1x aangeroepen bij app-start.
+    seedDefaultPins() {
+        const defaults = {
+            'qe_pin_glycera@qe.be':             'a54c598cbb607a2623dd1d29368d5aa64229bfc224115d6fea618b2d2e79619e',
+            'qe_pin_sascha@qe.be':              '1d432b29e5217c19439da5e02fc8bc81b5006ad09198ff0ffb275557e18f7809',
+            'qe_pin_daxleekens@qe.be':          '9b5eac84180accf54ce661a253526459a2251afb6595051f3f3be2b84e3b0864',
+            'qe_pin_olivier.puchacz@qe.be':     '8575b1f59819e2a6cb5de911df99f93e9639852cc2999bff0b382562e3654953',
+            'qe_pin_yassine@qe.be':             'a9c7fd61e0a48fd12b9afd6ab8e4520989a3fe8491c44a9c0b415dab21408be7',
+            'qe_pin_levi@qe.be':                '7dfd3cb772282ee863b8eb04eb539cf56f8e05c5e028bff353edc42151aa74ec',
+            'qe_pin_stefan@qe.be':              '3a138748f7cc4993f54392b2d47c985979eb936fcb2b5d6b6ab08cbafeead5e2',
+            'qe_pin_jelle@qe.be':               'af2ec424ed0ca866c7bf798f6eb35c04b238d34f25eb2ad573cd3e073f76e5b2',
+            'qe_pin_wim@qe.be':                 '66ba111ed4633c1d266166c3c0f6b86a0df4cd239fc0e69ca74a7534e5674e38',
+            'qe_pin_jens@qe.be':                '9da1c6b5c705013b0d4255d787ec5e2b35b47d24fcd09082b9e384473631d4dc',
+            'qe_pin_herve@qe.be':               '02ab3d13cb03f01497456162a4ef1513927ce6eb3f425e96ca6037136bec2ad6',
+            'qe_pin_keng@qe.be':                '78f36df6ef01cd5ebf531ec6327562dd5838ac95fa956e0060e00097817cb5ee',
+            'qe_pin_joshua@qe.be':              'f8403d86e335eb67affe196d046aeaa8ad573de187be6f380b40b73e484e6d05',
+            'qe_pin_vince@qe.be':               'fb23a739555cf34c451e1445185272a5c1e6bfc30d5d2758196e1ad76ad18cb2',
+            'qe_pin_bjorn@qe.be':               '90b30b51a0472f2714bdb1f896403a6b1adfb2921404845eebfddc88c5cd8b21',
+            'qe_pin_bart@qe.be':                'd141f2502ee7759d344cea4b9b019957fa61627b0dcf3c969c5a6609d7979c46',
+            'qe_pin_felicity@qe.be':            'c2ffea1001f12af0b83e9a00dbd85176f6eedd6ebb62a319a47beb6368d3fbdb',
+            'qe_pin_rolf@qe.be':                '97295e4354d4aa98782a29bb40ef2b51c54f4f1a6a5cc8b248a8960728e473cf',
+        };
+        for (const [key, hash] of Object.entries(defaults)) {
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, hash);
+            }
+        }
     },
 
     // ---- EMPLOYEE PHOTO ----

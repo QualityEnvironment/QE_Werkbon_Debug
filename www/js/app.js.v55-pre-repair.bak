@@ -164,31 +164,7 @@ const app = {
             try { localStorage.removeItem('qe_pending_payments'); } catch (e) {}
             localStorage.setItem('qe_pending_cleanup_v2', '1');
         }
-        // v79: Force logout bij OTA update — versie-detectie in JS zelf.
-        // Dit werkt onafhankelijk van MainActivity.java (zodat ook v78-gebruikers
-        // die de OTA naar v79 ontvangen direct uitgelogd worden, zonder APK-rebuild).
-        // We vergelijken de huidige versie met de laatst gezien versie in localStorage.
-        // Mismatch → qe_user wissen vóór de auth-check, zodat showLogin() opkomt.
-        try {
-            const verRes = await fetch('version.json?_=' + Date.now());
-            const verJson = await verRes.json();
-            const currentVer = String(verJson.version || '');
-            const lastVer = localStorage.getItem('qe_last_seen_version');
-            const hasUser = !!localStorage.getItem('qe_user');
-            if (currentVer && hasUser && (lastVer == null || lastVer !== currentVer)) {
-                console.log('[App] OTA update gedetecteerd (v' + lastVer + ' → v' + currentVer + ') — forced logout');
-                try { localStorage.removeItem('qe_user'); } catch(_) {}
-            }
-            if (currentVer) {
-                try { localStorage.setItem('qe_last_seen_version', currentVer); } catch(_) {}
-            }
-        } catch(e) {
-            console.warn('[App] Versie-check faalde (geen OTA forced logout):', e && e.message);
-        }
-
-        // Check of er al een sessie is. De auth-check leest qe_user uit localStorage
-        // via api-bridge.js — als de OTA-detectie hierboven qe_user heeft gewist,
-        // valt deze automatisch terug op showLogin().
+        // Check of er al een sessie is
         try {
             const res = await fetch('api/auth.php?action=check');
             const data = await res.json();
@@ -199,6 +175,7 @@ const app = {
                 this.showLogin();
             }
         } catch (e) {
+            // Geen sessie of fout — toon login
             this.showLogin();
         }
 
@@ -363,8 +340,6 @@ const app = {
                 'qe_submitted_wos',
                 'qe_timer_state',
                 'qe_timer_correction',
-            
-                'qe_clock_pending_',       // v72: per-user pending sync queue (prefix-match)
             ];
             const planItemPrefix = 'planItem_';
             const clockSessionPrefix = 'qe_clock_v2_';
@@ -4329,42 +4304,16 @@ const app = {
         const clockTime = QEClock.getClockTime();
         const isLate = QEClock.isLate();
 
-        // v79: planning statusbar moet 4 staten kunnen tonen:
-        //   - Nog niet ingeklokt (NFC niet gescand vandaag)
-        //   - Ingeklokt (actief, hoofd-shift loopt)
-        //   - L&L actief (📦 prominent)
-        //   - Uitgeklokt (🏁 finish-vlag)
-        const llActive = session && session.llActive;
-        const llStartTxt = session && session.llStartTime ? session.llStartTime : '';
-        if (llActive) {
-            // L&L actief — krijgt voorrang in de statusbar
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-left:4px solid #1565c0';
-            icon.textContent = '📦';
-            text.textContent = 'Bezig met Laden & Lossen';
-            text.style.color = '#0d47a1';
-            sub.textContent = llStartTxt ? ('Gestart om ' + llStartTxt) : 'Actief';
-            sub.style.color = '#1565c0';
-        } else if (isActive) {
-            // Ingeklokt (hoofd-shift)
+        if (isActive || clockTime) {
+            // Ingeklokt of al gescand vandaag
             const lateClass = isLate ? 'background:linear-gradient(135deg,#fff3e0,#ffccbc)' : 'background:linear-gradient(135deg,#e8f5e9,#c8e6c9)';
             bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
             icon.textContent = isLate ? '⚠️' : '✅';
             const activeTag = QEClock.getActiveTagName();
-            const cleanTag = this._publicRemark(activeTag);
-            text.textContent = `Actief sinds ${session.startTime}`;
+            text.textContent = isActive ? `Actief sinds ${session.startTime}` : `Ingeklokt om ${clockTime}`;
             text.style.color = isLate ? '#e65100' : '#2e7d32';
-            sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Ingeklokt');
+            sub.textContent = isLate ? 'Te laat!' : (activeTag || 'Uitgeklokt');
             sub.style.color = isLate ? '#e65100' : '#2e7d32';
-        } else if (clockTime) {
-            // Uitgeklokt — 🏁 finish-vlag
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e8eaf6,#c5cae9);border-left:4px solid #001E45';
-            icon.textContent = '🏁';
-            text.textContent = `Uitgeklokt — ${clockTime}`;
-            text.style.color = '#001E45';
-            sub.textContent = 'Klaar voor vandaag';
-            sub.style.color = '#3f51b5';
         } else {
             // Nog niet ingeclockt
             const isLateNow = QEClock.isLate();
@@ -4431,25 +4380,15 @@ const app = {
         const bigText = document.getElementById('clockBigText');
         const bigTime = document.getElementById('clockBigTime');
 
-        // v78: L&L active block wordt onafhankelijk gerenderd, ook als main session inactief.
-        const llActiveHtml = session && session.llActive ? `
-            <div style="margin-top:10px;padding:14px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:8px;display:flex;align-items:center;gap:12px">
-                <span style="font-size:28px">📦</span>
-                <div>
-                    <div style="font-size:15px;font-weight:700;color:#0d47a1">Bezig met Laden &amp; Lossen</div>
-                    <div style="font-size:12px;color:#1565c0;opacity:0.9;margin-top:2px">Gestart om ${session.llStartTime || '?'} — scan de L&amp;L tag opnieuw om te stoppen</div>
-                </div>
-            </div>` : '';
-
         if (isActive) {
             const isLate = session.registrationType === 'Te laat';
             const isLL = session.registrationType === 'Laden & Lossen';
             bigStatus.textContent = isLL ? '📦' : (isLate ? '⚠️' : '✅');
             bigText.textContent = isLL ? 'Laden & Lossen' : 'Ingeklokt';
             bigText.style.color = isLate ? '#e65100' : 'var(--qe-green)';
-            const _cleanTag = this._publicRemark(session.tagName);
-            bigTime.textContent = `${session.startTime} — ${_cleanTag}${isLate ? ' (te laat)' : ''}`;
+            bigTime.textContent = `${session.startTime} — ${session.tagName}${isLate ? ' (te laat)' : ''}`;
 
+            // Verberg NFC instructie, toon actieve sessie
             document.getElementById('clockNfcCard').style.display = 'none';
             const activeEl = document.getElementById('clockActiveSession');
             if (activeEl) {
@@ -4461,10 +4400,9 @@ const app = {
                     </div>
                     <div style="display:flex;gap:16px;margin-bottom:8px">
                         <div><span style="font-size:12px;color:var(--qe-grey)">Start</span><br><span style="font-size:15px;font-weight:600">${session.startTime}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${this._publicRemark(session.tagName)}</span></div>
+                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${session.tagName}</span></div>
                     </div>
                     <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
-                    ${llActiveHtml}
                 `;
             }
         } else {
@@ -4490,27 +4428,16 @@ const app = {
                         <div style="font-size:32px;margin-bottom:8px">📵</div>
                         <div style="font-size:15px;font-weight:600;margin-bottom:4px">NFC niet beschikbaar</div>
                         <div style="font-size:13px;color:var(--qe-grey)">Zet NFC aan in je telefoon-instellingen</div>
-                        ${llActiveHtml}
                     </div>`;
             } else {
                 nfcCard.innerHTML = `
                     <div style="font-size:32px;margin-bottom:8px">📱</div>
                     <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
-                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
-                    ${llActiveHtml}
-                `;
+                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>`;
             }
-            // v78: actieve sessie card alleen tonen als L&L actief is (zonder main shift)
+            // Verberg actieve sessie
             const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) {
-                if (session && session.llActive) {
-                    activeEl.style.display = 'block';
-                    document.getElementById('clockActiveContent').innerHTML = llActiveHtml ||
-                        '<p style="color:var(--qe-grey)">Geen actieve sessie</p>';
-                } else {
-                    activeEl.style.display = 'none';
-                }
-            }
+            if (activeEl) activeEl.style.display = 'none';
         }
 
         // ── Voltooide sessies vandaag ──
@@ -4527,7 +4454,7 @@ const app = {
                         <span>${typeIcon}</span>
                         <div>
                             <div style="font-size:14px;font-weight:500">${s.type}</div>
-                            <div style="font-size:11px;color:var(--qe-grey)">${this._publicRemark(s.tagName)}</div>
+                            <div style="font-size:11px;color:var(--qe-grey)">${s.tagName || ''}</div>
                         </div>
                     </div>
                     <div style="text-align:right">
@@ -4541,11 +4468,7 @@ const app = {
         }
 
         // ── Pending sync count ──
-        // v71: pending queue is per user (qe_clock_pending_<email>), niet global
-        const _pcUser = RobawsAPI.getLoggedInUser();
-        const _pcKey = _pcUser ? `qe_clock_pending_${_pcUser.email}` : null;
-        let pendingCount = 0;
-        try { pendingCount = _pcKey ? (JSON.parse(localStorage.getItem(_pcKey) || '[]').length) : 0; } catch(_) {}
+        const pendingCount = JSON.parse(localStorage.getItem('qe_clock_pending') || '[]').length;
         const pendingEl = document.getElementById('clockPendingCount');
         if (pendingEl) {
             pendingEl.textContent = pendingCount > 0
@@ -5407,134 +5330,37 @@ const app = {
         }
 
         try {
-            // v58: Tijdsregistratie-werkbonnen i.p.v. time-registrations
-            const today = new Date();
-            today.setHours(12, 0, 0, 0);
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const monthPrefix = `${yyyy}-${mm}`;
-            const monthNames = ['januari','februari','maart','april','mei','juni',
-                'juli','augustus','september','oktober','november','december'];
-            const monthLabel = `${monthNames[today.getMonth()].toUpperCase()} ${yyyy}`;
+            const registrations = await RobawsAPI.getTimeRegistrationHistory(user.robawsEmployeeId, 30);
 
-            const userId = user.robawsUserId || user.userId;
-            const workOrders = await RobawsAPI.getMyTimeRegistrationWorkOrders(userId, monthPrefix);
+            if (registrations.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="margin-top:20px">
+                        <div class="empty-icon">⏰</div>
+                        <h3>Geen registraties</h3>
+                        <p>Scan een NFC tag om je eerste tijdsregistratie te starten</p>
+                    </div>`;
+                return;
+            }
 
-            // Helper: extra-veld waarde uit werkbon
-            const getField = (wo, fieldName) => {
-                const ef = wo.extraFields || {};
-                return RobawsAPI._extractFieldVal(ef[fieldName]);
-            };
-
-            // Groepeer per datum (1 werkbon = 1 dag in dit nieuwe model)
+            // Groepeer per datum
             const byDate = {};
-            for (const wo of workOrders) {
-                const date = (wo.date || '').substring(0, 10);
-                if (!date) continue;
+            for (const reg of registrations) {
+                const date = reg.startDate.substring(0, 10);
                 if (!byDate[date]) byDate[date] = [];
-                byDate[date].push(wo);
+                byDate[date].push(reg);
             }
 
-            // Totalen berekenen — uren komen uit time-entries op de werkbon
-            // (we lazy-loaden per dag bij rendering om N+1 te beperken)
+            // Totalen berekenen
+            const totalHours = registrations.reduce((sum, r) => sum + (r.hours || 0), 0);
             const totalDays = Object.keys(byDate).length;
-            let lateCount = 0;
-            for (const wo of workOrders) {
-                if (getField(wo, 'Tijd') === 'Te laat') lateCount++;
-            }
-
-            // v68: gepresteerde uren = (entry_eind − entry_start) − pauze.
-            // entry_start = max(Ingeklokt, startuur werknemer) afgerond op 5min als te laat.
-            // entry_eind = Uitgeklokt afgerond op 5min. Pauze = werknemer-veld.
-            // Geen per-werkbon time-entries fetch (zou rate-limit triggeren).
-            // v76: fetch time-entries per werkbon (max 31 dagen × ~1 werkbon = haalbaar
-            // binnen rate-limit). Resultaat cached in teByWoId. Toont L&L cycli + uren.
-            const teByWoId = {};
-            for (const wo of workOrders) {
-                try {
-                    const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
-                    if (teRes.code === 200 && teRes.data && teRes.data.items) {
-                        teByWoId[wo.id] = teRes.data.items;
-                    }
-                } catch(_) { /* skip */ }
-            }
-            const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
-            // v74: kwartier-afronding (in=up, uit=down)
-            const roundUp15 = (mins) => Math.ceil(mins / 15) * 15;
-            const roundDown15 = (mins) => Math.floor(mins / 15) * 15;
-            // Haal pauze + startuur 1x van ingelogde user
-            let userStartuurMin = 7 * 60;  // 07:00 default
-            let userPauze = 60;
-            try {
-                const empRes = await RobawsAPI.get(`employees/${user.robawsEmployeeId}`);
-                if (empRes.code === 200 && empRes.data && empRes.data.extraFields) {
-                    for (const [name, fdata] of Object.entries(empRes.data.extraFields)) {
-                        const low = name.toLowerCase();
-                        if (low.includes('startuur')) {
-                            const v = RobawsAPI._extractFieldVal(fdata);
-                            if (v && /^\d{1,2}:\d{2}/.test(v)) userStartuurMin = m(v);
-                        } else if (low.includes('pauze')) {
-                            const v = RobawsAPI._extractFieldVal(fdata);
-                            const num = String(v).match(/(\d+)/);
-                            if (num) userPauze = parseInt(num[1], 10) || 60;
-                        }
-                    }
-                }
-            } catch(_) {}
-
-            const computeHours = (wo) => {
-                const ef = wo.extraFields || {};
-                const inS = ef.Ingeklokt && ef.Ingeklokt.stringValue;
-                const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
-                if (!inS || !outS) return 0;
-
-                // v74: kwartier-afronding. In = round UP 15min (Bureau: max met startuur).
-                //       Uit = round DOWN 15min. Geldig voor multi-cycle dagen ook.
-                let totalMins = 0;
-                const lines = String(wo.remark || '').split(/\r?\n/);
-                const cycles = [];
-                let pendingIn = null;
-                for (const line of lines) {
-                    const inM = line.match(/klok-in:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
-                    const outM = line.match(/klok-uit:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
-                    if (inM) pendingIn = m(inM[1]);
-                    else if (outM && pendingIn !== null) {
-                        cycles.push([pendingIn, m(outM[1])]);
-                        pendingIn = null;
-                    }
-                }
-                if (cycles.length > 0) {
-                    for (let i = 0; i < cycles.length; i++) {
-                        let [s, e] = cycles[i];
-                        // Eerste cycle: max(roundUp15, startuur). Andere: roundUp15.
-                        const sMin = (i === 0)
-                            ? Math.max(roundUp15(s), userStartuurMin)
-                            : roundUp15(s);
-                        const eMin = roundDown15(e);
-                        if (eMin > sMin) totalMins += (eMin - sMin);
-                    }
-                    totalMins -= userPauze;
-                } else {
-                    // Fallback voor oudere werkbonnen (zonder klok-in/-uit regels)
-                    const inMin = m(inS);
-                    const outMin = roundDown15(m(outS));
-                    const startMin = Math.max(roundUp15(inMin), userStartuurMin);
-                    totalMins = outMin - startMin - userPauze;
-                }
-                if (totalMins <= 0) return 0;
-                // v69: ceil naar 0.5 (billableHours-stijl) voor consistency met aanpassing-scherm.
-                const rawHours = totalMins / 60;
-                return Math.ceil(rawHours * 2) / 2;
-            };
-            let totalHours = 0;
-            for (const wo of workOrders) totalHours += computeHours(wo);
+            const lateCount = registrations.filter(r => r.type === 'Te laat').length;
 
             let html = '';
 
             // Samenvatting kaart
             html += `
                 <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
-                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
+                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Laatste 30 dagen</div>
                     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
                         <div>
                             <div style="font-size:28px;font-weight:700">${totalHours.toFixed(1)}</div>
@@ -5551,73 +5377,64 @@ const app = {
                     </div>
                 </div>`;
 
-            // Per dag: alle dagen van huidige maand t/m vandaag
+            // Per datum groep — toon ALLE 30 dagen, ook lege (UX-fix v55)
             const days = ['Zo','Ma','Di','Wo','Do','Vr','Za'];
+            // Bouw een lijst van alle 30 dagen (today → 29 dagen geleden)
             const allDates = [];
-            for (let day = today.getDate(); day >= 1; day--) {
-                const d = new Date(yyyy, today.getMonth(), day, 12, 0, 0);
-                const ddStr = String(d.getDate()).padStart(2, '0');
-                allDates.push(`${yyyy}-${mm}-${ddStr}`);
+            const today = new Date();
+            today.setHours(12, 0, 0, 0);
+            for (let i = 0; i < 30; i++) {
+                const d = new Date(today);
+                d.setDate(today.getDate() - i);
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                allDates.push(`${yyyy}-${mm}-${dd}`);
             }
 
             for (const date of allDates) {
-                const wos = byDate[date] || [];
+                const regs = byDate[date] || [];
                 const d = new Date(date + 'T12:00:00');
                 const dayName = days[d.getDay()];
                 const dateStr = d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' });
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                const dayTotal = regs.reduce((sum, r) => sum + (r.hours || 0), 0);
 
-                if (wos.length > 0) {
-                    let dayTotal = 0;
-                    for (const wo of wos) {
-                        dayTotal += computeHours(wo);
-                    }
+                // Header per dag
+                if (regs.length > 0) {
                     html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
                         <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
                         <div style="font-size:12px;color:var(--qe-grey)">${dayTotal.toFixed(1)} uur</div>
                     </div>`;
 
-                    for (const wo of wos) {
-                        const tijd = getField(wo, 'Tijd') || 'Op tijd';
-                        const ingeklokt = getField(wo, 'Ingeklokt');
-                        const uitgeklokt = getField(wo, 'Uitgeklokt') || '...';
+                    for (const reg of regs) {
+                        const startTime = new Date(reg.startDate).toTimeString().slice(0, 5);
+                        const endTime = reg.endDate ? new Date(reg.endDate).toTimeString().slice(0, 5) : '...';
+                        const hours = reg.hours ? `${reg.hours}u` : '';
 
                         let typeIcon, typeBg, typeColor;
-                        switch (tijd) {
+                        switch (reg.type) {
                             case 'Te laat':
                                 typeIcon = '⚠️'; typeBg = '#fff8e1'; typeColor = '#e65100'; break;
-                            case 'Ziek':
-                                typeIcon = '🤒'; typeBg = '#ffebee'; typeColor = '#b71c1c'; break;
+                            case 'Laden & Lossen':
+                                typeIcon = '📦'; typeBg = '#e3f2fd'; typeColor = '#1565c0'; break;
+                            case 'Extra uren':
+                                typeIcon = '🔄'; typeBg = '#f3e5f5'; typeColor = '#7b1fa2'; break;
                             default:
                                 typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
                         }
 
-                        // v76: L&L badge + extra info — toont aantal L&L cycli en totale uren
-                        const teList = teByWoId[wo.id] || [];
-                        const llArtId = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
-                        const llEntries = teList.filter(te => {
-                            const aId = te.articleId || (te.article && te.article.id);
-                            return String(aId) === llArtId;
-                        });
-                        const hasLL = llEntries.length > 0;
-                        let llHours = 0;
-                        for (const te of llEntries) llHours += parseFloat(te.hours || 0);
+                        // GPS link uit opmerkingen halen
+                        const gpsMatch = (reg.remarks || '').match(/https:\/\/maps\.google\.com\/\?q=[\d.,\-]+/);
+                        const gpsLink = gpsMatch ? `<a href="${gpsMatch[0]}" onclick="event.stopPropagation()" style="font-size:11px;color:var(--qe-purple);text-decoration:none">📍</a>` : '';
 
-                        // v67: GPS-link verbergen voor werknemer (zit alleen in werkbon-remark voor kantoor)
-                        const gpsLink = '';
-                        const llBadge = hasLL
-                            ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 ' +
-                              llEntries.length + '× L&amp;L · ' + llHours.toFixed(2) + 'u</span>'
-                            : '';
-
-                        // v64: kaartje opent het aanpassing-aanvraag scherm
-                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${reg.id}')">
                             <div style="display:flex;align-items:center;justify-content:space-between">
                                 <div style="display:flex;align-items:center;gap:10px">
                                     <span style="font-size:18px">${typeIcon}</span>
                                     <div>
-                                        <div style="font-size:14px;font-weight:500">${ingeklokt || '?'} → ${uitgeklokt}${llBadge}</div>
-                                        <div style="font-size:11px;color:${typeColor}">${tijd} ${gpsLink}</div>
+                                        <div style="font-size:14px;font-weight:500">${startTime} → ${endTime} <span style="font-size:12px;font-weight:400;color:var(--qe-grey)">${hours}</span></div>
+                                        <div style="font-size:11px;color:${typeColor}">${reg.type} ${gpsLink}</div>
                                     </div>
                                 </div>
                                 <div style="font-size:18px;color:var(--qe-grey)">›</div>
@@ -5625,6 +5442,7 @@ const app = {
                         </div>`;
                     }
                 } else {
+                    // Lege dag: compacte rij
                     const opacity = isWeekend ? '0.4' : '0.6';
                     const label = isWeekend ? 'Weekend' : 'Geen registratie';
                     html += `<div style="margin-bottom:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:#fafafa;border-radius:8px;opacity:${opacity}">
@@ -5640,78 +5458,61 @@ const app = {
         }
     },
 
-    /**
-     * v64: Open het aanpassing-aanvragen scherm voor een specifieke
-     * Tijdsregistratie-werkbon (was vroeger time-registration).
-     */
-    async openAanpassing(workOrderId) {
-        this._aanpassingWoId = workOrderId;
+    /** Open het aanpassing-aanvragen scherm voor een specifieke registratie */
+    async openAanpassing(regId) {
+        // Sla regId op voor gebruik in het scherm
+        this._aanpassingRegId = regId;
         this.navigate('screenAanpassing');
 
         const content = document.getElementById('aanpassingContent');
         content.innerHTML = '<div class="spinner"></div>';
 
         try {
-            const res = await RobawsAPI.get(`work-orders/${workOrderId}`);
-            if (res.code !== 200 || !res.data) throw new Error('Werkbon niet gevonden');
-            const wo = res.data;
-            const ef = wo.extraFields || {};
-            const tijd       = (ef.Tijd && ef.Tijd.stringValue)       || 'Op tijd';
-            const ingeklokt  = (ef.Ingeklokt && ef.Ingeklokt.stringValue)  || '';
-            const uitgeklokt = (ef.Uitgeklokt && ef.Uitgeklokt.stringValue) || '';
+            const res = await RobawsAPI.get(`time-registrations/${regId}`);
+            if (res.code !== 200 || !res.data) throw new Error('Registratie niet gevonden');
+            const reg = res.data;
 
-            const dateOnly = (wo.date || '').substring(0, 10);
-            const dateStr = dateOnly
-                ? new Date(dateOnly + 'T12:00:00').toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' })
-                : '';
+            const startDt = new Date(reg.startDate);
+            const endDt = reg.endDate ? new Date(reg.endDate) : null;
+            const startTime = startDt.toTimeString().slice(0, 5);
+            const endTime = endDt ? endDt.toTimeString().slice(0, 5) : '';
+            const dateStr = startDt.toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' });
 
             let typeIcon;
-            switch (tijd) {
+            switch (reg.type) {
                 case 'Te laat': typeIcon = '⚠️'; break;
-                case 'Ziek':    typeIcon = '🤒'; break;
-                default:        typeIcon = '✅'; break;
+                case 'Laden & Lossen': typeIcon = '📦'; break;
+                case 'Extra uren': typeIcon = '🔄'; break;
+                default: typeIcon = '✅'; break;
             }
 
-            // Haal time-entries op voor totaal-uren weergave
-            let totalHours = 0;
-            try {
-                const teRes = await RobawsAPI.get(`work-orders/${workOrderId}/time-entries?limit=100`);
-                if (teRes.code === 200 && teRes.data && teRes.data.items) {
-                    for (const te of teRes.data.items) totalHours += parseFloat(te.hours || 0);
-                }
-            } catch(_) {}
-
             content.innerHTML = `
-                <!-- Huidige werkbon -->
+                <!-- Huidige registratie -->
                 <div class="card" style="padding:16px;margin-bottom:16px">
                     <div style="font-size:13px;color:var(--qe-grey);margin-bottom:8px">${dateStr}</div>
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
                         <span style="font-size:24px">${typeIcon}</span>
                         <div>
-                            <div style="font-size:18px;font-weight:600">${ingeklokt || '?'} → ${uitgeklokt || '...'}</div>
-                            <div style="font-size:13px;color:var(--qe-grey)">${tijd} · ${totalHours.toFixed(2)} uur</div>
+                            <div style="font-size:18px;font-weight:600">${startTime} → ${endTime || '...'}</div>
+                            <div style="font-size:13px;color:var(--qe-grey)">${reg.type} · ${reg.hours || 0} uur</div>
                         </div>
                     </div>
-                    ${(() => { const pub = this._publicRemark(wo.remark); return pub ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${this.escapeHtml(pub)}</div>` : ''; })()}
-                    <div style="font-size:11px;color:var(--qe-grey);margin-top:8px">Werkbon #${wo.id}</div>
+                    ${reg.remarks ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${reg.remarks}</div>` : ''}
                 </div>
 
                 <!-- Aanpassing formulier -->
                 <div class="card" style="padding:16px">
                     <h3 style="font-size:16px;color:var(--qe-darkblue);margin-bottom:16px">Aanpassing aanvragen</h3>
-                    <p style="font-size:12px;color:var(--qe-grey);margin-bottom:14px">
-                        De aanvraag wordt als taak naar Vince gestuurd. Hij past de uren handmatig aan in Robaws.
-                    </p>
 
                     <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste ingeklokt</label>
-                        <input type="time" id="aanpassingStart" value="${ingeklokt}"
+                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste startuur</label>
+                        <input type="time" id="aanpassingStart" value="${startTime}"
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
                     </div>
 
                     <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste uitgeklokt</label>
-                        <input type="time" id="aanpassingEnd" value="${uitgeklokt}"
+                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste einduur</label>
+                        <input type="time" id="aanpassingEnd" value="${endTime}"
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
                     </div>
 
@@ -5721,7 +5522,7 @@ const app = {
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box"></textarea>
                     </div>
 
-                    <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${wo.id}')"
+                    <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${regId}')"
                         style="padding:14px;font-size:15px;font-weight:600" id="btnSubmitAanpassing">
                         📩 Aanpassing indienen
                     </button>
@@ -5732,8 +5533,8 @@ const app = {
         }
     },
 
-    /** v64: Dien de aanpassing in als taak gekoppeld aan de werkbon. */
-    async submitAanpassing(workOrderId) {
+    /** Dien de aanpassing in als taak bij de tijdsregistratie */
+    async submitAanpassing(regId) {
         const btn = document.getElementById('btnSubmitAanpassing');
         const startVal = document.getElementById('aanpassingStart').value;
         const endVal = document.getElementById('aanpassingEnd').value;
@@ -5749,19 +5550,15 @@ const app = {
 
         try {
             const user = RobawsAPI.getLoggedInUser();
-            const description = `Aanpassing aangevraagd door ${user ? user.name : 'onbekend'} ` +
-                `voor werkbon #${workOrderId}:\n\n` +
-                `Juiste ingeklokt: ${startVal || '(niet gewijzigd)'}\n` +
-                `Juiste uitgeklokt: ${endVal || '(niet gewijzigd)'}\n\n` +
-                `Opmerking: ${opmerking}`;
+            const description = `Aanpassing aangevraagd door ${user ? user.name : 'onbekend'}:\n\nJuiste startuur: ${startVal || '(niet gewijzigd)'}\nJuiste einduur: ${endVal || '(niet gewijzigd)'}\n\nOpmerking: ${opmerking}`;
 
-            await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+            await RobawsAPI.createTaskForTimeRegistration(regId, {
                 title: `Uren aanpassing — ${user ? user.name : 'onbekend'}`,
                 description: description,
-                assignedUserId: '5', // Vince Van de Vliet (kantoor)
+                assignedUserId: '5', // Vince van de Vliet (kantoor)
             });
 
-            this.toast('Aanpassing ingediend bij Vince ✓');
+            this.toast('Aanpassing ingediend ✓');
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {
@@ -6454,122 +6251,4 @@ const app = {
         section.style.display = '';
     },
 
-    toggleChecklistItem(checklistKey, itemId, checked) {
-        if (!this.currentWO) return;
-        const woId = this.currentWO.id;
-        if (!this.woData[woId].checklist) this.woData[woId].checklist = {};
-        this.woData[woId].checklist[itemId] = checked;
-
-        // Update voortgang
-        const checklist = ONDERHOUD_DATA.CHECKLISTS[checklistKey];
-        if (checklist) {
-            const saved = this.woData[woId].checklist;
-            const doneCount = Object.values(saved).filter(v => v).length;
-            const pct = Math.round(doneCount / checklist.items.length * 100);
-            const bar = document.getElementById('checklistProgress');
-            const label = document.getElementById('checklistPct');
-            if (bar) bar.style.width = pct + '%';
-            if (label) label.textContent = pct + '%';
-        }
-
-        // Doorhalen van afgevinkte items
-        const span = document.getElementById(`clItem_${itemId}`);
-        if (span) span.style.textDecoration = checked ? 'line-through' : 'none';
-
-        this._saveWoData();
-    },
-
-    /** v72: multi-line aware. Voor Tijdsregistratie-werkbonnen kan de remark
-     * meerdere klok-in/klok-uit regels bevatten + eventueel mens-gerichte
-     * notities. Strategie:
-     *   1. Splits op nieuwe regels.
-     *   2. Voor elke regel: strip 'klok-(in|uit):\s*' prefix en knip vanaf
-     *      de eerste " — " of " - http" (whitespace verplicht).
-     *   3. Concatenate de schone delen, gescheiden door '\n'.
-     *   4. Lege regels worden weggegooid.
-     * Tag-namen zonder spaties rond interne hyphens (bv. "1-XXD-141") blijven
-     * intact omdat we \s+ aan beide kanten van de separator verplichten.
-     */
-    _publicRemark(remark) {
-        if (!remark) return '';
-        const cleanLine = (line) => {
-            let s = String(line || '').replace(/^\s*klok-(in|uit):\s*/i, '');
-            const m = s.match(/^(.*?)\s+[\u2014-]\s+/);
-            if (m) return m[1].trim();
-            const httpIdx = s.indexOf('http');
-            if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-\u2014]+$/, '').trim();
-            return s.trim();
-        };
-        const lines = String(remark).split(/\r?\n/).map(cleanLine).filter(Boolean);
-        // Dedupliceer opeenvolgende identieke entries (bv. 2x "Bureau" voor in+uit)
-        const dedup = [];
-        for (const l of lines) {
-            if (dedup.length === 0 || dedup[dedup.length - 1] !== l) dedup.push(l);
-        }
-        return dedup.join('\n');
-    },
-
-    // ========================================
-    // v59 TEST: éénmalige werkbon-aanmaak
-    // ========================================
-    async testCreateTimeRegistration() {
-        const resultEl = document.getElementById('testTrResult');
-        resultEl.style.color = 'var(--qe-grey)';
-        resultEl.textContent = '⏳ Bezig...';
-
-        try {
-            const user = RobawsAPI.getLoggedInUser();
-            if (!user) throw new Error('Niet ingelogd');
-
-            const now = new Date();
-            const yyyy = now.getFullYear();
-            const mm = String(now.getMonth() + 1).padStart(2, '0');
-            const dd = String(now.getDate()).padStart(2, '0');
-            const hh = String(now.getHours()).padStart(2, '0');
-            const mi = String(now.getMinutes()).padStart(2, '0');
-            const dateStr = `${yyyy}-${mm}-${dd}`;
-            const timeStr = `${hh}:${mi}`;
-
-            const result = await RobawsAPI.createTimeRegistrationWorkOrder({
-                employeeId: user.robawsEmployeeId,
-                employeeName: user.name || user.email,
-                userId: user.robawsUserId,
-                dateStr: dateStr,
-                ingeklokt: timeStr,
-                tijdLabel: 'Op tijd',
-                opmerking: 'TEST WERKBON - https://maps.google.com/?q=51.234,4.567',
-            });
-
-            resultEl.style.color = '#2e7d32';
-            const woUrl = `https://app.robaws.com/work-orders/${result.workOrderId}`;
-            resultEl.innerHTML = '✅ Werkbon aangemaakt: <a href="' + woUrl +
-                '" target="_blank" style="color:#1565c0">#' + result.workOrderId +
-                '</a>\n\nKlik link, controleer alle velden in Robaws, en stuur screenshot.';
-        } catch (e) {
-            resultEl.style.color = '#c62828';
-            // Probeer ook de laatste req/res uit localStorage te tonen voor debugging
-            let extra = '';
-            try {
-                const postRes = localStorage.getItem('qe_last_tr_post_res');
-                const putReq = localStorage.getItem('qe_last_tr_put_req');
-                const putRes = localStorage.getItem('qe_last_tr_put_res');
-                if (postRes) extra += '\n\nPOST response: ' + postRes.slice(0, 200);
-                if (putRes) extra += '\n\nPUT response: ' + putRes.slice(0, 300);
-                if (putReq) extra += '\n\nPUT request body: ' + putReq.slice(0, 400);
-            } catch(_) {}
-            resultEl.textContent = '❌ FOUT: ' + e.message + extra;
-        }
-    },
-
-    // ========================================
-    // DARK MODE
-    // ========================================
-    toggleDarkMode(enabled) {
-        document.body.classList.toggle('dark-mode', enabled);
-        localStorage.setItem('qe_dark_mode', enabled ? '1' : '0');
-    },
-};
-
-// Zet app expliciet op window zodat screen-guards in clock.js werken (v53)
-window.app = app;
-document.addEventListener('DOMContentLoaded', () => app.init());
+    toggleC

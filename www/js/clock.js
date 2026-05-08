@@ -62,14 +62,40 @@ window.QEClock = {
 
     /**
      * Haal de echte Brussel-tijd op via internet.
-     * Primair: Robaws API response Date header (we zijn er toch al ingelogd
-     * en gebruiken hem voor alle andere calls). Fallback: WorldTimeAPI
-     * (gratis dienst die regelmatig down/rate-limited is).
-     * Slaat het verschil (offset) op t.o.v. de lokale klok.
+     * Gebruikt WorldTimeAPI als primaire bron, met fallback naar eigen Robaws API
+     * response headers. Slaat het verschil (offset) op t.o.v. de lokale klok.
      * Moet minstens 1x aangeroepen worden bij app-start.
      */
     async _loadServerTimeOffset() {
-        // Primair: Robaws API Date header
+        try {
+            const localBefore = Date.now();
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+
+            // Primaire bron: WorldTimeAPI (geeft Brussel-tijd direct)
+            const res = await fetch('https://worldtimeapi.org/api/timezone/Europe/Brussels', {
+                signal: controller.signal,
+                cache: 'no-store',
+            });
+            clearTimeout(timeout);
+            const localAfter = Date.now();
+            const localMid = (localBefore + localAfter) / 2; // corrigeer voor latency
+
+            if (res.ok) {
+                const data = await res.json();
+                // data.datetime = "2026-05-05T08:07:00.123456+02:00"
+                const serverTime = new Date(data.datetime).getTime();
+                this._serverOffset = serverTime - localMid;
+                this._serverOffsetLoaded = true;
+                console.log('[Clock] Internet-tijd geladen (WorldTimeAPI). Offset:', this._serverOffset, 'ms',
+                    '(' + (this._serverOffset > 0 ? '+' : '') + Math.round(this._serverOffset / 1000) + 's)');
+                return;
+            }
+        } catch (e) {
+            console.warn('[Clock] WorldTimeAPI niet bereikbaar:', e.message);
+        }
+
+        // Fallback: gebruik Robaws API response Date header
         try {
             const localBefore = Date.now();
             const controller = new AbortController();
@@ -95,32 +121,6 @@ window.QEClock = {
             }
         } catch (e) {
             console.warn('[Clock] Robaws Date header niet bereikbaar:', e.message);
-        }
-
-        // Fallback: WorldTimeAPI
-        try {
-            const localBefore = Date.now();
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 8000);
-            const res = await fetch('https://worldtimeapi.org/api/timezone/Europe/Brussels', {
-                signal: controller.signal,
-                cache: 'no-store',
-            });
-            clearTimeout(timeout);
-            const localAfter = Date.now();
-            const localMid = (localBefore + localAfter) / 2;
-
-            if (res.ok) {
-                const data = await res.json();
-                const serverTime = new Date(data.datetime).getTime();
-                this._serverOffset = serverTime - localMid;
-                this._serverOffsetLoaded = true;
-                console.log('[Clock] Internet-tijd geladen (WorldTimeAPI fallback). Offset:', this._serverOffset, 'ms',
-                    '(' + (this._serverOffset > 0 ? '+' : '') + Math.round(this._serverOffset / 1000) + 's)');
-                return;
-            }
-        } catch (e) {
-            console.warn('[Clock] WorldTimeAPI niet bereikbaar:', e.message);
         }
 
         // Geen internet? Offset blijft 0 (= lokale klok)
