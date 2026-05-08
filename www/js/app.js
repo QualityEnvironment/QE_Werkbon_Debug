@@ -4329,6 +4329,13 @@ const app = {
      * Bij verandering: PUT updates Betaling-veld op werkbon + order + factuur,
      * en opent eventueel het nieuwe betaalscherm.
      */
+    /**
+     * v89-fix: betaalmethode-keuze NIET via overlay-modal maar via een NAVIGATE
+     * naar een dedicated screen. De overlay-modal renderde alleen de header in
+     * een aantal Android WebViews — vermoedelijk een interactie tussen de
+     * scan-result-overlay en deze modal. Een full-screen via this.navigate
+     * gebruikt het bestaande screen-systeem dat 100% betrouwbaar werkt.
+     */
     openChangePaymentMethodModal() {
         let ctx;
         try {
@@ -4340,73 +4347,61 @@ const app = {
             return;
         }
 
-        // Verwijder bestaande modal als die nog open staat
-        let m = document.getElementById('changePmModal');
-        if (m) m.remove();
-
         const inv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
         const amount = parseFloat(inv.totalInclVat || 0).toFixed(2);
         const cur = ctx.paymentMethod || '';
 
-        // v88-fix: gebruik DOM API i.p.v. innerHTML met template literals — sommige
-        // WebView-versies parsen geneste <button> in template-literals onbetrouwbaar
-        // waardoor enkel de eerste div rendert.
-        m = document.createElement('div');
-        m.id = 'changePmModal';
-        m.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:99998;' +
-            'background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
-
-        const card = document.createElement('div');
-        card.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;' +
-            'padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;box-sizing:border-box';
-
-        const title = document.createElement('div');
-        title.style.cssText = 'font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px';
-        title.textContent = 'Betaalmethode aanpassen';
-        card.appendChild(title);
-
-        const subtitle = document.createElement('div');
-        subtitle.style.cssText = 'font-size:13px;color:#888;margin-bottom:16px';
-        subtitle.innerHTML = 'Factuur ' + (ctx.invoiceLogicId || inv.logicId || '') +
-            ' — € ' + amount + '<br>Kies een nieuwe methode of open het bestaande betaalscherm.';
-        card.appendChild(subtitle);
-
-        const methods = [
-            { key: 'Viva wallet',   icon: '💳', label: 'Viva Wallet (terminal)' },
-            { key: 'Cash',          icon: '💵', label: 'Cash' },
-            { key: 'Overschrijving',icon: '🏦', label: 'Overschrijving ter plaatse' },
-            { key: 'Via factuur',   icon: '📋', label: 'Via factuur' },
-        ];
-        for (const opt of methods) {
-            const isCurrent = (opt.key === cur)
-                || (opt.key === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
-            const btn = document.createElement('button');
-            btn.style.cssText = 'display:flex;align-items:center;gap:12px;width:100%;' +
-                'padding:14px 16px;margin-bottom:8px;border-radius:10px;' +
-                'font-size:15px;text-align:left;cursor:pointer;box-sizing:border-box;' +
-                'border:2px solid ' + (isCurrent ? '#1565C0' : '#cfd8dc') + ';' +
-                'background:' + (isCurrent ? '#e3f2fd' : '#fff') + ';color:#212121';
-            btn.innerHTML = '<span style="font-size:20px">' + opt.icon + '</span>' +
-                '<span style="flex:1;font-weight:500">' + opt.label + '</span>' +
-                (isCurrent ? '<span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;font-weight:600">huidig</span>' : '');
-            btn.addEventListener('click', () => this.changeLastPaymentMethod(opt.key));
-            card.appendChild(btn);
+        // Zoek of maak het screen op-the-fly als het nog niet bestaat
+        let screen = document.getElementById('screenChangePm');
+        if (!screen) {
+            screen = document.createElement('div');
+            screen.id = 'screenChangePm';
+            screen.className = 'screen';
+            // App-content container vinden — gebruik de gangbare locatie
+            const appContent = document.querySelector('.app-content') || document.body;
+            appContent.appendChild(screen);
+            // Registreer ook in screen-titles zodat de header wordt geüpdate
+            try { this.screenTitles = this.screenTitles || {}; } catch(_) {}
         }
 
-        const cancelBtn = document.createElement('button');
-        cancelBtn.style.cssText = 'width:100%;padding:12px;margin-top:8px;background:#f5f5f5;' +
-            'color:#444;border:none;border-radius:10px;font-size:14px;cursor:pointer;box-sizing:border-box';
-        cancelBtn.textContent = 'Annuleren';
-        cancelBtn.addEventListener('click', () => m.remove());
-        card.appendChild(cancelBtn);
+        const mkBtnHtml = (key, icon, label) => {
+            const isCurrent = (key === cur) || (key === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
+            const bg = isCurrent ? '#e3f2fd' : '#ffffff';
+            const border = isCurrent ? '#1565C0' : '#cfd8dc';
+            const tag = isCurrent ? ' <span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;font-weight:600;margin-left:6px">HUIDIG</span>' : '';
+            return '<div onclick="app.changeLastPaymentMethod(\'' + key + '\')" ' +
+                'style="display:flex;align-items:center;gap:12px;padding:18px 16px;margin-bottom:10px;' +
+                'border:2px solid ' + border + ';border-radius:12px;background:' + bg + ';' +
+                'cursor:pointer;font-size:16px;color:#212121">' +
+                '<span style="font-size:24px">' + icon + '</span>' +
+                '<span style="flex:1;font-weight:500">' + label + tag + '</span>' +
+                '<span style="font-size:18px;color:#888">›</span>' +
+                '</div>';
+        };
 
-        const statusDiv = document.createElement('div');
-        statusDiv.id = 'changePmStatus';
-        statusDiv.style.cssText = 'font-size:12px;text-align:center;margin-top:10px;display:none';
-        card.appendChild(statusDiv);
+        screen.innerHTML =
+            '<div style="padding:16px;max-width:600px;margin:0 auto">' +
+                '<div style="font-size:22px;font-weight:700;color:#1A237E;margin-bottom:6px">Betaalmethode aanpassen</div>' +
+                '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
+                '<div style="font-size:18px;color:#1A237E;font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
+                '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
+                mkBtnHtml('Viva wallet',   '💳', 'Viva Wallet (terminal)') +
+                mkBtnHtml('Cash',          '💵', 'Cash') +
+                mkBtnHtml('Overschrijving','🏦', 'Overschrijving ter plaatse') +
+                mkBtnHtml('Via factuur',   '📋', 'Via factuur') +
+                '<div id="changePmStatus" style="font-size:13px;text-align:center;margin-top:12px;padding:10px;display:none;border-radius:8px"></div>' +
+                '<button onclick="app.goBack()" style="width:100%;padding:14px;margin-top:14px;background:#f5f5f5;color:#444;border:none;border-radius:10px;font-size:15px;cursor:pointer">Annuleren</button>' +
+            '</div>';
 
-        m.appendChild(card);
-        document.body.appendChild(m);
+        // Navigate naar het screen (gebruikt het bestaande systeem dat back-knop, history, etc. afhandelt)
+        try {
+            this.navigate('screenChangePm');
+        } catch (e) {
+            // Fallback: rauw zichtbaar maken als navigate faalt
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            screen.classList.add('active');
+            screen.style.display = 'block';
+        }
     },
 
     /**
@@ -4417,7 +4412,6 @@ const app = {
      *    werk localStorage context bij, en open eventueel het nieuwe betaalscherm.
      */
     async changeLastPaymentMethod(newMethod) {
-        const modal = document.getElementById('changePmModal');
         const statusEl = document.getElementById('changePmStatus');
         let ctx;
         try {
@@ -4425,7 +4419,7 @@ const app = {
         } catch (e) { ctx = {}; }
         if (!ctx.workOrderId) {
             this.toast('Geen laatste betaling gevonden');
-            if (modal) modal.remove();
+            this.goBack();
             return;
         }
 
@@ -4435,13 +4429,13 @@ const app = {
 
         if (sameMethod) {
             // Zelfde methode → gewoon het oude betaalscherm openen (als er één is)
-            if (modal) modal.remove();
             if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
                 this.showOverschrijvingScreen(ctx.invoiceResult);
             } else {
                 this.toast('Geen betaalscherm voor ' + newMethod);
+                this.goBack();
             }
             return;
         }
@@ -4449,7 +4443,8 @@ const app = {
         // Andere methode → PUT updates op alle 3 docs
         if (statusEl) {
             statusEl.style.display = 'block';
-            statusEl.style.color = 'var(--qe-grey)';
+            statusEl.style.color = '#444';
+            statusEl.style.background = '#fff8e1';
             statusEl.textContent = '⏳ Bijwerken in Robaws…';
         }
 
@@ -4463,6 +4458,7 @@ const app = {
                 console.warn('[App] Betaling update partial fail:', res.results);
                 if (statusEl) {
                     statusEl.style.color = '#c62828';
+                    statusEl.style.background = '#ffebee';
                     const failed = [];
                     if (res.results.workOrder && !res.results.workOrder.ok) failed.push('werkbon');
                     if (res.results.salesOrder && !res.results.salesOrder.ok) failed.push('order');
@@ -4476,22 +4472,23 @@ const app = {
             ctx.timestamp = Date.now();
             localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
 
-            if (modal) modal.remove();
             this.toast('Betaalmethode → ' + newMethod);
 
-            // Open nieuw betaalscherm waar relevant
+            // Open nieuw betaalscherm waar relevant — anders terug naar Uitgevoerd
             if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
                 this.showOverschrijvingScreen(ctx.invoiceResult);
             } else {
-                // Cash / Via factuur — refresh Uitgevoerd zodat de knop label update
+                // Cash / Via factuur — terug naar Uitgevoerd, knop-label is nu geüpdate
+                this.navigate('screenUitgevoerd');
                 this.loadUitgevoerd();
             }
         } catch (e) {
             console.error('[App] changeLastPaymentMethod error:', e);
             if (statusEl) {
                 statusEl.style.color = '#c62828';
+                statusEl.style.background = '#ffebee';
                 statusEl.textContent = 'Fout: ' + (e && e.message);
             }
         }
