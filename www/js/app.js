@@ -6074,32 +6074,92 @@ const app = {
             const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
             const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-            // v88: Eén "Laatste betaling" knop bovenaan — klik opent modal met 4 betaalmethoden
-            // (zodat Olivier kan switchen na een Viva-fout).
+            // v88/v92: "Laatste betaling" knop bovenaan. v92 fetcht ALTIJD uit Robaws —
+            // de laatste factuur met status "Technieker" of "Gecontrolleerd" en
+            // assignedUser = ingelogde technieker. Onafhankelijk van localStorage.
             let paymentBtns = '';
             try {
-                const ctxRaw = localStorage.getItem('qe_last_payment_context');
-                if (ctxRaw) {
-                    const ctx = JSON.parse(ctxRaw);
-                    const inv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
+                const user = RobawsAPI.getLoggedInUser();
+                const userId = user && (user.robawsUserId || user.userId);
+                let inv = null;
+                if (userId) {
+                    inv = await RobawsAPI.getLatestInvoiceForUser(userId);
+                }
+                if (inv) {
+                    // Linked werkbon + order ophalen voor change-method flow
+                    const linked = await RobawsAPI.getInvoiceLinkedDocs(inv.id);
+                    const betField = (inv.extraFields && inv.extraFields.Betaling) || null;
+                    const method = (betField && betField.stringValue) || 'Onbekend';
                     const amount = parseFloat(inv.totalInclVat || 0).toFixed(2);
-                    const method = ctx.paymentMethod || '?';
+                    const logicId = inv.logicId || '';
+
+                    // qe_last_payment_context bijwerken zodat changeLastPaymentMethod het pakt
+                    try {
+                        const ctx = {
+                            workOrderId: linked.workOrderId,
+                            salesOrderId: linked.salesOrderId,
+                            invoiceId: String(inv.id),
+                            invoiceLogicId: logicId,
+                            paymentMethod: method,
+                            invoiceResult: {
+                                invoice: {
+                                    id: String(inv.id),
+                                    logicId: logicId,
+                                    totalInclVat: inv.totalInclVat,
+                                    paymentInstruction: inv.paymentInstruction,
+                                    formattedOgm: this._formatOgm(inv.paymentInstruction),
+                                },
+                                payment: {
+                                    amount: inv.totalInclVat,
+                                    ogm: inv.paymentInstruction,
+                                    formattedOgm: this._formatOgm(inv.paymentInstruction),
+                                },
+                            },
+                            timestamp: Date.now(),
+                        };
+                        localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+                    } catch(_) {}
+
                     const methodIcon = method === 'Viva wallet' ? '💳'
                         : method === 'Cash' ? '💵'
                         : method.startsWith('Overschrijving') ? '🏦'
-                        : '📋';
+                        : method === 'Via factuur' ? '📋'
+                        : '💼';
                     paymentBtns = `
                         <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
                             <div style="display:flex;align-items:center;justify-content:space-between">
                                 <div style="flex:1">
                                     <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${ctx.invoiceLogicId || inv.logicId || ''} — € ${amount}</div>
+                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${logicId} — € ${amount}</div>
                                     <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
                                 </div>
                             </div>
                         </div>`;
+                } else {
+                    // Fallback: localStorage context tonen als Robaws-fetch faalt of geen match
+                    const ctxRaw = localStorage.getItem('qe_last_payment_context');
+                    if (ctxRaw) {
+                        const ctx = JSON.parse(ctxRaw);
+                        const cInv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
+                        const amount = parseFloat(cInv.totalInclVat || 0).toFixed(2);
+                        const method = ctx.paymentMethod || '?';
+                        const methodIcon = method === 'Viva wallet' ? '💳'
+                            : method === 'Cash' ? '💵'
+                            : method.startsWith('Overschrijving') ? '🏦'
+                            : '📋';
+                        paymentBtns = `
+                            <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
+                                <div style="display:flex;align-items:center;justify-content:space-between">
+                                    <div style="flex:1">
+                                        <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
+                                        <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${ctx.invoiceLogicId || cInv.logicId || ''} — € ${amount}</div>
+                                        <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
+                                    </div>
+                                </div>
+                            </div>`;
+                    }
                 }
-            } catch(e) {}
+            } catch(e) { console.warn('[App] Laatste betaling fetch fout:', e && e.message); }
 
             let html = paymentBtns + `
                 <div class="card" style="margin-bottom:12px;background:rgba(106,44,145,0.06);border-left:3px solid var(--qe-purple)">
@@ -6517,6 +6577,13 @@ const app = {
         el.textContent = message;
         el.classList.add('show');
         setTimeout(() => el.classList.remove('show'), 2500);
+    },
+
+    /** v92: format Robaws paymentInstruction (12-cijferige OGM) als +++123/4567/89012+++ */
+    _formatOgm(ogm) {
+        const s = String(ogm || '').replace(/[^0-9]/g, '');
+        if (s.length !== 12) return '';
+        return '+++' + s.substr(0, 3) + '/' + s.substr(3, 4) + '/' + s.substr(7, 5) + '+++';
     },
 
     /**

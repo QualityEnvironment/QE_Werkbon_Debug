@@ -3297,6 +3297,74 @@ const RobawsAPI = {
         return { ok: allOk, results };
     },
 
+    /**
+     * v92: Zoek de meest recente factuur voor de ingelogde technieker met
+     * status "Technieker" OF "Gecontrolleerd". Return de hele invoice object
+     * of null als geen match. Pagineert max 5 pagina's (= 500 facturen) en
+     * stopt bij eerste match.
+     */
+    async getLatestInvoiceForUser(userId, statusWhitelist) {
+        if (!userId) return null;
+        const whitelist = (statusWhitelist || ['Technieker', 'Gecontrolleerd']).map(s => s.toLowerCase());
+        const LIMIT = 100;
+        for (let p = 0; p < 5; p++) {
+            const offset = p * LIMIT;
+            const res = await this.get(`sales-invoices?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
+            if (res.code !== 200) break;
+            const items = (res.data && res.data.items) || [];
+            if (!items.length) break;
+            for (const inv of items) {
+                const st = String(inv.status || '').toLowerCase();
+                if (!whitelist.includes(st)) continue;
+                const aId = inv.assignedUserId || (inv.assignedUser && inv.assignedUser.id);
+                if (String(aId) !== String(userId)) continue;
+                return inv;
+            }
+            if (res.data.totalPages && p + 1 >= res.data.totalPages) break;
+        }
+        return null;
+    },
+
+    /**
+     * v92: Zoek de gelinkte werkbon + order voor een factuur via de line-items.
+     * Sales-orders staan op line-item.orderId. Werkbon vinden via een query op
+     * work-orders met die salesOrderId.
+     * @returns {{salesOrderId: string|null, workOrderId: string|null}}
+     */
+    async getInvoiceLinkedDocs(invoiceId) {
+        const result = { salesOrderId: null, workOrderId: null };
+        if (!invoiceId) return result;
+        // Stap 1: line-items voor salesOrderId
+        try {
+            const liRes = await this.get(`sales-invoices/${invoiceId}/line-items?limit=50`);
+            if (liRes.code === 200 && liRes.data && liRes.data.items) {
+                for (const li of liRes.data.items) {
+                    if (li.orderId && !result.salesOrderId) result.salesOrderId = String(li.orderId);
+                    if (li.workOrderId && !result.workOrderId) result.workOrderId = String(li.workOrderId);
+                    if (result.salesOrderId && result.workOrderId) break;
+                }
+            }
+        } catch(_) {}
+        // Stap 2: als geen workOrderId, zoek via salesOrder
+        if (result.salesOrderId && !result.workOrderId) {
+            try {
+                const woRes = await this.get(`work-orders?salesOrderId=${result.salesOrderId}&limit=10&sort=id:desc`);
+                if (woRes.code === 200 && woRes.data && woRes.data.items && woRes.data.items.length > 0) {
+                    // Pak de laatst aangemaakte werkbon voor deze sales-order
+                    // (filter op match aangezien API soms breed terugfilter krijgt)
+                    for (const wo of woRes.data.items) {
+                        const sId = wo.salesOrderId || (wo.salesOrder && wo.salesOrder.id);
+                        if (String(sId) === String(result.salesOrderId)) {
+                            result.workOrderId = String(wo.id);
+                            break;
+                        }
+                    }
+                }
+            } catch(_) {}
+        }
+        return result;
+    },
+
     /** v83: Voeg een kilometers/commute-lijn toe aan een werkbon.
      *  @param {Object} opts
      *  @param {string|number} opts.workOrderId

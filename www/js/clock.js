@@ -905,8 +905,12 @@ window.QEClock = {
                 }
                 console.log('[Clock] werkuren posted (klant ' + klantHours.toFixed(2) + 'u)');
 
-                // Compensatie als klant < 8u en er L&L op de werkbon staat
+                // v90+ (gebruikersvraag): ALS klant < 8u → ALTIJD compensatie:
+                //   - Phantom werkuren (no-times) = max(0, (8 - klant) - L&L_uren)
+                //   - Overuren-aftrek (no-times)  = -(8 - klant)
+                // Onafhankelijk van of er L&L op de werkbon staat.
                 if (klantHours < 8) {
+                    // L&L-uren ophalen om phantom-grootte te bepalen
                     let llHours = 0;
                     try {
                         const teRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
@@ -919,24 +923,39 @@ window.QEClock = {
                                 }
                             }
                         }
-                    } catch(_) { /* skip — bij fetch fail geen compensatie */ }
+                    } catch(_) { /* skip — bij fetch fail gebruik llHours=0 */ }
 
-                    if (llHours > 0) {
-                        const shortage = 8 - klantHours;
-                        const compHours = -Math.min(shortage, llHours);
-                        const compRounded = Math.round(compHours * 100) / 100;
-                        console.log('[Clock] L&L compensatie: -' + Math.abs(compRounded) +
-                            'u overuren (klant ' + klantHours.toFixed(2) + 'u, L&L ' + llHours.toFixed(2) + 'u)');
-                        const rc = await RobawsAPI.addWorkHoursTimeEntry({
+                    const deficit = 8 - klantHours;
+
+                    // Phantom werkuren als L&L niet voldoende dekt
+                    const phantom = Math.max(0, deficit - llHours);
+                    const phantomRounded = Math.round(phantom * 100) / 100;
+                    if (phantomRounded > 0.005) {
+                        console.log('[Clock] phantom werkuren: +' + phantomRounded + 'u');
+                        const rp = await RobawsAPI.addWorkHoursTimeEntry({
                             workOrderId: session.workOrderId,
                             employeeId: session.employeeId,
                             articleId: ART_MONTEUR,
-                            hourTypeId: HT_OVERUREN,
-                            hoursOverride: compRounded,
+                            hourTypeId: HT_WERKUREN,
+                            hoursOverride: phantomRounded,
                         });
-                        if (rc.code !== 200 && rc.code !== 201) {
-                            console.warn('[Clock] L&L compensatie POST faalde (niet kritiek):', rc.code);
+                        if (rp.code !== 200 && rp.code !== 201) {
+                            console.warn('[Clock] phantom werkuren POST faalde (niet kritiek):', rp.code);
                         }
+                    }
+
+                    // Overuren-aftrek altijd
+                    const compRounded = Math.round(-1 * deficit * 100) / 100;
+                    console.log('[Clock] overuren-aftrek: ' + compRounded + 'u (klant ' + klantHours.toFixed(2) + 'u, L&L ' + llHours.toFixed(2) + 'u)');
+                    const rc = await RobawsAPI.addWorkHoursTimeEntry({
+                        workOrderId: session.workOrderId,
+                        employeeId: session.employeeId,
+                        articleId: ART_MONTEUR,
+                        hourTypeId: HT_OVERUREN,
+                        hoursOverride: compRounded,
+                    });
+                    if (rc.code !== 200 && rc.code !== 201) {
+                        console.warn('[Clock] overuren-aftrek POST faalde (niet kritiek):', rc.code);
                     }
                 }
             }
