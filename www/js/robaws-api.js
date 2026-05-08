@@ -2810,11 +2810,12 @@ const RobawsAPI = {
         } catch(e) { /* fallback naar hardcoded waarden */ }
 
         // Stap 6: Werkbon + order status updaten op basis van betaalmethode
-        // Overschrijving/Viva wallet = betaald → "Gefactureerd"
-        // Cash = moet nagekeken worden → "Nakijken"
-        // Niet Ontvangen = laten zoals is
+        // v85: ALLE betalingsmethoden zetten werkbon + order op 'gefactureerd'.
+        // Voorheen enkel Viva/Overschrijving — nu ook Cash en Niet Ontvangen,
+        // omdat in alle gevallen een factuur wordt aangemaakt en de werkbon klaar is.
+        // (Monteurs-flow gebruikt executeMonteurSubmitFlow en raakt deze code niet.)
         let newStatus = null;
-        if (paymentMethod === 'Overschrijving ter plaatse' || paymentMethod === 'Viva wallet') {
+        if (paymentMethod) {
             newStatus = 'gefactureerd';
         }
 

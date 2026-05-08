@@ -3953,11 +3953,13 @@ const app = {
             if (paymentMethod === 'Viva wallet') {
                 // Viva Wallet → toon betaalscherm met terminal/QR
                 this.showPaymentScreen(invoiceResult);
-            } else if (paymentMethod === 'Overschrijving ter plaatse') {
+            } else if (paymentMethod === 'Overschrijving' || paymentMethod === 'Overschrijving ter plaatse') {
                 // Overschrijving ter plaatse → toon betaalscherm met QR code
+                // (legacy "Overschrijving ter plaatse" string ook ondersteund voor backward compat)
                 this.showOverschrijvingScreen(invoiceResult);
             } else {
-                // Cash of Niet Ontvangen → enkel factuur, klaar
+                // v85: Cash of Via factuur → factuur is aangemaakt, werkbon + order
+                // staan nu op 'gefactureerd' (zie robaws-api stap 6). Geen extra UI.
                 this.toast(`Werkbon verstuurd — betaling: ${paymentMethod} ✓`);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
@@ -5545,7 +5547,9 @@ const app = {
                     else werkurenTotal += h;  // default = werkuren (incl. legacy entries zonder hourTypeId)
                 }
             }
-            const fmt1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
+            // v87: 2 decimalen voor uren-stats (zoals Robaws ze toont)
+            const fmt1 = (n) => (Math.round(n * 100) / 100).toFixed(2);
+            const fmt2 = fmt1; // alias
 
             let html = '';
 
@@ -5555,23 +5559,23 @@ const app = {
                     <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
                     <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px">
                         <div>
-                            <div style="font-size:22px;font-weight:700">${fmt1(totalHours)}</div>
+                            <div style="font-size:20px;font-weight:700">${fmt2(totalHours)}</div>
                             <div style="font-size:10px;opacity:0.8">Totaal</div>
                         </div>
                         <div>
-                            <div style="font-size:22px;font-weight:700">${fmt1(werkurenTotal)}</div>
+                            <div style="font-size:20px;font-weight:700">${fmt2(werkurenTotal)}</div>
                             <div style="font-size:10px;opacity:0.8">Werkuren</div>
                         </div>
                         <div>
-                            <div style="font-size:22px;font-weight:700">${fmt1(overurenTotal)}</div>
+                            <div style="font-size:20px;font-weight:700">${fmt2(overurenTotal)}</div>
                             <div style="font-size:10px;opacity:0.8">Overuren</div>
                         </div>
                         <div>
-                            <div style="font-size:22px;font-weight:700">${totalDays}</div>
+                            <div style="font-size:20px;font-weight:700">${totalDays}</div>
                             <div style="font-size:10px;opacity:0.8">Werkdagen</div>
                         </div>
                         <div>
-                            <div style="font-size:22px;font-weight:700">${lateCount}</div>
+                            <div style="font-size:20px;font-weight:700">${lateCount}</div>
                             <div style="font-size:10px;opacity:0.8">Te laat</div>
                         </div>
                     </div>
@@ -5659,11 +5663,13 @@ const app = {
                                 : null;
                             const timeBlockTxt = (sStr && eStr) ? (sStr + ' → ' + eStr) : null;
 
-                            // Styling per type
+                            // v87: Styling per type — compensatie duidelijker als "overuren aftrek"
                             let icon, bg, fg, label;
                             if (isCompensatie) {
-                                icon = '↩️'; bg = '#f5f5f5'; fg = '#616161';
-                                label = 'Compensatie'; // L&L overuren-aftrek
+                                // Negatieve overuren — wordt afgetrokken van overuren-bank
+                                // omdat L&L gebruikt is om de 8u-baseline te vullen.
+                                icon = '➖'; bg = '#ffebee'; fg = '#c62828';
+                                label = 'Overuren aftrek';
                             } else if (isLL) {
                                 icon = '📦'; bg = '#fff3e0'; fg = '#e65100';
                                 label = 'Laden & lossen';
@@ -5674,12 +5680,14 @@ const app = {
                                 icon = '✅'; bg = '#f1f8e9'; fg = '#2e7d32';
                                 label = 'Werkuren';
                             }
+                            const absHrs = Math.abs(hours).toFixed(2);
                             const headerLine = timeBlockTxt
                                 ? timeBlockTxt
-                                : (hours >= 0 ? hours.toFixed(2) + ' uur' : Math.abs(hours).toFixed(2) + ' uur aftrek');
+                                : (isCompensatie ? '−' + absHrs + ' uur (aftrek)' : absHrs + ' uur');
                             const subLine = timeBlockTxt
-                                ? (label + ' · ' + (hours >= 0 ? hours.toFixed(2) : '-' + Math.abs(hours).toFixed(2)) + 'u')
+                                ? (label + ' · ' + hours.toFixed(2) + 'u')
                                 : label;
+                            const rightTxt = isCompensatie ? '−' + absHrs + 'u' : hours.toFixed(2) + 'u';
 
                             html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${bg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
                                 <div style="display:flex;align-items:center;justify-content:space-between">
@@ -5690,7 +5698,7 @@ const app = {
                                             <div style="font-size:11px;color:${fg}">${subLine}</div>
                                         </div>
                                     </div>
-                                    <div style="font-size:14px;color:${fg};font-weight:600">${hours >= 0 ? hours.toFixed(2) + 'u' : hours.toFixed(2) + 'u'}</div>
+                                    <div style="font-size:14px;color:${fg};font-weight:600">${rightTxt}</div>
                                 </div>
                             </div>`;
                         }
@@ -6724,6 +6732,4 @@ const app = {
     },
 };
 
-// Zet app expliciet op window zodat screen-guards in clock.js werken (v53)
-window.app = app;
-document.addEventListener('DOMContentLoaded', () => app.init());
+// Zet app expliciet op window zodat screen-guards in
