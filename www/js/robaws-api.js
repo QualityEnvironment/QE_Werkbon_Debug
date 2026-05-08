@@ -2962,6 +2962,21 @@ const RobawsAPI = {
         ladenLossen: 19786,     // "Werkuur laden & lossen"     - €0 verkoop
     },
 
+    /** v83: hourTypeId waarden voor uursoort in Robaws time-entries.
+     *  Zie GET /work-orders/{id}/time-entries response — werkuren=1, overuren=2. */
+    HOUR_TYPE_IDS: {
+        werkuren: 1,
+        overuren: 2,
+    },
+
+    /** v83: mobilityTypeId waarden voor commute-entries in Robaws.
+     *  -3 = "chauffeur zonder passagiers" (default voor werknemers).
+     *  Andere waarden bestaan ook (passagier, fiets, ...) maar voor de monteur-app
+     *  gebruiken we standaard chauffeur zonder passagiers. */
+    MOBILITY_TYPE_IDS: {
+        chauffeur: -3,
+    },
+
     /** YYYY-MM-DD -> DD/MM/YYYY voor titel */
     _formatDateLabel(dateStr) {
         if (!dateStr) return '';
@@ -3121,6 +3136,9 @@ const RobawsAPI = {
         const te = {
             employeeId: String(employeeId),
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
+            // v83: L&L is uursoort werkuren (kantoor kan dit later manueel naar
+            // overuren zetten als de monteur al 8u werkuren had geregistreerd).
+            hourTypeId: String(this.HOUR_TYPE_IDS.werkuren),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
@@ -3143,6 +3161,8 @@ const RobawsAPI = {
         const { startTime, endTime } = opts;
         const body = {
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
+            // v83: ook bij PUT update hourTypeId behouden (werkuren).
+            hourTypeId: String(this.HOUR_TYPE_IDS.werkuren),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
@@ -3164,11 +3184,17 @@ const RobawsAPI = {
     },
 
         async addWorkHoursTimeEntry(opts) {
-        const { workOrderId, employeeId, startTime, endTime, breakMinutes, articleId } = opts;
+        const {
+            workOrderId, employeeId, startTime, endTime, breakMinutes, articleId,
+            // v83 nieuwe parameters:
+            hourTypeId,        // 1 = werkuren, 2 = overuren (HOUR_TYPE_IDS)
+            hoursOverride,     // expliciete uren (voor compensatie-entries zonder tijden)
+        } = opts;
         const te = {
             employeeId: String(employeeId),
             articleId: String(articleId),
         };
+        if (hourTypeId != null) te.hourTypeId = String(hourTypeId);
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
             te.startTime = { hour: sh || 0, minute: sm || 0 };
@@ -3179,8 +3205,12 @@ const RobawsAPI = {
         }
         // v63: Robaws v2 wil 'breakMinutes' (we stuurden breakDuration en kreeg breakMinutes:0 terug)
         if (breakMinutes && breakMinutes > 0) te.breakMinutes = parseInt(breakMinutes, 10);
-        // Bereken hours uit start/end - pauze
-        if (startTime && endTime) {
+        // v83: hoursOverride wint van auto-calc (voor compensatie-entries die negatief zijn)
+        if (hoursOverride != null) {
+            te.hours = parseFloat(hoursOverride);
+            te.billableHours = parseFloat(hoursOverride);
+        } else if (startTime && endTime) {
+            // Bereken hours uit start/end - pauze
             const [sh, sm] = startTime.split(':').map(Number);
             const [eh, em] = endTime.split(':').map(Number);
             const minutes = ((eh || 0) * 60 + (em || 0)) - ((sh || 0) * 60 + (sm || 0)) - (parseInt(breakMinutes, 10) || 0);
@@ -3189,6 +3219,28 @@ const RobawsAPI = {
             te.billableHours = this._roundUpHalfHour(hrs);
         }
         return await this.post(`work-orders/${workOrderId}/time-entries`, te);
+    },
+
+    /** v83: Voeg een kilometers/commute-lijn toe aan een werkbon.
+     *  @param {Object} opts
+     *  @param {string|number} opts.workOrderId
+     *  @param {string|number} opts.employeeId
+     *  @param {number} opts.distance - km heen
+     *  @param {number} [opts.returnDistance] - km terug (default 0)
+     *  @param {number} [opts.mobilityTypeId] - default -3 (chauffeur zonder passagiers)
+     *  @returns {Promise<{code:number, data:object}>}
+     */
+    async addCommuteEntry(opts) {
+        const {
+            workOrderId, employeeId, distance, returnDistance, mobilityTypeId,
+        } = opts;
+        const body = {
+            employeeId: String(employeeId),
+            mobilityTypeId: String(mobilityTypeId != null ? mobilityTypeId : this.MOBILITY_TYPE_IDS.chauffeur),
+            distance: parseFloat(distance) || 0,
+            returnDistance: parseFloat(returnDistance) || 0,
+        };
+        return await this.post(`work-orders/${workOrderId}/commute-entries`, body);
     },
 
     /**

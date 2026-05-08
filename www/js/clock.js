@@ -554,11 +554,21 @@ window.QEClock = {
                 // Toon SUCCES/MISLUKT overlay als de scan-flow iets opleverde
                 if (scanResult && window.app && typeof app.showScanResult === 'function') {
                     const refresh = !!scanResult.refresh;
+                    const askKm = !!scanResult.askKilometers;
+                    const woId = scanResult.workOrderId;
+                    const empId = scanResult.employeeId;
                     app.showScanResult(scanResult.ok, scanResult.message, async () => {
                         if (!refresh) return;
                         try { await this.syncWithRobaws(); } catch(_) {}
                         try { app.updateClockUI(); } catch(_) {}
                         try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
+                        // v83: na succesvol uitklokken — kilometers-prompt
+                        if (askKm && scanResult.ok && woId && empId
+                                && typeof app.promptKilometers === 'function') {
+                            try { await app.promptKilometers(woId, empId); } catch(e) {
+                                console.warn('[Clock] km prompt fout:', e && e.message);
+                            }
+                        }
                     });
                 }
             }
@@ -821,25 +831,115 @@ window.QEClock = {
             console.warn('[Clock] Uitgeklokt update faalde:', e.message);
         }
 
-        // 2. POST time-entry voor monteur-uren
+        // 2. POST time-entries voor monteur-uren (v83: split werkuren/overuren)
+        //
+        // Algoritme (zie v83 spec):
+        //   klant_minutes = (entryEnd - entryStart) - pauze   (totale klok-tijd minus pauze)
+        //   IF klant ≤ 8u: 1 entry werkuren met volledige tijdsblok
+        //   IF klant > 8u: werkuren-blok van 8u (start → start+8u+pauze) + overuren-blok (rest → entryEnd)
+        //   Compensatie: alleen wanneer klant < 8u EN er L&L op deze werkbon staat. Dan
+        //   extra negatieve overuren-entry van -min(8 - klant, L&L_uren) zonder tijden.
+        //
+        // L&L wordt al direct bij scan-tijd gepost als losse time-entry met article 19786
+        // (laden & lossen) en hourTypeId=1 (werkuren). Hoef ik hier niets meer aan te doen.
+        const ART_MONTEUR = RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject;
+        const HT_WERKUREN = RobawsAPI.HOUR_TYPE_IDS.werkuren;
+        const HT_OVERUREN = RobawsAPI.HOUR_TYPE_IDS.overuren;
+        const klantMinutes = entryEndMin - entryStartMin - (pauseMinutes || 0);
+        const klantHours = Math.max(0, klantMinutes / 60);
+        const EIGHT_HRS_MIN = 8 * 60;
+
         try {
-            const r = await RobawsAPI.addWorkHoursTimeEntry({
-                workOrderId: session.workOrderId,
-                employeeId: session.employeeId,
-                startTime: entryStart,
-                endTime: entryEnd,
-                breakMinutes: pauseMinutes,
-                articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject,
-            });
-            if (r.code !== 200 && r.code !== 201) {
-                console.warn('[Clock] time-entry POST faalde:', r.code, r.data);
-                return {
-                    ok: false,
-                    message: 'Uitklokken mislukt:\nTime-entry POST faalde (' + r.code + ')',
-                    refresh: true,
-                };
+            if (klantHours > 8) {
+                // Splits in werkuren-blok (8u + pauze) + overuren-blok (rest)
+                const werkurenEndMin = entryStartMin + EIGHT_HRS_MIN + (pauseMinutes || 0);
+                const werkurenEnd = fromMinutes(werkurenEndMin);
+                console.log('[Clock] Splits klant ' + klantHours.toFixed(2) + 'u: ' +
+                    'werkuren ' + entryStart + '→' + werkurenEnd + ' (8u, pauze ' + pauseMinutes + 'min) + ' +
+                    'overuren ' + werkurenEnd + '→' + entryEnd + ' (' + (klantHours-8).toFixed(2) + 'u)');
+
+                // Werkuren-blok
+                const r1 = await RobawsAPI.addWorkHoursTimeEntry({
+                    workOrderId: session.workOrderId,
+                    employeeId: session.employeeId,
+                    startTime: entryStart,
+                    endTime: werkurenEnd,
+                    breakMinutes: pauseMinutes,
+                    articleId: ART_MONTEUR,
+                    hourTypeId: HT_WERKUREN,
+                });
+                if (r1.code !== 200 && r1.code !== 201) {
+                    console.warn('[Clock] werkuren POST faalde:', r1.code, r1.data);
+                    return { ok: false, message: 'Uitklokken mislukt:\nWerkuren POST (' + r1.code + ')', refresh: true };
+                }
+
+                // Overuren-blok
+                const r2 = await RobawsAPI.addWorkHoursTimeEntry({
+                    workOrderId: session.workOrderId,
+                    employeeId: session.employeeId,
+                    startTime: werkurenEnd,
+                    endTime: entryEnd,
+                    breakMinutes: 0,
+                    articleId: ART_MONTEUR,
+                    hourTypeId: HT_OVERUREN,
+                });
+                if (r2.code !== 200 && r2.code !== 201) {
+                    console.warn('[Clock] overuren POST faalde:', r2.code, r2.data);
+                    return { ok: false, message: 'Uitklokken mislukt:\nOveruren POST (' + r2.code + ')', refresh: true };
+                }
+                console.log('[Clock] werkuren + overuren posted');
+            } else {
+                // ≤ 8u: 1 enkele werkuren-entry over volledige tijdsblok
+                const r = await RobawsAPI.addWorkHoursTimeEntry({
+                    workOrderId: session.workOrderId,
+                    employeeId: session.employeeId,
+                    startTime: entryStart,
+                    endTime: entryEnd,
+                    breakMinutes: pauseMinutes,
+                    articleId: ART_MONTEUR,
+                    hourTypeId: HT_WERKUREN,
+                });
+                if (r.code !== 200 && r.code !== 201) {
+                    console.warn('[Clock] werkuren POST faalde:', r.code, r.data);
+                    return { ok: false, message: 'Uitklokken mislukt:\nWerkuren POST (' + r.code + ')', refresh: true };
+                }
+                console.log('[Clock] werkuren posted (klant ' + klantHours.toFixed(2) + 'u)');
+
+                // Compensatie als klant < 8u en er L&L op de werkbon staat
+                if (klantHours < 8) {
+                    let llHours = 0;
+                    try {
+                        const teRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
+                        if (teRes.code === 200 && teRes.data && teRes.data.items) {
+                            const llArt = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
+                            for (const te of teRes.data.items) {
+                                const aId = te.articleId || (te.article && te.article.id);
+                                if (String(aId) === llArt) {
+                                    llHours += parseFloat(te.hours || te.billableHours || 0);
+                                }
+                            }
+                        }
+                    } catch(_) { /* skip — bij fetch fail geen compensatie */ }
+
+                    if (llHours > 0) {
+                        const shortage = 8 - klantHours;
+                        const compHours = -Math.min(shortage, llHours);
+                        const compRounded = Math.round(compHours * 100) / 100;
+                        console.log('[Clock] L&L compensatie: -' + Math.abs(compRounded) +
+                            'u overuren (klant ' + klantHours.toFixed(2) + 'u, L&L ' + llHours.toFixed(2) + 'u)');
+                        const rc = await RobawsAPI.addWorkHoursTimeEntry({
+                            workOrderId: session.workOrderId,
+                            employeeId: session.employeeId,
+                            articleId: ART_MONTEUR,
+                            hourTypeId: HT_OVERUREN,
+                            hoursOverride: compRounded,
+                        });
+                        if (rc.code !== 200 && rc.code !== 201) {
+                            console.warn('[Clock] L&L compensatie POST faalde (niet kritiek):', rc.code);
+                        }
+                    }
+                }
             }
-            console.log('[Clock] Werkuur monteur time-entry toegevoegd');
         } catch(e) {
             console.error('[Clock] time-entry POST exception:', e.message);
             return {
@@ -878,6 +978,11 @@ window.QEClock = {
                 'Uren: ' + entryStart + ' - ' + entryEnd +
                 ' (' + pauseMinutes + 'min pauze)',
             refresh: true,
+            // v83: vraag de monteur om kilometers in te geven na clock-out.
+            // De UI kan dit oppakken via scanResult.askKilometers en een modal tonen.
+            askKilometers: true,
+            workOrderId: session.workOrderId,
+            employeeId: session.employeeId,
         };
     },
 

@@ -5526,27 +5526,53 @@ const app = {
                 const rawHours = totalMins / 60;
                 return Math.ceil(rawHours * 2) / 2;
             };
+            // v83: Bereken totalen op basis van TIME-ENTRIES (werkuren vs overuren split via hourTypeId).
+            //   - Totaal = som van alle entries (incl. negatieve compensatie-entries)
+            //   - Werkuren = som hourTypeId=1 entries
+            //   - Overuren = som hourTypeId=2 entries (incl. negatieve compensatie-entries)
+            const HT_WERKUREN = String(RobawsAPI.HOUR_TYPE_IDS.werkuren);
+            const HT_OVERUREN = String(RobawsAPI.HOUR_TYPE_IDS.overuren);
             let totalHours = 0;
-            for (const wo of workOrders) totalHours += computeHours(wo);
+            let werkurenTotal = 0;
+            let overurenTotal = 0;
+            for (const wo of workOrders) {
+                const teList = teByWoId[wo.id] || [];
+                for (const te of teList) {
+                    const h = parseFloat(te.hours || te.billableHours || 0) || 0;
+                    totalHours += h;
+                    const ht = String(te.hourTypeId || (te.hourType && te.hourType.id) || '');
+                    if (ht === HT_OVERUREN) overurenTotal += h;
+                    else werkurenTotal += h;  // default = werkuren (incl. legacy entries zonder hourTypeId)
+                }
+            }
+            const fmt1 = (n) => (Math.round(n * 10) / 10).toFixed(1);
 
             let html = '';
 
-            // Samenvatting kaart
+            // Samenvatting kaart — v83: Totaal, Werkuren, Overuren, Werkdagen, Te laat
             html += `
                 <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
                     <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+                    <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px">
                         <div>
-                            <div style="font-size:28px;font-weight:700">${totalHours.toFixed(1)}</div>
-                            <div style="font-size:12px;opacity:0.8">Totaal uren</div>
+                            <div style="font-size:22px;font-weight:700">${fmt1(totalHours)}</div>
+                            <div style="font-size:10px;opacity:0.8">Totaal</div>
                         </div>
                         <div>
-                            <div style="font-size:28px;font-weight:700">${totalDays}</div>
-                            <div style="font-size:12px;opacity:0.8">Werkdagen</div>
+                            <div style="font-size:22px;font-weight:700">${fmt1(werkurenTotal)}</div>
+                            <div style="font-size:10px;opacity:0.8">Werkuren</div>
                         </div>
                         <div>
-                            <div style="font-size:28px;font-weight:700">${lateCount}</div>
-                            <div style="font-size:12px;opacity:0.8">Te laat</div>
+                            <div style="font-size:22px;font-weight:700">${fmt1(overurenTotal)}</div>
+                            <div style="font-size:10px;opacity:0.8">Overuren</div>
+                        </div>
+                        <div>
+                            <div style="font-size:22px;font-weight:700">${totalDays}</div>
+                            <div style="font-size:10px;opacity:0.8">Werkdagen</div>
+                        </div>
+                        <div>
+                            <div style="font-size:22px;font-weight:700">${lateCount}</div>
+                            <div style="font-size:10px;opacity:0.8">Te laat</div>
                         </div>
                     </div>
                 </div>`;
@@ -5568,61 +5594,106 @@ const app = {
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
 
                 if (wos.length > 0) {
+                    // v83: dag-totaal = som van alle time-entries (incl. negatieve compensatie)
                     let dayTotal = 0;
                     for (const wo of wos) {
-                        dayTotal += computeHours(wo);
+                        const teList = teByWoId[wo.id] || [];
+                        for (const te of teList) {
+                            dayTotal += parseFloat(te.hours || te.billableHours || 0) || 0;
+                        }
                     }
                     html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
                         <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
-                        <div style="font-size:12px;color:var(--qe-grey)">${dayTotal.toFixed(1)} uur</div>
+                        <div style="font-size:12px;color:var(--qe-grey)">${fmt1(dayTotal)} uur</div>
                     </div>`;
+
+                    // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
+                    //   Werkuren (hourTypeId=1, article 185)  → ✅ groen, klant-werk
+                    //   L&L (article 19786)                   → 📦 oranje box
+                    //   Overuren (hourTypeId=2, article 185)  → ⏰ oranje
+                    //   Compensatie (negatieve uren)          → ↩️ grijs/cursief
+                    const llArtId = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
 
                     for (const wo of wos) {
                         const tijd = getField(wo, 'Tijd') || 'Op tijd';
-                        const ingeklokt = getField(wo, 'Ingeklokt');
-                        const uitgeklokt = getField(wo, 'Uitgeklokt') || '...';
-
-                        let typeIcon, typeBg, typeColor;
-                        switch (tijd) {
-                            case 'Te laat':
-                                typeIcon = '⚠️'; typeBg = '#fff8e1'; typeColor = '#e65100'; break;
-                            case 'Ziek':
-                                typeIcon = '🤒'; typeBg = '#ffebee'; typeColor = '#b71c1c'; break;
-                            default:
-                                typeIcon = '✅'; typeBg = '#f1f8e9'; typeColor = '#2e7d32'; break;
-                        }
-
-                        // v76: L&L badge + extra info — toont aantal L&L cycli en totale uren
-                        const teList = teByWoId[wo.id] || [];
-                        const llArtId = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
-                        const llEntries = teList.filter(te => {
-                            const aId = te.articleId || (te.article && te.article.id);
-                            return String(aId) === llArtId;
-                        });
-                        const hasLL = llEntries.length > 0;
-                        let llHours = 0;
-                        for (const te of llEntries) llHours += parseFloat(te.hours || 0);
-
-                        // v67: GPS-link verbergen voor werknemer (zit alleen in werkbon-remark voor kantoor)
-                        const gpsLink = '';
-                        const llBadge = hasLL
-                            ? '<span style="font-size:10px;background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:8px;margin-left:6px">📦 ' +
-                              llEntries.length + '× L&amp;L · ' + llHours.toFixed(2) + 'u</span>'
+                        const tijdColor = (tijd === 'Te laat') ? '#e65100'
+                            : (tijd === 'Ziek') ? '#b71c1c'
+                            : '#2e7d32';
+                        const tijdIcon = (tijd === 'Te laat') ? '⚠️'
+                            : (tijd === 'Ziek') ? '🤒'
                             : '';
+                        const teList = (teByWoId[wo.id] || []).slice().sort((a, b) => {
+                            // Sort: entries met startTime eerst (chronologisch), dan no-time entries
+                            const aMin = a.startTime ? (a.startTime.hour * 60 + a.startTime.minute) : 9999;
+                            const bMin = b.startTime ? (b.startTime.hour * 60 + b.startTime.minute) : 9999;
+                            return aMin - bMin;
+                        });
 
-                        // v64: kaartje opent het aanpassing-aanvraag scherm
-                        html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:${typeBg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                            <div style="display:flex;align-items:center;justify-content:space-between">
+                        if (teList.length === 0) {
+                            // Open werkbon zonder entries (nog niet uitgeklokt)
+                            const ingeklokt = getField(wo, 'Ingeklokt') || '?';
+                            html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:#f1f8e9;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
                                 <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px">${typeIcon}</span>
-                                    <div>
-                                        <div style="font-size:14px;font-weight:500">${ingeklokt || '?'} → ${uitgeklokt}${llBadge}</div>
-                                        <div style="font-size:11px;color:${typeColor}">${tijd} ${gpsLink}</div>
+                                    <span style="font-size:18px">⏱️</span>
+                                    <div style="flex:1">
+                                        <div style="font-size:14px;font-weight:500">${ingeklokt} → ...</div>
+                                        <div style="font-size:11px;color:${tijdColor}">${tijdIcon} ${tijd} — nog ingeklokt</div>
                                     </div>
                                 </div>
-                                <div style="font-size:18px;color:var(--qe-grey)">›</div>
-                            </div>
-                        </div>`;
+                            </div>`;
+                            continue;
+                        }
+
+                        for (const te of teList) {
+                            const aId = String(te.articleId || (te.article && te.article.id) || '');
+                            const ht = String(te.hourTypeId || (te.hourType && te.hourType.id) || '');
+                            const hours = parseFloat(te.hours || te.billableHours || 0) || 0;
+                            const isLL = (aId === llArtId);
+                            const isOveruren = (ht === HT_OVERUREN);
+                            const isCompensatie = (hours < 0);
+                            const sStr = te.startTime
+                                ? String(te.startTime.hour).padStart(2, '0') + ':' + String(te.startTime.minute).padStart(2, '0')
+                                : null;
+                            const eStr = te.endTime
+                                ? String(te.endTime.hour).padStart(2, '0') + ':' + String(te.endTime.minute).padStart(2, '0')
+                                : null;
+                            const timeBlockTxt = (sStr && eStr) ? (sStr + ' → ' + eStr) : null;
+
+                            // Styling per type
+                            let icon, bg, fg, label;
+                            if (isCompensatie) {
+                                icon = '↩️'; bg = '#f5f5f5'; fg = '#616161';
+                                label = 'Compensatie'; // L&L overuren-aftrek
+                            } else if (isLL) {
+                                icon = '📦'; bg = '#fff3e0'; fg = '#e65100';
+                                label = 'Laden & lossen';
+                            } else if (isOveruren) {
+                                icon = '⏰'; bg = '#fff8e1'; fg = '#ef6c00';
+                                label = 'Overuren';
+                            } else {
+                                icon = '✅'; bg = '#f1f8e9'; fg = '#2e7d32';
+                                label = 'Werkuren';
+                            }
+                            const headerLine = timeBlockTxt
+                                ? timeBlockTxt
+                                : (hours >= 0 ? hours.toFixed(2) + ' uur' : Math.abs(hours).toFixed(2) + ' uur aftrek');
+                            const subLine = timeBlockTxt
+                                ? (label + ' · ' + (hours >= 0 ? hours.toFixed(2) : '-' + Math.abs(hours).toFixed(2)) + 'u')
+                                : label;
+
+                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${bg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <div style="display:flex;align-items:center;justify-content:space-between">
+                                    <div style="display:flex;align-items:center;gap:10px;flex:1">
+                                        <span style="font-size:18px">${icon}</span>
+                                        <div>
+                                            <div style="font-size:14px;font-weight:500">${headerLine}</div>
+                                            <div style="font-size:11px;color:${fg}">${subLine}</div>
+                                        </div>
+                                    </div>
+                                    <div style="font-size:14px;color:${fg};font-weight:600">${hours >= 0 ? hours.toFixed(2) + 'u' : hours.toFixed(2) + 'u'}</div>
+                                </div>
+                            </div>`;
+                        }
                     }
                 } else {
                     const opacity = isWeekend ? '0.4' : '0.6';
@@ -6263,6 +6334,89 @@ const app = {
         el.textContent = message;
         el.classList.add('show');
         setTimeout(() => el.classList.remove('show'), 2500);
+    },
+
+    /**
+     * v83: Vraag de monteur om kilometers heen/terug in te geven na uitklokken,
+     * en post die als commute-entry op de werkbon. Modal — kan niet weggeklikt
+     * worden zonder iets in te vullen (0 is een geldige waarde).
+     */
+    async promptKilometers(workOrderId, employeeId) {
+        return new Promise((resolve) => {
+            // Bouw modal
+            let m = document.getElementById('kmPromptModal');
+            if (m) m.remove();
+            m = document.createElement('div');
+            m.id = 'kmPromptModal';
+            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px';
+            m.innerHTML = `
+                <div style="background:#fff;border-radius:16px;max-width:400px;width:100%;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
+                    <div style="font-size:20px;font-weight:700;color:var(--qe-darkblue);margin-bottom:8px;display:flex;align-items:center;gap:8px">
+                        🚐 Kilometers vandaag
+                    </div>
+                    <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px">
+                        Hoeveel kilometers heb je heen en terug afgelegd?
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+                        <div>
+                            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:4px">Heen (km)</label>
+                            <input id="kmHeenInput" type="number" inputmode="numeric" min="0" step="1" value="0"
+                                style="width:100%;padding:14px;font-size:18px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600">
+                        </div>
+                        <div>
+                            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:4px">Terug (km)</label>
+                            <input id="kmTerugInput" type="number" inputmode="numeric" min="0" step="1" value="0"
+                                style="width:100%;padding:14px;font-size:18px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600">
+                        </div>
+                    </div>
+                    <button id="kmPromptSubmit" style="width:100%;padding:14px;background:var(--qe-darkblue);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600">
+                        Opslaan
+                    </button>
+                    <div id="kmPromptError" style="font-size:12px;color:#c62828;margin-top:8px;text-align:center;display:none"></div>
+                </div>`;
+            document.body.appendChild(m);
+
+            const heenEl = document.getElementById('kmHeenInput');
+            const terugEl = document.getElementById('kmTerugInput');
+            const errEl = document.getElementById('kmPromptError');
+            const btn = document.getElementById('kmPromptSubmit');
+
+            // Auto-focus heen veld + select-all
+            setTimeout(() => { try { heenEl.focus(); heenEl.select(); } catch(_) {} }, 100);
+
+            const submit = async () => {
+                const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
+                const terug = Math.max(0, Math.round(parseFloat(terugEl.value) || 0));
+                btn.disabled = true;
+                btn.textContent = 'Opslaan...';
+                errEl.style.display = 'none';
+
+                try {
+                    const r = await RobawsAPI.addCommuteEntry({
+                        workOrderId,
+                        employeeId,
+                        distance: heen,
+                        returnDistance: terug,
+                    });
+                    if (r.code !== 200 && r.code !== 201) {
+                        throw new Error('Robaws (' + r.code + ')');
+                    }
+                    // Succes → modal weg
+                    m.remove();
+                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km');
+                    resolve(true);
+                } catch (e) {
+                    console.warn('[App] km POST faalde:', e && e.message);
+                    errEl.textContent = 'Opslaan mislukt: ' + (e && e.message || '?');
+                    errEl.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = 'Opslaan';
+                }
+            };
+            btn.addEventListener('click', submit);
+            terugEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+            heenEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') terugEl.focus(); });
+        });
     },
 
     /**
