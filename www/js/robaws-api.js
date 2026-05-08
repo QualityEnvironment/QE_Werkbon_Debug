@@ -3254,13 +3254,18 @@ const RobawsAPI = {
         // werkbonnen staan vooraan; 800 werkbonnen is ruim genoeg.
         // Smart break: stop zodra 2 opeenvolgende pages 0 nieuwe Tijdsregistratie
         // werkbonnen voor monthPrefix opleveren.
+        // v83b: BUG FIX — Robaws negeert ?page=N (elke "page" gaf dezelfde 100
+        // items), waardoor werkbonnen met lagere ID onbereikbaar waren (bv. id 1259
+        // voor 5/5/26). We gebruiken nu ?offset=N*limit i.p.v. ?page=N.
+        const LIMIT = 100;
         let allItems = [];
         const seenIds = new Set();
         let page = 0;
         const maxPages = 8;
         let emptyPagesInRow = 0;
         while (page < maxPages) {
-            const res = await this.get(`work-orders?limit=100&page=${page}&sort=id:desc`);
+            const offset = page * LIMIT;
+            const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Tijdsregistratie-werkbonnen fetch faalde (${res.code})`);
             }
@@ -3313,8 +3318,11 @@ const RobawsAPI = {
         const today = this._localDateStr();
         const allItems = [];
         const seen = new Set();
+        // v83b: pagination fix — Robaws negeert ?page=N, gebruik ?offset=N*limit
+        const LIMIT = 100;
         for (let p = 0; p < 3; p++) {
-            const res = await this.get(`work-orders?limit=100&page=${p}&sort=id:desc`);
+            const offset = p * LIMIT;
+            const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
             if (res.code !== 200 || !res.data || !res.data.items || res.data.items.length === 0) break;
             for (const wo of res.data.items) {
                 if (wo.id == null || seen.has(String(wo.id))) continue;
