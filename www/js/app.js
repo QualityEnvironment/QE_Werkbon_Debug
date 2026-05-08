@@ -4343,45 +4343,69 @@ const app = {
         // Verwijder bestaande modal als die nog open staat
         let m = document.getElementById('changePmModal');
         if (m) m.remove();
-        m = document.createElement('div');
-        m.id = 'changePmModal';
-        m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px';
 
         const inv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
         const amount = parseFloat(inv.totalInclVat || 0).toFixed(2);
         const cur = ctx.paymentMethod || '';
-        const mkBtn = (method, icon, label) => {
-            const isCurrent = (method === cur)
-                || (method === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
-            const bg = isCurrent ? '#e3f2fd' : '#fff';
-            const border = isCurrent ? '#1565C0' : '#cfd8dc';
-            const tag = isCurrent ? '<span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;margin-left:8px;font-weight:600">huidig</span>' : '';
-            return `<button onclick="app.changeLastPaymentMethod('${method}')"
-                style="display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;margin-bottom:8px;border:2px solid ${border};border-radius:10px;background:${bg};font-size:15px;text-align:left;cursor:pointer">
-                <span style="font-size:20px">${icon}</span>
-                <span style="flex:1;font-weight:500">${label}</span>${tag}
-            </button>`;
-        };
 
-        m.innerHTML = `
-            <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto">
-                <div style="font-size:18px;font-weight:700;color:var(--qe-darkblue);margin-bottom:6px">
-                    Betaalmethode aanpassen
-                </div>
-                <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px">
-                    Factuur ${ctx.invoiceLogicId || inv.logicId || ''} — € ${amount}<br>
-                    Kies een nieuwe methode of open het bestaande betaalscherm.
-                </div>
-                ${mkBtn('Viva wallet', '💳', 'Viva Wallet (terminal)')}
-                ${mkBtn('Cash', '💵', 'Cash')}
-                ${mkBtn('Overschrijving', '🏦', 'Overschrijving ter plaatse')}
-                ${mkBtn('Via factuur', '📋', 'Via factuur')}
-                <button onclick="document.getElementById('changePmModal').remove()"
-                    style="width:100%;padding:12px;margin-top:8px;background:#f5f5f5;color:#444;border:none;border-radius:10px;font-size:14px;cursor:pointer">
-                    Annuleren
-                </button>
-                <div id="changePmStatus" style="font-size:12px;text-align:center;margin-top:10px;display:none"></div>
-            </div>`;
+        // v88-fix: gebruik DOM API i.p.v. innerHTML met template literals — sommige
+        // WebView-versies parsen geneste <button> in template-literals onbetrouwbaar
+        // waardoor enkel de eerste div rendert.
+        m = document.createElement('div');
+        m.id = 'changePmModal';
+        m.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:99998;' +
+            'background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;' +
+            'padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;box-sizing:border-box';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px';
+        title.textContent = 'Betaalmethode aanpassen';
+        card.appendChild(title);
+
+        const subtitle = document.createElement('div');
+        subtitle.style.cssText = 'font-size:13px;color:#888;margin-bottom:16px';
+        subtitle.innerHTML = 'Factuur ' + (ctx.invoiceLogicId || inv.logicId || '') +
+            ' — € ' + amount + '<br>Kies een nieuwe methode of open het bestaande betaalscherm.';
+        card.appendChild(subtitle);
+
+        const methods = [
+            { key: 'Viva wallet',   icon: '💳', label: 'Viva Wallet (terminal)' },
+            { key: 'Cash',          icon: '💵', label: 'Cash' },
+            { key: 'Overschrijving',icon: '🏦', label: 'Overschrijving ter plaatse' },
+            { key: 'Via factuur',   icon: '📋', label: 'Via factuur' },
+        ];
+        for (const opt of methods) {
+            const isCurrent = (opt.key === cur)
+                || (opt.key === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
+            const btn = document.createElement('button');
+            btn.style.cssText = 'display:flex;align-items:center;gap:12px;width:100%;' +
+                'padding:14px 16px;margin-bottom:8px;border-radius:10px;' +
+                'font-size:15px;text-align:left;cursor:pointer;box-sizing:border-box;' +
+                'border:2px solid ' + (isCurrent ? '#1565C0' : '#cfd8dc') + ';' +
+                'background:' + (isCurrent ? '#e3f2fd' : '#fff') + ';color:#212121';
+            btn.innerHTML = '<span style="font-size:20px">' + opt.icon + '</span>' +
+                '<span style="flex:1;font-weight:500">' + opt.label + '</span>' +
+                (isCurrent ? '<span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;font-weight:600">huidig</span>' : '');
+            btn.addEventListener('click', () => this.changeLastPaymentMethod(opt.key));
+            card.appendChild(btn);
+        }
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.style.cssText = 'width:100%;padding:12px;margin-top:8px;background:#f5f5f5;' +
+            'color:#444;border:none;border-radius:10px;font-size:14px;cursor:pointer;box-sizing:border-box';
+        cancelBtn.textContent = 'Annuleren';
+        cancelBtn.addEventListener('click', () => m.remove());
+        card.appendChild(cancelBtn);
+
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'changePmStatus';
+        statusDiv.style.cssText = 'font-size:12px;text-align:center;margin-top:10px;display:none';
+        card.appendChild(statusDiv);
+
+        m.appendChild(card);
         document.body.appendChild(m);
     },
 
