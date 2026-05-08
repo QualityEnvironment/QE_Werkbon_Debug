@@ -150,10 +150,11 @@ const app = {
             window._qeBackHandlerInstalled = true;
         }
 
-        // Standaard PINs seeden (alleen als er nog geen PIN staat)
-        if (typeof RobawsAPI !== 'undefined' && RobawsAPI.seedDefaultPins) {
-            RobawsAPI.seedDefaultPins();
-        }
+        // PIN's worden niet meer client-side ge-seed: ze leven in Robaws
+        // (extra veld "Pincode" op werknemer). Lokale PIN-cache wordt
+        // automatisch overschreven na elke succesvolle online login,
+        // zodat een serverside-wijziging meeloopt.
+
         // Ingediende werkorders + openstaande betalingen herstellen uit localStorage
         this._loadSubmittedWOs();
         // Herstel onafgemaakte werkorder-data (uren, materialen, notities)
@@ -260,18 +261,23 @@ const app = {
             document.getElementById('loginPinConfirm').value = '';
             document.getElementById('loginPinError').textContent = '';
 
+            const setupWarn = document.getElementById('loginPinSetupWarning');
             if (this._loginNeedsPinSetup) {
                 document.getElementById('loginCardTitle').textContent = 'PIN instellen';
                 document.getElementById('loginPinSubtitle').textContent = 'Eerste keer inloggen — kies een PIN (4–6 cijfers):';
                 document.getElementById('loginPinLabel').textContent = 'Nieuwe PIN';
                 document.getElementById('loginPinConfirmGroup').style.display = 'block';
                 document.getElementById('loginPinBtn').textContent = 'PIN instellen & inloggen';
+                if (setupWarn) setupWarn.style.display = 'block';
+                console.warn('[Login] Eerste-keer PIN-setup voor', email,
+                    '— deze actie is publiek (geen Robaws-PIN ingesteld). Audit dit indien nodig.');
             } else {
                 document.getElementById('loginCardTitle').textContent = 'Inloggen';
                 document.getElementById('loginPinSubtitle').textContent = 'Voer je PIN in';
                 document.getElementById('loginPinLabel').textContent = 'PIN';
                 document.getElementById('loginPinConfirmGroup').style.display = 'none';
                 document.getElementById('loginPinBtn').textContent = 'Inloggen';
+                if (setupWarn) setupWarn.style.display = 'none';
             }
             setTimeout(() => document.getElementById('loginPin').focus(), 50);
         } catch (e) {
@@ -1752,26 +1758,21 @@ const app = {
         // Legacy — niet meer gebruikt
     },
 
-    /** Haal werknemersnamen op voor de employeeIds van de dagplanning */
+    /** Haal werknemersnamen op voor de employeeIds van de dagplanning.
+     *  Gebruikt de lokale name-cache (opgebouwd bij login + eerdere lookups)
+     *  zodat we niet bij elke render een API-call doen. Onbekende IDs worden
+     *  via /employees/{id} opgehaald en daarna gecachet. */
     async _getEmployeeNames(employeeIds) {
         if (!employeeIds || employeeIds.length === 0) return [];
         const employees = [];
         for (const empId of employeeIds) {
-            // Probeer eerst uit EMPLOYEES (snel, geen API call nodig)
-            let name = null;
-            const knownUsers = RobawsAPI.EMPLOYEES || {};
-            for (const [email, userData] of Object.entries(knownUsers)) {
-                if (String(userData.employeeId) === String(empId)) {
-                    name = userData.name;
-                    break;
-                }
-            }
-            // Fallback: ophalen via API als niet in KNOWN_USERS
+            let name = RobawsAPI.getCachedEmployeeName(empId);
             if (!name) {
                 try {
                     const res = await RobawsAPI.get(`employees/${empId}`);
                     if (res.code === 200 && res.data) {
-                        name = [res.data.firstName, res.data.lastName].filter(Boolean).join(' ');
+                        name = [res.data.firstName, res.data.lastName].filter(Boolean).join(' ') || null;
+                        if (name) RobawsAPI.cacheEmployeeName(empId, name);
                     }
                 } catch(e) {
                     console.warn('[App] Kon werknemer', empId, 'niet ophalen:', e.message);
