@@ -2820,29 +2820,45 @@ const RobawsAPI = {
         }
 
         if (newStatus) {
-            // Werkbon status updaten
+            // v88: Werkbon status + Betaling extra-field updaten
             try {
                 const woFull = await this.get(`work-orders/${workOrderId}`);
                 if (woFull.code === 200 && woFull.data) {
                     woFull.data.status = newStatus;
+                    if (paymentMethod) {
+                        woFull.data.extraFields = woFull.data.extraFields || {};
+                        woFull.data.extraFields['Betaling'] = {
+                            type: 'SELECT',
+                            group: 'Betaling',
+                            stringValue: paymentMethod,
+                        };
+                    }
                     await this.put(`work-orders/${workOrderId}`, woFull.data);
-                    console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}`);
+                    console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
                 }
             } catch(e) {
-                console.warn('[RobawsAPI] Werkbon status updaten mislukt:', e);
+                console.warn('[RobawsAPI] Werkbon status/Betaling updaten mislukt:', e);
             }
 
-            // Sales order status updaten
+            // v88: Sales order status + Betaling extra-field updaten
             if (woSalesOrderId) {
                 try {
                     const soFull = await this.get(`sales-orders/${woSalesOrderId}`);
                     if (soFull.code === 200 && soFull.data) {
                         soFull.data.status = newStatus;
+                        if (paymentMethod) {
+                            soFull.data.extraFields = soFull.data.extraFields || {};
+                            soFull.data.extraFields['Betaling'] = {
+                                type: 'SELECT',
+                                group: 'Betaling',
+                                stringValue: paymentMethod,
+                            };
+                        }
                         await this.put(`sales-orders/${woSalesOrderId}`, soFull.data);
-                        console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}`);
+                        console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
                     }
                 } catch(e) {
-                    console.warn('[RobawsAPI] Order status updaten mislukt:', e);
+                    console.warn('[RobawsAPI] Order status/Betaling updaten mislukt:', e);
                 }
             }
         }
@@ -3220,6 +3236,65 @@ const RobawsAPI = {
             te.billableHours = this._roundUpHalfHour(hrs);
         }
         return await this.post(`work-orders/${workOrderId}/time-entries`, te);
+    },
+
+    /**
+     * v88: Update Betaling extra-field op een document (werkbon / order / factuur).
+     * Doet GET (om bestaand object te krijgen), wijzigt extraFields.Betaling, doet PUT.
+     * Robaws v2 vereist het volledige object terug bij PUT.
+     *
+     * @param {string} resource - 'work-orders' | 'sales-orders' | 'sales-invoices'
+     * @param {string|number} id
+     * @param {string} paymentMethod - 'Viva wallet' | 'Cash' | 'Overschrijving' | 'Via factuur'
+     * @returns {Promise<{ok:boolean, code?:number, error?:string}>}
+     */
+    async updateBetalingField(resource, id, paymentMethod) {
+        try {
+            const fullRes = await this.get(`${resource}/${id}`);
+            if (fullRes.code !== 200 || !fullRes.data) {
+                return { ok: false, code: fullRes.code, error: 'GET faalde' };
+            }
+            const data = fullRes.data;
+            data.extraFields = data.extraFields || {};
+            data.extraFields['Betaling'] = {
+                type: 'SELECT',
+                group: 'Betaling',
+                stringValue: paymentMethod,
+            };
+            const putRes = await this.put(`${resource}/${id}`, data);
+            if (putRes.code !== 200 && putRes.code !== 204) {
+                return { ok: false, code: putRes.code, error: 'PUT faalde' };
+            }
+            return { ok: true, code: putRes.code };
+        } catch (e) {
+            return { ok: false, error: (e && e.message) || String(e) };
+        }
+    },
+
+    /**
+     * v88: Update de Betaling extra-field op alle 3 documenten (werkbon, order, factuur).
+     * Onafhankelijk — bij fout op één document gaan we door met de rest.
+     *
+     * @param {Object} ids - { workOrderId, salesOrderId, invoiceId }
+     * @param {string} paymentMethod
+     * @returns {Promise<{ok:boolean, results: {workOrder, salesOrder, invoice}}>}
+     */
+    async setBetalingOnAllDocs(ids, paymentMethod) {
+        const { workOrderId, salesOrderId, invoiceId } = ids || {};
+        const results = { workOrder: null, salesOrder: null, invoice: null };
+        if (workOrderId) {
+            results.workOrder = await this.updateBetalingField('work-orders', workOrderId, paymentMethod);
+        }
+        if (salesOrderId) {
+            results.salesOrder = await this.updateBetalingField('sales-orders', salesOrderId, paymentMethod);
+        }
+        if (invoiceId) {
+            results.invoice = await this.updateBetalingField('sales-invoices', invoiceId, paymentMethod);
+        }
+        const allOk = (!workOrderId || results.workOrder?.ok)
+            && (!salesOrderId || results.salesOrder?.ok)
+            && (!invoiceId || results.invoice?.ok);
+        return { ok: allOk, results };
     },
 
     /** v83: Voeg een kilometers/commute-lijn toe aan een werkbon.

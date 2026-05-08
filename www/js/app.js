@@ -3949,6 +3949,21 @@ const app = {
 
             this._markWOSubmitted(data);
 
+            // v88: Sla "laatste betaling" context op zodat Olivier op de Uitgevoerd-tab
+            // de methode kan switchen als de Viva-terminal faalt.
+            try {
+                const ctx = {
+                    workOrderId: workOrderId,
+                    salesOrderId: this.currentWO.salesOrderId || null,
+                    invoiceId: (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.id) || null,
+                    invoiceLogicId: (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.logicId) || null,
+                    paymentMethod: paymentMethod,
+                    invoiceResult: invoiceResult,  // bewaard voor reopen Viva/Overschrijving betaalscherm
+                    timestamp: Date.now(),
+                };
+                localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+            } catch(e) { /* localStorage quota — niet kritiek */ }
+
             // === STAP 4: Betaalmethode-specifieke afhandeling ===
             if (paymentMethod === 'Viva wallet') {
                 // Viva Wallet → toon betaalscherm met terminal/QR
@@ -4305,6 +4320,156 @@ const app = {
             }
         } catch (e) {
             this.toast('Kon betaalscherm niet openen');
+        }
+    },
+
+    /**
+     * v88: Open modal met de 4 betaalmethoden — gebruiker kan de methode van
+     * de laatste betaling aanpassen (bv. Viva-terminal faalde, klant geeft cash).
+     * Bij verandering: PUT updates Betaling-veld op werkbon + order + factuur,
+     * en opent eventueel het nieuwe betaalscherm.
+     */
+    openChangePaymentMethodModal() {
+        let ctx;
+        try {
+            const raw = localStorage.getItem('qe_last_payment_context');
+            if (!raw) { this.toast('Geen laatste betaling gevonden'); return; }
+            ctx = JSON.parse(raw);
+        } catch (e) {
+            this.toast('Kon betaling niet laden');
+            return;
+        }
+
+        // Verwijder bestaande modal als die nog open staat
+        let m = document.getElementById('changePmModal');
+        if (m) m.remove();
+        m = document.createElement('div');
+        m.id = 'changePmModal';
+        m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px';
+
+        const inv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
+        const amount = parseFloat(inv.totalInclVat || 0).toFixed(2);
+        const cur = ctx.paymentMethod || '';
+        const mkBtn = (method, icon, label) => {
+            const isCurrent = (method === cur)
+                || (method === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
+            const bg = isCurrent ? '#e3f2fd' : '#fff';
+            const border = isCurrent ? '#1565C0' : '#cfd8dc';
+            const tag = isCurrent ? '<span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;margin-left:8px;font-weight:600">huidig</span>' : '';
+            return `<button onclick="app.changeLastPaymentMethod('${method}')"
+                style="display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;margin-bottom:8px;border:2px solid ${border};border-radius:10px;background:${bg};font-size:15px;text-align:left;cursor:pointer">
+                <span style="font-size:20px">${icon}</span>
+                <span style="flex:1;font-weight:500">${label}</span>${tag}
+            </button>`;
+        };
+
+        m.innerHTML = `
+            <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto">
+                <div style="font-size:18px;font-weight:700;color:var(--qe-darkblue);margin-bottom:6px">
+                    Betaalmethode aanpassen
+                </div>
+                <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px">
+                    Factuur ${ctx.invoiceLogicId || inv.logicId || ''} — € ${amount}<br>
+                    Kies een nieuwe methode of open het bestaande betaalscherm.
+                </div>
+                ${mkBtn('Viva wallet', '💳', 'Viva Wallet (terminal)')}
+                ${mkBtn('Cash', '💵', 'Cash')}
+                ${mkBtn('Overschrijving', '🏦', 'Overschrijving ter plaatse')}
+                ${mkBtn('Via factuur', '📋', 'Via factuur')}
+                <button onclick="document.getElementById('changePmModal').remove()"
+                    style="width:100%;padding:12px;margin-top:8px;background:#f5f5f5;color:#444;border:none;border-radius:10px;font-size:14px;cursor:pointer">
+                    Annuleren
+                </button>
+                <div id="changePmStatus" style="font-size:12px;text-align:center;margin-top:10px;display:none"></div>
+            </div>`;
+        document.body.appendChild(m);
+    },
+
+    /**
+     * v88: Handelt de klik op een betaalmethode in de change-modal af.
+     *  - Zelfde methode als huidig → reopen het oude betaalscherm (Viva/Overschrijving)
+     *    of sluit modal (Cash/Via factuur).
+     *  - Andere methode → PUT Betaling-veld update op werkbon + order + factuur,
+     *    werk localStorage context bij, en open eventueel het nieuwe betaalscherm.
+     */
+    async changeLastPaymentMethod(newMethod) {
+        const modal = document.getElementById('changePmModal');
+        const statusEl = document.getElementById('changePmStatus');
+        let ctx;
+        try {
+            ctx = JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}');
+        } catch (e) { ctx = {}; }
+        if (!ctx.workOrderId) {
+            this.toast('Geen laatste betaling gevonden');
+            if (modal) modal.remove();
+            return;
+        }
+
+        const cur = ctx.paymentMethod || '';
+        const sameMethod = (newMethod === cur)
+            || (newMethod === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
+
+        if (sameMethod) {
+            // Zelfde methode → gewoon het oude betaalscherm openen (als er één is)
+            if (modal) modal.remove();
+            if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
+                this.showPaymentScreen(ctx.invoiceResult);
+            } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
+                this.showOverschrijvingScreen(ctx.invoiceResult);
+            } else {
+                this.toast('Geen betaalscherm voor ' + newMethod);
+            }
+            return;
+        }
+
+        // Andere methode → PUT updates op alle 3 docs
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = 'var(--qe-grey)';
+            statusEl.textContent = '⏳ Bijwerken in Robaws…';
+        }
+
+        try {
+            const res = await RobawsAPI.setBetalingOnAllDocs({
+                workOrderId: ctx.workOrderId,
+                salesOrderId: ctx.salesOrderId,
+                invoiceId: ctx.invoiceId,
+            }, newMethod);
+            if (!res.ok) {
+                console.warn('[App] Betaling update partial fail:', res.results);
+                if (statusEl) {
+                    statusEl.style.color = '#c62828';
+                    const failed = [];
+                    if (res.results.workOrder && !res.results.workOrder.ok) failed.push('werkbon');
+                    if (res.results.salesOrder && !res.results.salesOrder.ok) failed.push('order');
+                    if (res.results.invoice && !res.results.invoice.ok) failed.push('factuur');
+                    statusEl.textContent = '⚠️ Niet alles is bijgewerkt: ' + failed.join(', ');
+                }
+                return;
+            }
+            // Update lokale context
+            ctx.paymentMethod = newMethod;
+            ctx.timestamp = Date.now();
+            localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+
+            if (modal) modal.remove();
+            this.toast('Betaalmethode → ' + newMethod);
+
+            // Open nieuw betaalscherm waar relevant
+            if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
+                this.showPaymentScreen(ctx.invoiceResult);
+            } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
+                this.showOverschrijvingScreen(ctx.invoiceResult);
+            } else {
+                // Cash / Via factuur — refresh Uitgevoerd zodat de knop label update
+                this.loadUitgevoerd();
+            }
+        } catch (e) {
+            console.error('[App] changeLastPaymentMethod error:', e);
+            if (statusEl) {
+                statusEl.style.color = '#c62828';
+                statusEl.textContent = 'Fout: ' + (e && e.message);
+            }
         }
     },
 
@@ -5888,39 +6053,28 @@ const app = {
             const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
             const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-            // Check of er openstaande betaalschermen zijn
+            // v88: Eén "Laatste betaling" knop bovenaan — klik opent modal met 4 betaalmethoden
+            // (zodat Olivier kan switchen na een Viva-fout).
             let paymentBtns = '';
             try {
-                const lastOv = localStorage.getItem('qe_last_overschrijving');
-                if (lastOv) {
-                    const ovData = JSON.parse(lastOv);
-                    const inv = ovData.invoice || {};
-                    const pay = ovData.payment || {};
-                    const amount = parseFloat(pay.amount || inv.totalInclVat || 0).toFixed(2);
-                    paymentBtns += `
-                        <div class="card" style="margin-bottom:8px;background:rgba(46,125,50,0.06);border-left:3px solid var(--qe-green);cursor:pointer" onclick="app.reopenLastPaymentScreen('overschrijving')">
-                            <div style="display:flex;align-items:center;justify-content:space-between">
-                                <div>
-                                    <div style="font-size:13px;font-weight:600;color:#2E7D32">🏦 Overschrijving betaalscherm</div>
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">Factuur ${inv.logicId || ''} — € ${amount}</div>
-                                </div>
-                                <div style="font-size:14px;color:#2E7D32;font-weight:600">Openen →</div>
-                            </div>
-                        </div>`;
-                }
-                const lastViva = localStorage.getItem('qe_last_payment');
-                if (lastViva) {
-                    const vivaData = JSON.parse(lastViva);
-                    const inv = vivaData.invoice || {};
+                const ctxRaw = localStorage.getItem('qe_last_payment_context');
+                if (ctxRaw) {
+                    const ctx = JSON.parse(ctxRaw);
+                    const inv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
                     const amount = parseFloat(inv.totalInclVat || 0).toFixed(2);
-                    paymentBtns += `
-                        <div class="card" style="margin-bottom:8px;background:rgba(21,101,192,0.06);border-left:3px solid #1565C0;cursor:pointer" onclick="app.reopenLastPaymentScreen('viva')">
+                    const method = ctx.paymentMethod || '?';
+                    const methodIcon = method === 'Viva wallet' ? '💳'
+                        : method === 'Cash' ? '💵'
+                        : method.startsWith('Overschrijving') ? '🏦'
+                        : '📋';
+                    paymentBtns = `
+                        <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
                             <div style="display:flex;align-items:center;justify-content:space-between">
-                                <div>
-                                    <div style="font-size:13px;font-weight:600;color:#1565C0">💳 Viva Wallet betaalscherm</div>
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">Factuur ${inv.logicId || ''} — € ${amount}</div>
+                                <div style="flex:1">
+                                    <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
+                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${ctx.invoiceLogicId || inv.logicId || ''} — € ${amount}</div>
+                                    <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
                                 </div>
-                                <div style="font-size:14px;color:#1565C0;font-weight:600">Openen →</div>
                             </div>
                         </div>`;
                 }
