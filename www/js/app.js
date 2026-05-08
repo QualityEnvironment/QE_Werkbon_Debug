@@ -5825,8 +5825,20 @@ const app = {
             }
             const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
             // v74: kwartier-afronding (in=up, uit=down)
-            const roundUp15 = (mins) => Math.ceil(mins / 15) * 15;
-            const roundDown15 = (mins) => Math.floor(mins / 15) * 15;
+            // v94+: TOLERANTIE van 4 minuten — moet identiek zijn aan clock.js zodat
+            // de getoonde uren overeenkomen met wat naar Robaws gestuurd wordt.
+            const TOLERANCE = 4;
+            const roundUp15 = (mins) => {
+                const rem = mins % 15;
+                if (rem > 0 && rem <= TOLERANCE) return mins - rem;
+                return Math.ceil(mins / 15) * 15;
+            };
+            const roundDown15 = (mins) => {
+                const rem = mins % 15;
+                const distUpper = (15 - rem) % 15;
+                if (distUpper > 0 && distUpper <= TOLERANCE) return mins + distUpper;
+                return Math.floor(mins / 15) * 15;
+            };
             // Haal pauze + startuur 1x van ingelogde user
             let userStartuurMin = 7 * 60;  // 07:00 default
             let userPauze = 60;

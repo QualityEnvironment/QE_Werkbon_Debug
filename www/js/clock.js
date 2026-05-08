@@ -784,8 +784,26 @@ window.QEClock = {
         //  - Clock-in: round UP naar volgend kwartier (6:02 → 6:15, 6:31 → 6:45)
         //  - Bureau-scan: max(round_up_15(actual), startuur werknemer) — kan nooit voor startuur
         //  - Camionet-scan: gewoon round_up_15(actual)
-        const roundUp15 = (mins) => Math.ceil(mins / 15) * 15;
-        const roundDown15 = (mins) => Math.floor(mins / 15) * 15;
+        // v94+: TOLERANTIE van 4 minuten — als je binnen 4 min van een kwartier zit,
+        //  wordt afgerond naar dat kwartier (in beide richtingen). Voorbeeld:
+        //   - 6:48 → 6:45 (3 min over → naar dichtsbijzijnde kwartier omlaag)
+        //   - 6:50 → 7:00 (5 min over → normaal naar boven)
+        //   - 15:28 → 15:30 (2 min onder → naar dichtsbijzijnde kwartier omhoog)
+        //   - 15:25 → 15:15 (5 min onder → normaal naar beneden)
+        const TOLERANCE = 4;
+        const roundUp15 = (mins) => {
+            const rem = mins % 15;
+            // Binnen tolerantie van het lagere kwartier? → omlaag (gunstig voor werknemer bij in-klok)
+            if (rem > 0 && rem <= TOLERANCE) return mins - rem;
+            return Math.ceil(mins / 15) * 15;
+        };
+        const roundDown15 = (mins) => {
+            const rem = mins % 15;
+            const distUpper = (15 - rem) % 15;
+            // Binnen tolerantie van het hogere kwartier? → omhoog (gunstig voor werknemer bij uit-klok)
+            if (distUpper > 0 && distUpper <= TOLERANCE) return mins + distUpper;
+            return Math.floor(mins / 15) * 15;
+        };
         const useStartuurCorrection = (session.tagType === 'bureau');
         let entryStartMin;
         if (useStartuurCorrection) {
