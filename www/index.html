@@ -406,6 +406,11 @@
             📂 Zoek op artikelgroep
         </button>
 
+        <!-- v93: Eenmalig artikel toevoegen (genereert taak voor Felicity) -->
+        <button class="btn btn-outline btn-sm btn-full mb-16" onclick="app.openCustomArticleModal()" style="border-color:var(--qe-orange);color:var(--qe-orange)">
+            ✏️ Eenmalig artikel (niet in Robaws)
+        </button>
+
         <!-- Artikelgroepen browser -->
         <div id="articleGroupBrowser" class="card mb-16" style="display:none;padding:12px">
             <!-- Gevuld door JS -->
@@ -821,12 +826,12 @@
         <div style="font-size:14px;font-weight:600;margin-bottom:8px">Uren (totaal in werkbon)</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <div class="form-group" style="margin:0">
-                <label style="font-size:12px;color:var(--qe-grey)">Klant (min)</label>
-                <input type="number" id="correctieKlantMin" class="form-input" value="0" oninput="app.setCorrectieKlantMin(this.value)">
+                <label style="font-size:12px;color:var(--qe-grey)">Klant (uren)</label>
+                <input type="number" step="0.25" min="0" id="correctieKlantUur" class="form-input" value="0" oninput="app.setCorrectieKlantUur(this.value)">
             </div>
             <div class="form-group" style="margin:0">
-                <label style="font-size:12px;color:var(--qe-grey)">Verplaatsing (min)</label>
-                <input type="number" id="correctieVerplMin" class="form-input" value="0" oninput="app.setCorrectieVerplMin(this.value)">
+                <label style="font-size:12px;color:var(--qe-grey)">Verplaatsing (uren)</label>
+                <input type="number" step="0.25" min="0" id="correctieVerplUur" class="form-input" value="0" oninput="app.setCorrectieVerplUur(this.value)">
             </div>
         </div>
         <div id="correctieDelta" style="margin-top:10px;padding:8px;background:rgba(0,0,0,0.03);border-radius:6px"></div>
@@ -972,8 +977,8 @@
 <!-- Hoofdapplicatie -->
 <script src="js/app.js"></script>
 <script>
-    // Service Worker (alleen als beschikbaar — niet op file://)
-    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
+    // Service Worker (alleen als beschikbaar — voor offline gebruik)
+    if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js')
             .then(reg => console.log('SW registered:', reg.scope))
             .catch(err => console.log('SW failed:', err));

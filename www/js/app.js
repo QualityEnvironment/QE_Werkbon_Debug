@@ -821,24 +821,42 @@ const app = {
     },
 
     // ========================================
-    // DATE STRIP — alleen vandaag en morgen
+    // DATE STRIP — vandaag en volgende werkdag (weekend skippen)
     // ========================================
     buildDateStrip() {
         const strip = document.getElementById('dateStrip');
         const today = new Date();
-        const tomorrow = new Date(today);
-        tomorrow.setDate(today.getDate() + 1);
+
+        // v92+: skip weekend voor "volgende werkdag"
+        //   - vrijdag → maandag (3 dagen verder)
+        //   - zaterdag → maandag (2 dagen verder)
+        //   - zondag → maandag (1 dag verder)
+        //   - andere dagen → +1 dag
+        const next = new Date(today);
+        next.setDate(today.getDate() + 1);
+        while (next.getDay() === 0 || next.getDay() === 6) {
+            next.setDate(next.getDate() + 1);
+        }
 
         const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
         const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-        const dates = [today, tomorrow];
+        const dates = [today, next];
+
+        // Bepaal het label voor de "volgende werkdag" — afhankelijk van of het morgen
+        // letterlijk is, of een andere weekdag (bv. ma als het vandaag vr is)
+        const tomorrowReal = new Date(today);
+        tomorrowReal.setDate(today.getDate() + 1);
+        const nextIsRealTomorrow = next.toDateString() === tomorrowReal.toDateString();
+        const dayNames = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
 
         strip.innerHTML = dates.map(d => {
             const dateStr = this._localDateStr(d);
             const isToday = d.toDateString() === today.toDateString();
             const isActive = d.toDateString() === this.currentDate.toDateString();
-            const label = isToday ? 'Vandaag' : 'Morgen';
+            const label = isToday
+                ? 'Vandaag'
+                : (nextIsRealTomorrow ? 'Morgen' : dayNames[d.getDay()]);
 
             return `
                 <div class="date-chip ${isActive ? 'active' : ''} ${isToday ? 'today' : ''}"
@@ -2066,8 +2084,93 @@ const app = {
         document.getElementById('materialSearchResults').style.display = 'none';
         this.renderMaterials();
         this.toast(`${article.name} toegevoegd`);
-        // Bijhouden voor veelgebruikte materialen
-        this._trackFavoriteMaterial(article);
+        // Bijhouden voor veelgebruikte materialen (custom-artikels niet)
+        if (!article.isCustom) this._trackFavoriteMaterial(article);
+    },
+
+    /**
+     * v93: Open modal om een EENMALIG artikel toe te voegen aan de werkbon.
+     * Het artikel bestaat (nog) niet in Robaws — bij submit wordt automatisch
+     * een taak voor Felicity (userId 6) aangemaakt met de details.
+     */
+    openCustomArticleModal() {
+        if (!this.currentWO) { this.toast('Geen werkbon actief'); return; }
+
+        let m = document.getElementById('customArticleModal');
+        if (m) m.remove();
+        m = document.createElement('div');
+        m.id = 'customArticleModal';
+        m.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box';
+
+        card.innerHTML =
+            '<div style="font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px">✏️ Eenmalig artikel</div>' +
+            '<div style="font-size:12px;color:#666;margin-bottom:16px">Voor artikels die nog niet in Robaws staan. Felicity krijgt een taakje om het artikel aan te maken.</div>' +
+            '<div style="margin-bottom:12px">' +
+                '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Omschrijving</label>' +
+                '<input id="caDesc" type="text" placeholder="Bijv. Speciale flens 50mm" autocomplete="off" ' +
+                'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box">' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">' +
+                '<div>' +
+                    '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Verkoopprijs (€)</label>' +
+                    '<input id="caPrice" type="number" step="0.01" min="0" value="0" ' +
+                    'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box;text-align:center">' +
+                '</div>' +
+                '<div>' +
+                    '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Aantal</label>' +
+                    '<input id="caQty" type="number" step="0.01" min="0.01" value="1" ' +
+                    'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box;text-align:center">' +
+                '</div>' +
+            '</div>' +
+            '<div id="caError" style="font-size:12px;color:#c62828;margin-bottom:8px;display:none"></div>' +
+            '<button id="caSubmit" style="width:100%;padding:14px;background:#E65100;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;margin-bottom:8px">' +
+                'Toevoegen' +
+            '</button>' +
+            '<button id="caCancel" style="width:100%;padding:12px;background:#f5f5f5;color:#444;border:none;border-radius:10px;font-size:14px;cursor:pointer">Annuleren</button>';
+
+        m.appendChild(card);
+        document.body.appendChild(m);
+
+        const descEl = document.getElementById('caDesc');
+        const priceEl = document.getElementById('caPrice');
+        const qtyEl = document.getElementById('caQty');
+        const errEl = document.getElementById('caError');
+
+        setTimeout(() => { try { descEl.focus(); } catch(_) {} }, 100);
+
+        document.getElementById('caSubmit').addEventListener('click', () => {
+            const desc = (descEl.value || '').trim();
+            const price = parseFloat(priceEl.value) || 0;
+            const qty = parseFloat(qtyEl.value) || 1;
+            if (!desc) {
+                errEl.textContent = 'Omschrijving is verplicht';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (price <= 0) {
+                errEl.textContent = 'Verkoopprijs moet groter dan 0 zijn';
+                errEl.style.display = 'block';
+                return;
+            }
+            const data = this.woData[this.currentWO.id];
+            data.materials = data.materials || [];
+            data.materials.push({
+                id: '__custom_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                name: desc,
+                salePrice: price,
+                unitPrice: price,
+                quantity: qty,
+                unit: 'stuk',
+                isCustom: true,
+            });
+            m.remove();
+            this.renderMaterials();
+            this.toast('✏️ Eenmalig artikel toegevoegd — Felicity krijgt taak bij verzenden');
+        });
+        document.getElementById('caCancel').addEventListener('click', () => m.remove());
     },
 
     // Veelgebruikte materialen bijhouden in localStorage
@@ -3770,7 +3873,9 @@ const app = {
             date: this._localDateStr(this.currentDate),
             // Regie-vinkje overnemen van de sales order (niet hardcoded true)
             timeAndMaterial: this.currentWO.timeAndMaterial ?? false,
-            materials: data.materials.map(m => ({
+            // v93: filter eenmalige artikels uit — die hebben geen Robaws articleId.
+            // Felicity krijgt taakje om die zelf toe te voegen.
+            materials: data.materials.filter(m => !m.isCustom).map(m => ({
                 articleId: m.id,
                 name: m.name,
                 quantity: m.quantity,
@@ -3889,6 +3994,30 @@ const app = {
 
             const workOrderId = werkbonResult.workOrderId;
 
+            // v93: Eenmalige artikels → taak voor Felicity (userId 6)
+            // De artikels staan NIET op de werkbon als line-item (geen Robaws articleId).
+            // Felicity moet ze in Robaws aanmaken en de werkbon aanvullen.
+            try {
+                const customArticles = (data.materials || []).filter(m => m.isCustom);
+                if (customArticles.length > 0 && workOrderId) {
+                    const lines = customArticles.map(m => {
+                        const price = parseFloat(m.salePrice || m.unitPrice || 0).toFixed(2);
+                        const qty = parseFloat(m.quantity || 1);
+                        return `• ${m.name} — ${qty}× à €${price}`;
+                    });
+                    const desc = 'Eenmalige artikels op deze werkbon — gelieve aan te maken in Robaws ' +
+                        'en als line-item toe te voegen aan de werkbon.\n\n' + lines.join('\n');
+                    await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                        title: '✏️ Eenmalig artikel toevoegen aan Robaws',
+                        description: desc,
+                        assignedUserId: 6, // Felicity
+                    });
+                    console.log('[App] Felicity-taak aangemaakt voor', customArticles.length, 'eenmalige artikels');
+                }
+            } catch (e) {
+                console.warn('[App] Felicity-taak aanmaken mislukt (niet kritiek):', e && e.message);
+            }
+
             // === STAP 2: Foto's + handtekening ===
             await this._uploadPhotosAndSignature(data, workOrderId, signatureName, signatureData);
 
@@ -3906,7 +4035,8 @@ const app = {
                 userId: this.currentUser.robawsUserId,
                 installationIds: this.currentWO.installationIds || [],
                 // Materialen direct meesturen (WO material-entries ≠ line-items in Robaws)
-                materials: data.materials.map(m => ({
+                // v93: filter custom-artikels uit — Felicity-taak handelt die af.
+                materials: data.materials.filter(m => !m.isCustom).map(m => ({
                     articleId: m.id,
                     name: m.name,
                     quantity: m.quantity || 1,
@@ -6278,8 +6408,9 @@ const app = {
                 ${p.aantalWerkbonnen > 1 ? ` · <span style="color:var(--qe-orange)">${p.aantalWerkbonnen} werkbons (incl. ${p.aantalWerkbonnen - 1} correctie${p.aantalWerkbonnen > 2 ? 's' : ''})</span>` : ''}
             </div>`;
 
-        document.getElementById('correctieKlantMin').value = s.klantMin;
-        document.getElementById('correctieVerplMin').value = s.verplMin;
+        // v92+: tijd in uren (s.klantMin/verplMin blijft intern in min, UI toont uren met 2 decimalen)
+        document.getElementById('correctieKlantUur').value = (s.klantMin / 60).toFixed(2);
+        document.getElementById('correctieVerplUur').value = (s.verplMin / 60).toFixed(2);
 
         // Render materialen
         const matList = document.getElementById('correctieMaterialen');
@@ -6312,8 +6443,9 @@ const app = {
     updateCorrectieDelta() {
         const s = this.correctieState;
         if (!s) return;
-        const newKlant = (parseInt(document.getElementById('correctieKlantMin').value) || 0) / 60;
-        const newVerpl = (parseInt(document.getElementById('correctieVerplMin').value) || 0) / 60;
+        // v92+: input is uren (decimaal), state blijft min
+        const newKlant = parseFloat(document.getElementById('correctieKlantUur').value) || 0;
+        const newVerpl = parseFloat(document.getElementById('correctieVerplUur').value) || 0;
         const dKlant = Math.round((newKlant - s.origineel.klantUur) * 100) / 100;
         const dVerpl = Math.round((newVerpl - s.origineel.verplUur) * 100) / 100;
         const fmt = v => (v > 0 ? '+' : '') + v.toFixed(2) + 'u';
@@ -6337,6 +6469,22 @@ const app = {
     setCorrectieVerplMin(v) {
         if (this.correctieState) {
             this.correctieState.verplMin = parseInt(v) || 0;
+            this.updateCorrectieDelta();
+        }
+    },
+
+    /** v92+: input in uren (decimaal). Intern bewaren we minuten voor compatibiliteit. */
+    setCorrectieKlantUur(v) {
+        if (this.correctieState) {
+            const uur = parseFloat(v) || 0;
+            this.correctieState.klantMin = Math.round(uur * 60);
+            this.updateCorrectieDelta();
+        }
+    },
+    setCorrectieVerplUur(v) {
+        if (this.correctieState) {
+            const uur = parseFloat(v) || 0;
+            this.correctieState.verplMin = Math.round(uur * 60);
             this.updateCorrectieDelta();
         }
     },
