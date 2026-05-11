@@ -663,14 +663,30 @@ const app = {
         // Dark mode toggle synchroniseren
         const dmToggle = document.getElementById('darkModeToggle');
         if (dmToggle) dmToggle.checked = document.body.classList.contains('dark-mode');
-        // App versie tonen — haal uit version.json
+        // App-versie tonen — Web (= www/git versie uit version.json)
+        // en APK-versie (uit native bridge, vereist v106+ APK; degradeert sierlijk).
         const versionEl = document.getElementById('appVersionInfo');
         if (versionEl) {
+            // Helper om APK-versie te lezen (graceful fallback)
+            const apkVer = (() => {
+                try {
+                    if (window.QEBridge && typeof QEBridge.getApkVersionName === 'function') {
+                        const n = QEBridge.getApkVersionName();
+                        if (n) return n;
+                    }
+                } catch(_e) {}
+                return null;
+            })();
             fetch('version.json?t=' + Date.now()).then(r => r.json()).then(d => {
-                versionEl.textContent = `Versie: ${d.version}`;
+                versionEl.innerHTML = apkVer
+                    ? `Web-versie: ${d.version}<br>App-versie: ${apkVer}`
+                    : `Versie: ${d.version}`;
             }).catch(() => {
                 const v = (window.QEBridge && QEBridge.getAppVersion) ? QEBridge.getAppVersion() : 0;
-                versionEl.textContent = v > 0 ? `Versie: ${v}` : 'Versie onbekend';
+                const line1 = v > 0 ? `Versie: ${v}` : 'Versie onbekend';
+                versionEl.innerHTML = apkVer
+                    ? `Web-versie: ${v > 0 ? v : '?'}<br>App-versie: ${apkVer}`
+                    : line1;
             });
         }
         const updateStatus = document.getElementById('updateStatus');
