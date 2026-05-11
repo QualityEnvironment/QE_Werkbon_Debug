@@ -4347,6 +4347,33 @@ const app = {
                         console.warn('[App] custom article factuur line-item exception:', e && e.message);
                     }
                 }
+
+                // v109: nu er line-items zijn bijgekomen klopt het oude `totalInclVat`
+                // uit `invoiceResult` niet meer met de werkelijke factuur in Robaws.
+                // Refetch de factuur zodat het betaalscherm het juiste bedrag toont
+                // (anders mist de eenmalige-artikel-prijs uit de Viva/Overschrijving
+                // betaling). De factuur in Robaws zelf is wel correct.
+                try {
+                    const refreshed = await RobawsAPI.get(`sales-invoices/${invoiceId}`);
+                    if (refreshed.code === 200 && refreshed.data) {
+                        // Merge bijgewerkte bedragen-velden over het bestaande invoice-object
+                        const fresh = refreshed.data;
+                        const merged = { ...invoiceResult.invoice };
+                        for (const k of ['totalInclVat', 'totalExclVat', 'totalVat',
+                                         'amount', 'amountInclVat', 'amountExclVat',
+                                         'totalCost', 'totalPrice', 'lineItems']) {
+                            if (fresh[k] !== undefined) merged[k] = fresh[k];
+                        }
+                        invoiceResult.invoice = merged;
+                        console.log('[App] Factuur ververst na eenmalige artikels — nieuw totaal:',
+                            merged.totalInclVat);
+                    } else {
+                        console.warn('[App] Refetch factuur na eenmalige artikels gaf code',
+                            refreshed.code);
+                    }
+                } catch (e) {
+                    console.warn('[App] Refetch factuur faalde:', e && e.message);
+                }
             }
 
             this._markWOSubmitted(data);

@@ -1732,9 +1732,11 @@ const RobawsAPI = {
                 billableHours: (onderhoud && isKlant) ? 0 : this._roundUpHalfHour(hrs),
             };
             if (code && code.id) te.articleId = toStr(code.id);
-            // Pauze in minuten meesturen (Robaws veld "breakDuration")
+            // v108: Robaws v2 wil 'breakMinutes' (was 'breakDuration' — die werd
+            // stilletjes genegeerd waardoor pauze altijd 0 toonde op werkbonnen
+            // die via "dagplanning bevestigen" werden aangemaakt).
             if (h.pauze && h.pauze > 0) {
-                te.breakDuration = h.pauze;
+                te.breakMinutes = parseInt(h.pauze, 10);
             }
             // Bij onderhoud: werkuren met verkoopprijs 0 en kostprijs 57.50
             if (onderhoud && isKlant) {
@@ -3251,19 +3253,15 @@ const RobawsAPI = {
             te.hours = parseFloat(hoursOverride);
             te.billableHours = parseFloat(hoursOverride);
         } else if (startTime && endTime) {
-            // v107: stuur BRUTO uren in `hours` (incl. pauze), zodat het pauze-veld
-            // in de werkbon zichtbaar blijft. Eerder werd pauze hier al van de uren
-            // afgetrokken — gevolg: Robaws toonde pauze als 0,00 omdat de hours al
-            // "gecorrigeerd" waren. `billableHours` blijft netto (met kwartier-
-            // afronding) zodat de factureerbare uren ongewijzigd zijn.
+            // Bereken hours uit start/end - pauze (= netto). Robaws toont
+            // `hours` in de "Uren"-kolom van de werkbon als netto-uren
+            // (= bruto − pauze), dus aftrekken hier is correct.
             const [sh, sm] = startTime.split(':').map(Number);
             const [eh, em] = endTime.split(':').map(Number);
-            const breakMin = parseInt(breakMinutes, 10) || 0;
-            const grossMinutes = ((eh || 0) * 60 + (em || 0)) - ((sh || 0) * 60 + (sm || 0));
-            const grossHrs = Math.max(0, Math.round(grossMinutes / 60 * 100) / 100);
-            const netHrs   = Math.max(0, Math.round((grossMinutes - breakMin) / 60 * 100) / 100);
-            te.hours = grossHrs;
-            te.billableHours = this._roundUpHalfHour(netHrs);
+            const minutes = ((eh || 0) * 60 + (em || 0)) - ((sh || 0) * 60 + (sm || 0)) - (parseInt(breakMinutes, 10) || 0);
+            const hrs = Math.max(0, Math.round(minutes / 60 * 100) / 100);
+            te.hours = hrs;
+            te.billableHours = this._roundUpHalfHour(hrs);
         }
         return await this.post(`work-orders/${workOrderId}/time-entries`, te);
     },
