@@ -3179,9 +3179,10 @@ const RobawsAPI = {
         const te = {
             employeeId: String(employeeId),
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
-            // v83: L&L is uursoort werkuren (kantoor kan dit later manueel naar
-            // overuren zetten als de monteur al 8u werkuren had geregistreerd).
-            hourTypeId: String(this.HOUR_TYPE_IDS.werkuren),
+            // v110: L&L is uursoort OVERUREN (vroeger werkuren — gebruiker wil dat
+            // L&L altijd buiten de 8u werkuren-eis valt en als overuren wordt
+            // geregistreerd, zonder dat kantoor handmatig hoeft te switchen).
+            hourTypeId: String(this.HOUR_TYPE_IDS.overuren),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
@@ -3204,8 +3205,8 @@ const RobawsAPI = {
         const { startTime, endTime } = opts;
         const body = {
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
-            // v83: ook bij PUT update hourTypeId behouden (werkuren).
-            hourTypeId: String(this.HOUR_TYPE_IDS.werkuren),
+            // v110: bij PUT update ook hourTypeId op OVERUREN zetten (was werkuren).
+            hourTypeId: String(this.HOUR_TYPE_IDS.overuren),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);

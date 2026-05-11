@@ -472,26 +472,13 @@ window.QEClock = {
                 return;
             }
 
-            // v98+: GPS-check vóór de scan. Locatie moet AAN staan zodat we
-            // kunnen registreren van waar de monteur scant (anti-fraude + audit).
-            // Korte timeout (3s) — bij locatie-uit faalt getCurrentPosition meteen.
-            // Toewijzingsmodus en LADEN&LOSSEN-tags slaan we over (locatie is daar
-            // niet vereist en het toewijs-flow is admin-only).
-            if (!this._pendingAssignment) {
-                const gpsCheckOk = await this._verifyGPSEnabled();
-                if (!gpsCheckOk.ok) {
-                    if (window.app && typeof app.showScanResult === 'function') {
-                        app.showScanResult(false,
-                            'Locatie staat uit\n\n' +
-                            'Schakel je locatie/GPS in voor je kan scannen.\n' +
-                            (gpsCheckOk.reason ? '\n(' + gpsCheckOk.reason + ')' : ''),
-                            null, 6000);
-                    } else if (window.app) {
-                        app.toast('Locatie staat uit — schakel GPS in', true);
-                    }
-                    return;
-                }
-            }
+            // v111: GPS-verplichting uitgezet — de v99-check (_verifyGPSEnabled
+            // met korte timeout) gaf te vaak een valse "locatie staat uit"-error
+            // bij slechte ontvangst, koude GPS-fix of trage chip-respons, ook
+            // als de gebruiker locatie wel had aanstaan. We laten de scan door
+            // en proberen GPS verderop best-effort op te halen voor de
+            // opmerking — als het lukt komt het mee, anders staat er
+            // "GPS niet beschikbaar".
 
             // v59: Test-modus blokkeert scan-flow tot het werkbon-formaat klopt
             if (this._testModeActive) {
@@ -949,32 +936,18 @@ window.QEClock = {
                 console.log('[Clock] werkuren posted (klant ' + klantHours.toFixed(2) + 'u)');
 
                 // v90+ (gebruikersvraag): ALS klant < 8u → ALTIJD compensatie:
-                //   - Phantom werkuren (no-times) = max(0, (8 - klant) - L&L_uren)
-                //   - Overuren-aftrek (no-times)  = -(8 - klant)
-                // Onafhankelijk van of er L&L op de werkbon staat.
+                //   - Phantom werkuren (no-times) = (8 - klant)
+                //   - Overuren-aftrek  (no-times) = -(8 - klant)
+                //
+                // v110: L&L wordt nu als OVERUREN geregistreerd (was werkuren) en
+                // mag dus niet meer meetellen om het 8u werkuren-deficit te dekken.
+                // Phantom wordt daarom de volle deficit (vroeger: max(0, deficit - L&L_uren)).
                 if (klantHours < 8) {
-                    // L&L-uren ophalen om phantom-grootte te bepalen
-                    let llHours = 0;
-                    try {
-                        const teRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
-                        if (teRes.code === 200 && teRes.data && teRes.data.items) {
-                            const llArt = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
-                            for (const te of teRes.data.items) {
-                                const aId = te.articleId || (te.article && te.article.id);
-                                if (String(aId) === llArt) {
-                                    llHours += parseFloat(te.hours || te.billableHours || 0);
-                                }
-                            }
-                        }
-                    } catch(_) { /* skip — bij fetch fail gebruik llHours=0 */ }
-
                     const deficit = 8 - klantHours;
 
-                    // Phantom werkuren als L&L niet voldoende dekt
-                    const phantom = Math.max(0, deficit - llHours);
-                    const phantomRounded = Math.round(phantom * 100) / 100;
+                    const phantomRounded = Math.round(deficit * 100) / 100;
                     if (phantomRounded > 0.005) {
-                        console.log('[Clock] phantom werkuren: +' + phantomRounded + 'u');
+                        console.log('[Clock] phantom werkuren: +' + phantomRounded + 'u (klant ' + klantHours.toFixed(2) + 'u)');
                         const rp = await RobawsAPI.addWorkHoursTimeEntry({
                             workOrderId: session.workOrderId,
                             employeeId: session.employeeId,
@@ -989,7 +962,7 @@ window.QEClock = {
 
                     // Overuren-aftrek altijd
                     const compRounded = Math.round(-1 * deficit * 100) / 100;
-                    console.log('[Clock] overuren-aftrek: ' + compRounded + 'u (klant ' + klantHours.toFixed(2) + 'u, L&L ' + llHours.toFixed(2) + 'u)');
+                    console.log('[Clock] overuren-aftrek: ' + compRounded + 'u (klant ' + klantHours.toFixed(2) + 'u)');
                     const rc = await RobawsAPI.addWorkHoursTimeEntry({
                         workOrderId: session.workOrderId,
                         employeeId: session.employeeId,
@@ -1094,6 +1067,7 @@ window.QEClock = {
                         console.warn('[Clock] L&L PUT faalde:', r.code, r.data,
                             '— fallback POST nieuwe time-entry');
                         // Fallback: post een nieuwe complete entry
+                        // v110: hourTypeId = overuren (was default = werkuren)
                         await RobawsAPI.addWorkHoursTimeEntry({
                             workOrderId: session.workOrderId,
                             employeeId: session.employeeId,
@@ -1101,10 +1075,12 @@ window.QEClock = {
                             endTime: llEnd,
                             breakMinutes: 0,
                             articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen,
+                            hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
                         });
                     }
                 } else {
                     // Geen teId bekend (vroeger gestart vóór v73) → post een nieuwe
+                    // v110: hourTypeId = overuren (was default = werkuren)
                     await RobawsAPI.addWorkHoursTimeEntry({
                         workOrderId: session.workOrderId,
                         employeeId: session.employeeId,
@@ -1112,6 +1088,7 @@ window.QEClock = {
                         endTime: llEnd,
                         breakMinutes: 0,
                         articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen,
+                        hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
                     });
                 }
             } catch(e) {
