@@ -472,6 +472,27 @@ window.QEClock = {
                 return;
             }
 
+            // v98+: GPS-check vóór de scan. Locatie moet AAN staan zodat we
+            // kunnen registreren van waar de monteur scant (anti-fraude + audit).
+            // Korte timeout (3s) — bij locatie-uit faalt getCurrentPosition meteen.
+            // Toewijzingsmodus en LADEN&LOSSEN-tags slaan we over (locatie is daar
+            // niet vereist en het toewijs-flow is admin-only).
+            if (!this._pendingAssignment) {
+                const gpsCheckOk = await this._verifyGPSEnabled();
+                if (!gpsCheckOk.ok) {
+                    if (window.app && typeof app.showScanResult === 'function') {
+                        app.showScanResult(false,
+                            'Locatie staat uit\n\n' +
+                            'Schakel je locatie/GPS in voor je kan scannen.\n' +
+                            (gpsCheckOk.reason ? '\n(' + gpsCheckOk.reason + ')' : ''),
+                            null, 6000);
+                    } else if (window.app) {
+                        app.toast('Locatie staat uit — schakel GPS in', true);
+                    }
+                    return;
+                }
+            }
+
             // v59: Test-modus blokkeert scan-flow tot het werkbon-formaat klopt
             if (this._testModeActive) {
                 if (window.app && typeof app.showScanResult === 'function') {
@@ -1215,6 +1236,45 @@ window.QEClock = {
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
             );
         });
+    },
+
+    /**
+     * v98+: Snelle check of locatie/GPS actief is. Returnt {ok, reason}.
+     * Probeer eerst de Permissions API (kost geen GPS-fix), val anders terug
+     * op getCurrentPosition met korte timeout.
+     */
+    async _verifyGPSEnabled() {
+        if (!navigator.geolocation) {
+            return { ok: false, reason: 'Geolocation niet beschikbaar in deze browser' };
+        }
+        // Permissions API (instant — kost geen GPS-fix)
+        try {
+            if (navigator.permissions && navigator.permissions.query) {
+                const perm = await navigator.permissions.query({ name: 'geolocation' });
+                if (perm.state === 'denied') {
+                    return { ok: false, reason: 'Locatie-toestemming geweigerd in app-instellingen' };
+                }
+            }
+        } catch(_) { /* Permissions API niet beschikbaar — skip */ }
+
+        // Korte GPS-fix poging (3s timeout) — bij locatie-uit faalt dit meteen
+        try {
+            await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(
+                    () => resolve(),
+                    err => reject(err),
+                    { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
+                );
+            });
+            return { ok: true };
+        } catch (e) {
+            const code = e && e.code;
+            // PERMISSION_DENIED = 1, POSITION_UNAVAILABLE = 2, TIMEOUT = 3
+            if (code === 1) return { ok: false, reason: 'Toestemming voor locatie geweigerd' };
+            if (code === 2) return { ok: false, reason: 'Locatie staat uit op het toestel' };
+            if (code === 3) return { ok: false, reason: 'GPS-fix timeout — sta even buiten' };
+            return { ok: false, reason: (e && e.message) || 'Locatie niet beschikbaar' };
+        }
     },
 
     // =============================================

@@ -226,6 +226,34 @@ const app = {
         document.getElementById('loginScreen').classList.remove('hidden');
     },
 
+    /**
+     * v98+: zet een fetch/JSON-fout om naar een duidelijke Nederlandse
+     * foutmelding voor de monteur. Geeft hint of het aan internet,
+     * aan Robaws of aan onze app ligt.
+     */
+    _friendlyError(e) {
+        const msg = (e && e.message) || String(e || '');
+        if (!navigator.onLine) {
+            return 'Geen internet — controleer wifi/4G en probeer opnieuw';
+        }
+        if (/Failed to fetch|NetworkError|Network request failed/i.test(msg)) {
+            return 'Geen verbinding met de server — controleer internet';
+        }
+        if (/SyntaxError|Unexpected token|JSON/i.test(msg)) {
+            return 'Server gaf een ongeldig antwoord — probeer opnieuw';
+        }
+        if (/timeout|aborted/i.test(msg)) {
+            return 'Server reageert niet (timeout) — probeer opnieuw';
+        }
+        if (/40[134]/i.test(msg)) {
+            return 'Toegang geweigerd door server (' + msg + ')';
+        }
+        if (/50\d/i.test(msg)) {
+            return 'Serverfout (' + msg + ') — neem contact op met Levi';
+        }
+        return 'Fout: ' + (msg || 'onbekend');
+    },
+
     // PIN-flow stap 1: e-mail controleren, daarna PIN-stap tonen
     async loginCheckEmail() {
         const email = document.getElementById('loginEmail').value.trim().toLowerCase();
@@ -234,6 +262,10 @@ const app = {
         errorEl.textContent = '';
 
         if (!email) { errorEl.textContent = 'Vul je e-mailadres in'; return; }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            errorEl.textContent = 'Ongeldig e-mailadres';
+            return;
+        }
 
         btn.disabled = true;
         btn.textContent = 'Even kijken...';
@@ -243,6 +275,9 @@ const app = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email }),
             });
+            if (!res.ok) {
+                throw new Error('HTTP ' + res.status);
+            }
             const data = await res.json();
             if (!data.known) {
                 errorEl.textContent = 'Onbekend e-mailadres';
@@ -275,7 +310,8 @@ const app = {
             }
             setTimeout(() => document.getElementById('loginPin').focus(), 50);
         } catch (e) {
-            errorEl.textContent = 'Verbindingsfout — probeer opnieuw';
+            console.warn('[App] login email check fout:', e);
+            errorEl.textContent = this._friendlyError(e);
         } finally {
             btn.disabled = false;
             btn.textContent = 'Volgende';
@@ -319,15 +355,17 @@ const app = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            if (!res.ok || data.error || !data.success) {
-                errorEl.textContent = data.error || 'Inloggen mislukt';
+            if (data.error || !data.success) {
+                errorEl.textContent = data.error || 'Verkeerde PIN — probeer opnieuw';
                 return;
             }
             this.currentUser = data.user;
             this.showApp();
         } catch (e) {
-            errorEl.textContent = 'Verbindingsfout — probeer opnieuw';
+            console.warn('[App] login PIN fout:', e);
+            errorEl.textContent = this._friendlyError(e);
         } finally {
             btn.disabled = false;
             btn.textContent = this._loginNeedsPinSetup ? 'PIN instellen & inloggen' : 'Inloggen';
