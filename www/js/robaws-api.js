@@ -1319,6 +1319,7 @@ const RobawsAPI = {
                 id: item.id,
                 salesOrderId: item.salesOrderId || null,
                 clientId: item.clientId || null,
+                endClientId: item.endClientId || null,
                 startDate: item.startDate || '',
                 endDate: item.endDate || '',
                 summary: item.summary || '',
@@ -1330,6 +1331,7 @@ const RobawsAPI = {
                 hourTypeId: item.hourTypeId || null,
                 hasWerkbon: hasWerkbon,
                 client: null,
+                endClient: null,  // v102+: ook eindklant ophalen
             };
 
             // Klant ophalen
@@ -1361,6 +1363,24 @@ const RobawsAPI = {
                         }
                     }
                 } catch (e) { /* Klant niet gevonden */ }
+            }
+
+            // v102+: Eindklant (Bewoner) ophalen — als endClientId is ingevuld
+            // op het planning-item én anders dan clientId.
+            if (item.endClientId && String(item.endClientId) !== String(item.clientId || '')) {
+                try {
+                    const ecResult = await this.get(`clients/${item.endClientId}`);
+                    if (ecResult.code === 200 && ecResult.data) {
+                        const ec = ecResult.data;
+                        entry.endClient = {
+                            id: ec.id,
+                            name: ec.name || '',
+                            email: ec.email || '',
+                            tel: ec.tel || '',
+                            address: this.formatAddress(ec.address),
+                        };
+                    }
+                } catch (e) { /* Eindklant niet gevonden */ }
             }
 
             // Planning line-items ophalen (materialen/artikelen die meegegeven moeten worden)

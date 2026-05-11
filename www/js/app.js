@@ -53,7 +53,7 @@ const app = {
             localStorage.setItem('qe_woData', JSON.stringify(slim));
         } catch (e) { /* localStorage vol — niet erg */ }
     },
-    async _restoreWoData() {
+    _restoreWoData() {
         try {
             const stored = localStorage.getItem('qe_woData');
             if (stored) {
@@ -64,25 +64,42 @@ const app = {
                     }
                 }
             }
-            // v101+: foto's terug ophalen uit IndexedDB (overleeft refresh).
-            try {
-                const allPhotos = await this._idbGetAllPhotos();
-                for (const ph of allPhotos) {
-                    const woId = String(ph.woId);
-                    if (!this.woData[woId]) {
-                        this.woData[woId] = { hours: [], materials: [], photos: [], notes: '', checklist: null, onderhoud: false };
-                    }
-                    this.woData[woId].photos = this.woData[woId].photos || [];
-                    // Voorkom dubbels (op id)
-                    if (!this.woData[woId].photos.some(p => String(p.id) === String(ph.id))) {
-                        this.woData[woId].photos.push({ id: ph.id, data: ph.data, name: ph.name });
-                    }
-                }
-                console.log('[App] ' + allPhotos.length + ' foto(s) hersteld uit IndexedDB');
-            } catch (e) {
-                console.warn('[App] IDB foto-restore faalde:', e && e.message);
-            }
+            // v102+: foto's worden LAZY hersteld in openWorkorder() per WO,
+            // niet bij init. Voorkomt geheugendruk + langere init-tijd op toestellen
+            // met veel foto's in cache.
         } catch (e) {}
+    },
+
+    /**
+     * v102+: Lazy-load foto's uit IndexedDB voor een specifieke WO.
+     * Wordt aangeroepen in openWorkorder. Zo blijven foto's na refresh maar
+     * laden we niet alle foto-data tegelijk in RAM.
+     */
+    async _restorePhotosForWO(woId) {
+        try {
+            const db = await this._idbOpen();
+            const photos = await new Promise((resolve, reject) => {
+                const tx = db.transaction(this._IDB_STORE, 'readonly');
+                const idx = tx.objectStore(this._IDB_STORE).index('woId');
+                const req = idx.getAll(IDBKeyRange.only(String(woId)));
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => reject(req.error);
+            });
+            if (!this.woData[woId]) {
+                this.woData[woId] = { hours: [], materials: [], photos: [], notes: '', checklist: null, onderhoud: false };
+            }
+            this.woData[woId].photos = this.woData[woId].photos || [];
+            for (const ph of photos) {
+                if (!this.woData[woId].photos.some(p => String(p.id) === String(ph.id))) {
+                    this.woData[woId].photos.push({ id: ph.id, data: ph.data, name: ph.name });
+                }
+            }
+            if (photos.length > 0) {
+                console.log('[App] ' + photos.length + ' foto(s) hersteld voor WO ' + woId);
+            }
+        } catch (e) {
+            console.warn('[App] _restorePhotosForWO faalde:', e && e.message);
+        }
     },
 
     // ========================================
@@ -1224,6 +1241,11 @@ const app = {
         if (!this.woData[woId]) {
             this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
         }
+
+        // v102+: lazy foto-restore (fire-and-forget, niet blokkerend)
+        this._restorePhotosForWO(woId).then(() => {
+            try { this.renderPhotos(); } catch(_) {}
+        }).catch(() => {});
 
         this.navigate('screenDetail');
 
@@ -3127,11 +3149,23 @@ const app = {
                         data: dataUrl,
                         name: name,
                     };
-                    this.woData[this.currentWO.id].photos.push(photo);
-                    // v101+: ook naar IndexedDB zodat foto's de refresh overleven
-                    this._idbSavePhoto(this.currentWO.id, photo).catch(e => {
-                        console.warn('[App] IDB save foto faalde:', e && e.message);
-                    });
+                    try {
+                        this.woData[this.currentWO.id].photos.push(photo);
+                    } catch (errPush) {
+                        console.error('[App] photo push faalde:', errPush);
+                    }
+                    // v101+: ook naar IndexedDB zodat foto's de refresh overleven.
+                    // Hard try/catch — IDB-fouten mogen NOOIT de foto-flow breken.
+                    try {
+                        const woIdLocal = this.currentWO && this.currentWO.id;
+                        if (woIdLocal) {
+                            Promise.resolve()
+                                .then(() => this._idbSavePhoto(woIdLocal, photo))
+                                .catch(e => console.warn('[App] IDB save foto faalde:', e && e.message));
+                        }
+                    } catch (errIdb) {
+                        console.warn('[App] IDB save kon niet starten:', errIdb && errIdb.message);
+                    }
                 } else {
                     failed++;
                 }
