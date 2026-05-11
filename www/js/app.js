@@ -6935,23 +6935,23 @@ const app = {
                         throw new Error('Robaws (' + r.code + ')');
                     }
 
-                    // Stap 2: als woonwerk-fiets aangevinkt → set extraField op werkbon
-                    // (kantoor kan filteren voor fietsvergoeding HR/fiscaal)
+                    // Stap 2: als woonwerk-fiets aangevinkt → set extraField "Fietsvergoeding"
+                    // op werkbon (groep: Tijdsregistratie, type: CHECKBOX)
                     if (fiets) {
                         try {
                             const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`);
                             if (woFull.code === 200 && woFull.data) {
                                 woFull.data.extraFields = woFull.data.extraFields || {};
-                                woFull.data.extraFields['Woonwerk fiets'] = {
+                                woFull.data.extraFields['Fietsvergoeding'] = {
                                     type: 'CHECKBOX',
-                                    group: null,
+                                    group: 'Tijdsregistratie',
                                     booleanValue: true,
                                 };
                                 await RobawsAPI.put(`work-orders/${workOrderId}`, woFull.data);
-                                console.log('[App] Woonwerk-fiets gemarkeerd op werkbon', workOrderId);
+                                console.log('[App] Fietsvergoeding aangevinkt op werkbon', workOrderId);
                             }
                         } catch (eFiets) {
-                            console.warn('[App] Woonwerk-fiets veld update faalde (niet kritiek):',
+                            console.warn('[App] Fietsvergoeding veld update faalde (niet kritiek):',
                                 eFiets && eFiets.message);
                         }
                     }
