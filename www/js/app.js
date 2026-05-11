@@ -1317,12 +1317,18 @@ const app = {
                 <span class="info-value">${planDescription.replace(/<[^>]*>/g, '') || '-'}</span>
             </div>` : ''}
 
-            <!-- BTW altijd van klant -->
-            <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin:10px 0">
+            <!-- BTW altijd van klant + aanpas-knop direct eronder -->
+            <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin:10px 0 6px">
                 <span class="info-icon">💰</span>
                 <span class="info-label">BTW tarief</span>
                 <span class="info-value" id="clientVatDisplay" style="font-weight:600;color:var(--qe-purple)">${client.vatTariffName ? this.escapeHtml(client.vatTariffName) : (client.vatPercentage !== null && client.vatPercentage !== undefined ? client.vatPercentage + '%' : 'Niet ingesteld')}</span>
             </div>
+            ${client.id ? `<button class="btw-change-btn" onclick="app.openChangeVatTariff()"
+                style="width:100%;margin:0 0 10px;padding:10px;border:2px solid var(--qe-purple);border-radius:10px;
+                background:transparent;color:var(--qe-purple);font-size:14px;font-weight:600;cursor:pointer;
+                display:flex;align-items:center;justify-content:center;gap:6px">
+                💰 BTW tarief aanpassen
+            </button>` : ''}
 
             <!-- Klant (Eigenaar) -->
             <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
@@ -1348,12 +1354,6 @@ const app = {
                 </div>
                 ${partyRows(endClient)}
             ` : ''}
-            ${client.id ? `<button class="btw-change-btn" onclick="app.openChangeVatTariff()"
-                style="width:100%;margin-top:12px;padding:10px;border:2px solid var(--qe-purple);border-radius:10px;
-                background:transparent;color:var(--qe-purple);font-size:14px;font-weight:600;cursor:pointer;
-                display:flex;align-items:center;justify-content:center;gap:6px">
-                💰 BTW tarief aanpassen
-            </button>` : ''}
         `;
 
         // Taakomschrijving tonen (detail van dagplanning — HTML uit Robaws)
