@@ -5865,26 +5865,31 @@ const app = {
                 const outS = ef.Uitgeklokt && ef.Uitgeklokt.stringValue;
                 if (!inS || !outS) return 0;
 
-                // v74: kwartier-afronding. In = round UP 15min (Bureau: max met startuur).
-                //       Uit = round DOWN 15min. Geldig voor multi-cycle dagen ook.
+                // v74: kwartier-afronding. In = round UP 15min. Uit = round DOWN 15min.
+                // Bureau scan \u2192 cap met startuur (Math.max). Camionet \u2192 g\u00e9\u00e9n cap.
+                // v95 tolerance al toegepast op roundUp15/roundDown15.
                 let totalMins = 0;
                 const lines = String(wo.remark || '').split(/\r?\n/);
                 const cycles = [];
                 let pendingIn = null;
+                let pendingInIsBureau = false;
                 for (const line of lines) {
-                    const inM = line.match(/klok-in:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
+                    // Detecteer tag-type uit remark \u2014 "klok-in: bureau" of "klok-in: camionetX"
+                    const inM = line.match(/klok-in:\s*([^\u2014\-]+?)\s[\u2014\-]\s(\d{1,2}:\d{2})\s*$/i);
                     const outM = line.match(/klok-uit:.*?\s\u2014\s(\d{1,2}:\d{2})\s*$/i);
-                    if (inM) pendingIn = m(inM[1]);
-                    else if (outM && pendingIn !== null) {
-                        cycles.push([pendingIn, m(outM[1])]);
-                        pendingIn = null;
+                    if (inM) {
+                        pendingIn = m(inM[2]);
+                        pendingInIsBureau = /bureau/i.test(inM[1] || '');
+                    } else if (outM && pendingIn !== null) {
+                        cycles.push([pendingIn, m(outM[1]), pendingInIsBureau]);
+                        pendingIn = null; pendingInIsBureau = false;
                     }
                 }
                 if (cycles.length > 0) {
                     for (let i = 0; i < cycles.length; i++) {
-                        let [s, e] = cycles[i];
-                        // Eerste cycle: max(roundUp15, startuur). Andere: roundUp15.
-                        const sMin = (i === 0)
+                        let [s, e, isBureau] = cycles[i];
+                        // Bureau: cap met startuur. Camionet/L&L: geen cap.
+                        const sMin = isBureau
                             ? Math.max(roundUp15(s), userStartuurMin)
                             : roundUp15(s);
                         const eMin = roundDown15(e);
@@ -5893,6 +5898,7 @@ const app = {
                     totalMins -= userPauze;
                 } else {
                     // Fallback voor oudere werkbonnen (zonder klok-in/-uit regels)
+                    // \u2014 neem aan dat het Bureau is (cap met startuur)
                     const inMin = m(inS);
                     const outMin = roundDown15(m(outS));
                     const startMin = Math.max(roundUp15(inMin), userStartuurMin);
@@ -6805,9 +6811,12 @@ const app = {
             if (m) m.remove();
             m = document.createElement('div');
             m.id = 'kmPromptModal';
-            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px';
+            // v96-fix: align-items:flex-start + padding-top:30px zodat de modal bovenaan
+            // staat ipv gecentreerd. Bij open toetsenbord blijft de hele inhoud zichtbaar
+            // en kan je naar boven scrollen om titel/subtitle/mobility/fiets te zien.
+            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:flex-start;justify-content:center;padding:30px 16px 16px;overflow-y:auto;-webkit-overflow-scrolling:touch';
             m.innerHTML = `
-                <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:92vh;overflow-y:auto">
+                <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box">
                     <div style="font-size:20px;font-weight:700;color:#1A237E;margin-bottom:6px;display:flex;align-items:center;gap:8px">
                         🚐 Kilometers vandaag
                     </div>

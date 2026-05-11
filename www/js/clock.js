@@ -807,8 +807,12 @@ window.QEClock = {
         const useStartuurCorrection = (session.tagType === 'bureau');
         let entryStartMin;
         if (useStartuurCorrection) {
+            // Bureau-scan: als de scan VÓÓR de werknemer-startuur ligt, gebruiken
+            // we de startuur. Anders de gerondde scan-tijd (met v95 tolerantie).
+            // Math.max neemt vanzelf de latere van de twee.
             entryStartMin = Math.max(roundUp15(actualStartMin), expectedStartMin);
         } else {
+            // Camionet of L&L: gewoon afgeronde scan-tijd, géén startuur-correctie.
             entryStartMin = roundUp15(actualStartMin);
         }
         const entryEndMin = roundDown15(toMinutes(endTimeRaw));  // v74: round DOWN naar kwartier
