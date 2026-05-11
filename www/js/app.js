@@ -1242,11 +1242,6 @@ const app = {
             this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
         }
 
-        // v102+: lazy foto-restore (fire-and-forget, niet blokkerend)
-        this._restorePhotosForWO(woId).then(() => {
-            try { this.renderPhotos(); } catch(_) {}
-        }).catch(() => {});
-
         this.navigate('screenDetail');
 
         // Titel bovenaan (zichtbaar bij elk tabblad)
@@ -1266,20 +1261,27 @@ const app = {
         const planEnd = this.currentWO.endDate ? new Date(this.currentWO.endDate).toLocaleTimeString('nl-BE', {hour:'2-digit', minute:'2-digit'}) : '';
         const planTimeStr = planStart && planEnd ? `${planStart} - ${planEnd}` : (planStart || '');
 
-        // v101+: ook eindklant tonen (Bewoner) naast klant (Eigenaar)
+        // v103+: structuur
+        //   1) Werfadres (dagplanning) + navigatieknop
+        //   2) BTW tarief (altijd van Klant/Eigenaar)
+        //   3) Klant (Eigenaar) — eigen adres
+        //   4) ── scheiding ──
+        //   5) Eindklant (Bewoner) — eigen adres (alleen als verschillend van klant)
         const endClient = this.currentWO.endClient || null;
         const hasEndClient = endClient && (endClient.id || endClient.name)
             && String(endClient.id || '') !== String(client.id || '');
 
-        // Sectie-helper voor klant of eindklant
-        const renderPartyRows = (party, isEnd) => {
+        const navLink = displayAddress
+            ? `<a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(displayAddress)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:var(--qe-purple);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap">🗺️ Navigeer</a>`
+            : '';
+
+        const partyRows = (party) => {
             if (!party) return '';
-            const addr = isEnd ? (party.address || '') : (displayAddress || party.address || '');
             return `
                 <div class="info-row">
                     <span class="info-icon">📍</span>
                     <span class="info-label">Adres</span>
-                    <span class="info-value">${this.escapeHtml(addr || '-')}</span>
+                    <span class="info-value">${this.escapeHtml(party.address || '-')}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-icon">📞</span>
@@ -1294,15 +1296,16 @@ const app = {
         };
 
         document.getElementById('clientInfo').innerHTML = `
-            <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
-                Klant <span style="font-style:italic;text-transform:none;color:var(--qe-purple);letter-spacing:normal;font-weight:500">(Eigenaar)</span>
-            </div>
-            <div class="info-row">
-                <span class="info-icon">👤</span>
-                <span class="info-label">Naam</span>
-                <span class="info-value">${this.escapeHtml(client.name || 'Onbekend')}</span>
-            </div>
-            ${renderPartyRows(client, false)}
+            <!-- Werfadres + navigeer-knop -->
+            ${displayAddress ? `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:rgba(0,0,0,0.04);border-radius:8px;margin-bottom:10px">
+                <div style="flex:1;min-width:0">
+                    <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-bottom:2px">Werfadres</div>
+                    <div style="font-size:14px;font-weight:500">${this.escapeHtml(displayAddress)}</div>
+                </div>
+                ${navLink}
+            </div>` : ''}
+
             ${planTimeStr ? `<div class="info-row">
                 <span class="info-icon">🕐</span>
                 <span class="info-label">Gepland</span>
@@ -1313,8 +1316,28 @@ const app = {
                 <span class="info-label">Omschrijving</span>
                 <span class="info-value">${planDescription.replace(/<[^>]*>/g, '') || '-'}</span>
             </div>` : ''}
+
+            <!-- BTW altijd van klant -->
+            <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin:10px 0">
+                <span class="info-icon">💰</span>
+                <span class="info-label">BTW tarief</span>
+                <span class="info-value" id="clientVatDisplay" style="font-weight:600;color:var(--qe-purple)">${client.vatTariffName ? this.escapeHtml(client.vatTariffName) : (client.vatPercentage !== null && client.vatPercentage !== undefined ? client.vatPercentage + '%' : 'Niet ingesteld')}</span>
+            </div>
+
+            <!-- Klant (Eigenaar) -->
+            <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
+                Klant <span style="font-style:italic;text-transform:none;color:var(--qe-purple);letter-spacing:normal;font-weight:500">(Eigenaar)</span>
+            </div>
+            <div class="info-row">
+                <span class="info-icon">👤</span>
+                <span class="info-label">Naam</span>
+                <span class="info-value">${this.escapeHtml(client.name || 'Onbekend')}</span>
+            </div>
+            ${partyRows(client)}
+
+            <!-- Eindklant (Bewoner) — alleen indien aanwezig en verschillend -->
             ${hasEndClient ? `
-                <div style="height:1px;background:#e0e0e0;margin:10px 0"></div>
+                <div style="height:1px;background:#e0e0e0;margin:14px 0 10px"></div>
                 <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
                     Eindklant <span style="font-style:italic;text-transform:none;color:var(--qe-orange);letter-spacing:normal;font-weight:500">(Bewoner)</span>
                 </div>
@@ -1323,26 +1346,13 @@ const app = {
                     <span class="info-label">Naam</span>
                     <span class="info-value">${this.escapeHtml(endClient.name || '-')}</span>
                 </div>
-                ${renderPartyRows(endClient, true)}
+                ${partyRows(endClient)}
             ` : ''}
-            <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin-top:4px">
-                <span class="info-icon">💰</span>
-                <span class="info-label">BTW tarief</span>
-                <span class="info-value" id="clientVatDisplay" style="font-weight:600;color:var(--qe-purple)">${client.vatTariffName ? this.escapeHtml(client.vatTariffName) : (client.vatPercentage !== null && client.vatPercentage !== undefined ? client.vatPercentage + '%' : 'Niet ingesteld')}</span>
-            </div>
             ${client.id ? `<button class="btw-change-btn" onclick="app.openChangeVatTariff()"
-                style="width:100%;margin-top:8px;padding:10px;border:2px solid var(--qe-purple);border-radius:10px;
+                style="width:100%;margin-top:12px;padding:10px;border:2px solid var(--qe-purple);border-radius:10px;
                 background:transparent;color:var(--qe-purple);font-size:14px;font-weight:600;cursor:pointer;
                 display:flex;align-items:center;justify-content:center;gap:6px">
                 💰 BTW tarief aanpassen
-            </button>` : ''}
-            ${displayAddress ? `
-            <button onclick="app.navigateToAddress('${this.escapeHtml(displayAddress).replace(/'/g, "\\'")}')"
-                style="width:100%;margin-top:10px;padding:12px;border:none;border-radius:10px;
-                background:linear-gradient(135deg,#6A2C91,#001E45);color:#fff;
-                font-size:15px;font-weight:600;cursor:pointer;display:flex;align-items:center;
-                justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(106,44,145,0.3)">
-                🧭 Navigeer naar adres
             </button>` : ''}
         `;
 
@@ -3154,18 +3164,10 @@ const app = {
                     } catch (errPush) {
                         console.error('[App] photo push faalde:', errPush);
                     }
-                    // v101+: ook naar IndexedDB zodat foto's de refresh overleven.
-                    // Hard try/catch — IDB-fouten mogen NOOIT de foto-flow breken.
-                    try {
-                        const woIdLocal = this.currentWO && this.currentWO.id;
-                        if (woIdLocal) {
-                            Promise.resolve()
-                                .then(() => this._idbSavePhoto(woIdLocal, photo))
-                                .catch(e => console.warn('[App] IDB save foto faalde:', e && e.message));
-                        }
-                    } catch (errIdb) {
-                        console.warn('[App] IDB save kon niet starten:', errIdb && errIdb.message);
-                    }
+                    // v103+: foto's worden NIET meer in IndexedDB bewaard
+                    // (veroorzaakte camera-crash). Native MainActivity slaat
+                    // camera-foto's nu op in de Pictures/QE galerij, zodat
+                    // monteurs ze handmatig terug kunnen toevoegen na refresh.
                 } else {
                     failed++;
                 }
@@ -3256,10 +3258,6 @@ const app = {
         this.woData[this.currentWO.id].photos = this.woData[this.currentWO.id].photos.filter(p => p.id !== photoId);
         this.renderPhotos();
         this._saveWoData();
-        // v101+: ook uit IndexedDB verwijderen
-        this._idbDeletePhoto(photoId).catch(e => {
-            console.warn('[App] IDB delete foto faalde:', e && e.message);
-        });
     },
 
     // Planning line-items — knop tonen met aantal
@@ -4137,10 +4135,6 @@ const app = {
         this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
         if (!this.submittedWOs.includes(String(woId))) this.submittedWOs.push(String(woId));
         this._saveSubmittedWOs();
-        // v101+: foto's voor deze werkbon ook uit IndexedDB cleanen (werkbon is naar Robaws)
-        this._idbDeleteAllForWO(woId).catch(e => {
-            console.warn('[App] IDB cleanup foto-cache faalde:', e && e.message);
-        });
     },
 
     async executeSubmitFlow() {
