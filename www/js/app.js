@@ -6890,9 +6890,19 @@ const app = {
                         </label>
                     </div>
 
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:#fff8e1">
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#fff8e1">
                         <input id="kmFietsInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
                         <span>🚲 Woonwerk-verkeer met de <strong>fiets</strong></span>
+                    </label>
+
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#e8f5e9">
+                        <input id="kmDirectThuisWerfInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
+                        <span>🏠➡️🏗️ Rechtstreeks van <strong>thuis naar werf</strong> gereden</span>
+                    </label>
+
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:#e8f5e9">
+                        <input id="kmDirectWerfThuisInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
+                        <span>🏗️➡️🏠 Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
                     </label>
 
                     <button id="kmPromptSubmit" style="width:100%;padding:14px;background:#1A237E;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer">
@@ -6905,6 +6915,8 @@ const app = {
             const heenEl = document.getElementById('kmHeenInput');
             const terugEl = document.getElementById('kmTerugInput');
             const fietsEl = document.getElementById('kmFietsInput');
+            const directTWEl = document.getElementById('kmDirectThuisWerfInput');
+            const directWTEl = document.getElementById('kmDirectWerfThuisInput');
             const errEl = document.getElementById('kmPromptError');
             const btn = document.getElementById('kmPromptSubmit');
 
@@ -6917,6 +6929,8 @@ const app = {
                 const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
                 const mobilityTypeId = mobRadio ? parseInt(mobRadio.value, 10) : -3;
                 const fiets = !!(fietsEl && fietsEl.checked);
+                const directThuisWerf = !!(directTWEl && directTWEl.checked);
+                const directWerfThuis = !!(directWTEl && directWTEl.checked);
 
                 btn.disabled = true;
                 btn.textContent = 'Opslaan...';
@@ -6935,31 +6949,53 @@ const app = {
                         throw new Error('Robaws (' + r.code + ')');
                     }
 
-                    // Stap 2: als woonwerk-fiets aangevinkt → set extraField "Fietsvergoeding"
-                    // op werkbon (groep: Tijdsregistratie, type: CHECKBOX)
-                    if (fiets) {
+                    // Stap 2: checkboxes (Fietsvergoeding + Rechtstreeks routes) → set
+                    // extraFields op de werkbon. Alleen aanraken als minstens één checked
+                    // is, en alle 3 in één PUT (anders 3 round-trips).
+                    if (fiets || directThuisWerf || directWerfThuis) {
                         try {
                             const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`);
                             if (woFull.code === 200 && woFull.data) {
                                 woFull.data.extraFields = woFull.data.extraFields || {};
-                                woFull.data.extraFields['Fietsvergoeding'] = {
-                                    type: 'CHECKBOX',
-                                    group: 'Tijdsregistratie',
-                                    booleanValue: true,
-                                };
+                                if (fiets) {
+                                    woFull.data.extraFields['Fietsvergoeding'] = {
+                                        type: 'CHECKBOX',
+                                        group: 'Tijdsregistratie',
+                                        booleanValue: true,
+                                    };
+                                }
+                                if (directThuisWerf) {
+                                    woFull.data.extraFields['Rechtstreeks - Thuis / Werf'] = {
+                                        type: 'CHECKBOX',
+                                        group: 'Tijdsregistratie',
+                                        booleanValue: true,
+                                    };
+                                }
+                                if (directWerfThuis) {
+                                    woFull.data.extraFields['Rechtstreeks - Werf / Thuis'] = {
+                                        type: 'CHECKBOX',
+                                        group: 'Tijdsregistratie',
+                                        booleanValue: true,
+                                    };
+                                }
                                 await RobawsAPI.put(`work-orders/${workOrderId}`, woFull.data);
-                                console.log('[App] Fietsvergoeding aangevinkt op werkbon', workOrderId);
+                                console.log('[App] Tijdsregistratie checkboxes aangevinkt:',
+                                    {fiets, directThuisWerf, directWerfThuis}, 'op werkbon', workOrderId);
                             }
                         } catch (eFiets) {
-                            console.warn('[App] Fietsvergoeding veld update faalde (niet kritiek):',
+                            console.warn('[App] Tijdsregistratie checkboxes update faalde (niet kritiek):',
                                 eFiets && eFiets.message);
                         }
                     }
 
                     // Succes → modal weg
                     m.remove();
-                    const fietsTxt = fiets ? ' · 🚲 fiets gemarkeerd' : '';
-                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km' + fietsTxt);
+                    const tags = [];
+                    if (fiets) tags.push('🚲');
+                    if (directThuisWerf) tags.push('🏠→🏗️');
+                    if (directWerfThuis) tags.push('🏗️→🏠');
+                    const tagTxt = tags.length ? ' · ' + tags.join(' ') : '';
+                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km' + tagTxt);
                     resolve(true);
                 } catch (e) {
                     console.warn('[App] km POST faalde:', e && e.message);
