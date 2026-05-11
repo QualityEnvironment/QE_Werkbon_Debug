@@ -38,6 +38,7 @@ const app = {
     _saveWoData() {
         try {
             // Sla alleen id/hours/materials/notes op (geen foto-data — te groot)
+            // Foto's worden in IndexedDB bewaard (zie _idb* helpers).
             const slim = {};
             for (const [id, d] of Object.entries(this.woData)) {
                 slim[id] = {
@@ -52,17 +53,118 @@ const app = {
             localStorage.setItem('qe_woData', JSON.stringify(slim));
         } catch (e) { /* localStorage vol — niet erg */ }
     },
-    _restoreWoData() {
+    async _restoreWoData() {
         try {
             const stored = localStorage.getItem('qe_woData');
-            if (!stored) return;
-            const slim = JSON.parse(stored);
-            for (const [id, d] of Object.entries(slim)) {
-                if (!this.woData[id]) {
-                    this.woData[id] = { hours: d.hours || [], materials: d.materials || [], photos: [], notes: d.notes || '', checklist: d.checklist || null, onderhoud: d.onderhoud || false };
+            if (stored) {
+                const slim = JSON.parse(stored);
+                for (const [id, d] of Object.entries(slim)) {
+                    if (!this.woData[id]) {
+                        this.woData[id] = { hours: d.hours || [], materials: d.materials || [], photos: [], notes: d.notes || '', checklist: d.checklist || null, onderhoud: d.onderhoud || false };
+                    }
                 }
             }
+            // v101+: foto's terug ophalen uit IndexedDB (overleeft refresh).
+            try {
+                const allPhotos = await this._idbGetAllPhotos();
+                for (const ph of allPhotos) {
+                    const woId = String(ph.woId);
+                    if (!this.woData[woId]) {
+                        this.woData[woId] = { hours: [], materials: [], photos: [], notes: '', checklist: null, onderhoud: false };
+                    }
+                    this.woData[woId].photos = this.woData[woId].photos || [];
+                    // Voorkom dubbels (op id)
+                    if (!this.woData[woId].photos.some(p => String(p.id) === String(ph.id))) {
+                        this.woData[woId].photos.push({ id: ph.id, data: ph.data, name: ph.name });
+                    }
+                }
+                console.log('[App] ' + allPhotos.length + ' foto(s) hersteld uit IndexedDB');
+            } catch (e) {
+                console.warn('[App] IDB foto-restore faalde:', e && e.message);
+            }
         } catch (e) {}
+    },
+
+    // ========================================
+    // v101+: INDEXEDDB voor foto-persistentie
+    // ========================================
+    _IDB_NAME: 'qe_werkbon_db',
+    _IDB_VERSION: 1,
+    _IDB_STORE: 'photos',
+    _idbCached: null,
+
+    _idbOpen() {
+        if (this._idbCached) return Promise.resolve(this._idbCached);
+        return new Promise((resolve, reject) => {
+            if (!window.indexedDB) { reject(new Error('IndexedDB niet beschikbaar')); return; }
+            const req = indexedDB.open(this._IDB_NAME, this._IDB_VERSION);
+            req.onupgradeneeded = () => {
+                const db = req.result;
+                if (!db.objectStoreNames.contains(this._IDB_STORE)) {
+                    const store = db.createObjectStore(this._IDB_STORE, { keyPath: 'id' });
+                    store.createIndex('woId', 'woId', { unique: false });
+                }
+            };
+            req.onsuccess = () => { this._idbCached = req.result; resolve(req.result); };
+            req.onerror = () => reject(req.error);
+        });
+    },
+
+    async _idbSavePhoto(woId, photo) {
+        const db = await this._idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(this._IDB_STORE, 'readwrite');
+            const store = tx.objectStore(this._IDB_STORE);
+            store.put({
+                id: String(photo.id),
+                woId: String(woId),
+                data: photo.data,
+                name: photo.name,
+                addedAt: Date.now(),
+            });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+
+    async _idbDeletePhoto(photoId) {
+        const db = await this._idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(this._IDB_STORE, 'readwrite');
+            tx.objectStore(this._IDB_STORE).delete(String(photoId));
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+
+    async _idbDeleteAllForWO(woId) {
+        const db = await this._idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(this._IDB_STORE, 'readwrite');
+            const store = tx.objectStore(this._IDB_STORE);
+            const idx = store.index('woId');
+            const req = idx.openCursor(IDBKeyRange.only(String(woId)));
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                } else {
+                    resolve();
+                }
+            };
+            req.onerror = () => reject(req.error);
+        });
+    },
+
+    async _idbGetAllPhotos() {
+        const db = await this._idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(this._IDB_STORE, 'readonly');
+            const req = tx.objectStore(this._IDB_STORE).getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => reject(req.error);
+        });
     },
 
     // Ingediende uren bijhouden (keyed by WO id)
@@ -1142,17 +1244,43 @@ const app = {
         const planEnd = this.currentWO.endDate ? new Date(this.currentWO.endDate).toLocaleTimeString('nl-BE', {hour:'2-digit', minute:'2-digit'}) : '';
         const planTimeStr = planStart && planEnd ? `${planStart} - ${planEnd}` : (planStart || '');
 
+        // v101+: ook eindklant tonen (Bewoner) naast klant (Eigenaar)
+        const endClient = this.currentWO.endClient || null;
+        const hasEndClient = endClient && (endClient.id || endClient.name)
+            && String(endClient.id || '') !== String(client.id || '');
+
+        // Sectie-helper voor klant of eindklant
+        const renderPartyRows = (party, isEnd) => {
+            if (!party) return '';
+            const addr = isEnd ? (party.address || '') : (displayAddress || party.address || '');
+            return `
+                <div class="info-row">
+                    <span class="info-icon">📍</span>
+                    <span class="info-label">Adres</span>
+                    <span class="info-value">${this.escapeHtml(addr || '-')}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-icon">📞</span>
+                    <span class="info-label">Telefoon</span>
+                    <span class="info-value">${party.tel ? `<a href="tel:${party.tel}">${this.escapeHtml(party.tel)}</a>` : '-'}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-icon">✉️</span>
+                    <span class="info-label">Email</span>
+                    <span class="info-value">${party.email ? `<a href="mailto:${party.email}">${this.escapeHtml(party.email)}</a>` : '-'}</span>
+                </div>`;
+        };
+
         document.getElementById('clientInfo').innerHTML = `
+            <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
+                Klant <span style="font-style:italic;text-transform:none;color:var(--qe-purple);letter-spacing:normal;font-weight:500">(Eigenaar)</span>
+            </div>
             <div class="info-row">
                 <span class="info-icon">👤</span>
                 <span class="info-label">Naam</span>
                 <span class="info-value">${this.escapeHtml(client.name || 'Onbekend')}</span>
             </div>
-            <div class="info-row">
-                <span class="info-icon">📍</span>
-                <span class="info-label">Adres</span>
-                <span class="info-value">${this.escapeHtml(displayAddress || '-')}</span>
-            </div>
+            ${renderPartyRows(client, false)}
             ${planTimeStr ? `<div class="info-row">
                 <span class="info-icon">🕐</span>
                 <span class="info-label">Gepland</span>
@@ -1163,16 +1291,18 @@ const app = {
                 <span class="info-label">Omschrijving</span>
                 <span class="info-value">${planDescription.replace(/<[^>]*>/g, '') || '-'}</span>
             </div>` : ''}
-            <div class="info-row">
-                <span class="info-icon">📞</span>
-                <span class="info-label">Telefoon</span>
-                <span class="info-value">${client.tel ? `<a href="tel:${client.tel}">${this.escapeHtml(client.tel)}</a>` : '-'}</span>
-            </div>
-            <div class="info-row">
-                <span class="info-icon">✉️</span>
-                <span class="info-label">Email</span>
-                <span class="info-value">${client.email ? `<a href="mailto:${client.email}">${this.escapeHtml(client.email)}</a>` : '-'}</span>
-            </div>
+            ${hasEndClient ? `
+                <div style="height:1px;background:#e0e0e0;margin:10px 0"></div>
+                <div style="font-size:11px;color:var(--qe-grey);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;font-weight:600">
+                    Eindklant <span style="font-style:italic;text-transform:none;color:var(--qe-orange);letter-spacing:normal;font-weight:500">(Bewoner)</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-icon">👤</span>
+                    <span class="info-label">Naam</span>
+                    <span class="info-value">${this.escapeHtml(endClient.name || '-')}</span>
+                </div>
+                ${renderPartyRows(endClient, true)}
+            ` : ''}
             <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin-top:4px">
                 <span class="info-icon">💰</span>
                 <span class="info-label">BTW tarief</span>
@@ -2992,10 +3122,15 @@ const app = {
             this.compressPhoto(file, (dataUrl) => {
                 if (dataUrl) {
                     const name = file.name || `foto_${Date.now()}_${i}.jpg`;
-                    this.woData[this.currentWO.id].photos.push({
+                    const photo = {
                         id: Date.now() + i,
                         data: dataUrl,
                         name: name,
+                    };
+                    this.woData[this.currentWO.id].photos.push(photo);
+                    // v101+: ook naar IndexedDB zodat foto's de refresh overleven
+                    this._idbSavePhoto(this.currentWO.id, photo).catch(e => {
+                        console.warn('[App] IDB save foto faalde:', e && e.message);
                     });
                 } else {
                     failed++;
@@ -3087,6 +3222,10 @@ const app = {
         this.woData[this.currentWO.id].photos = this.woData[this.currentWO.id].photos.filter(p => p.id !== photoId);
         this.renderPhotos();
         this._saveWoData();
+        // v101+: ook uit IndexedDB verwijderen
+        this._idbDeletePhoto(photoId).catch(e => {
+            console.warn('[App] IDB delete foto faalde:', e && e.message);
+        });
     },
 
     // Planning line-items — knop tonen met aantal
@@ -3964,6 +4103,10 @@ const app = {
         this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
         if (!this.submittedWOs.includes(String(woId))) this.submittedWOs.push(String(woId));
         this._saveSubmittedWOs();
+        // v101+: foto's voor deze werkbon ook uit IndexedDB cleanen (werkbon is naar Robaws)
+        this._idbDeleteAllForWO(woId).catch(e => {
+            console.warn('[App] IDB cleanup foto-cache faalde:', e && e.message);
+        });
     },
 
     async executeSubmitFlow() {
