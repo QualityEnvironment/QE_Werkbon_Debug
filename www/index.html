@@ -574,6 +574,11 @@
     <div id="wbPaymentMethodSection" class="werkbon-summary mb-16">
         <div class="ws-header">Betaalmethode</div>
         <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px" id="paymentMethodBtns">
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Mollie"
+                onclick="app.selectPaymentMethod('Mollie')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                🟦 Mollie (Bancontact – TEST)
+            </button>
             <button class="btn btn-outline btn-full payment-method-btn" data-method="Viva wallet"
                 onclick="app.selectPaymentMethod('Viva wallet')"
                 style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">

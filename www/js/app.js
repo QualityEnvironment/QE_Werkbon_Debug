@@ -4397,6 +4397,9 @@ const app = {
             if (paymentMethod === 'Viva wallet') {
                 // Viva Wallet → toon betaalscherm met terminal/QR
                 this.showPaymentScreen(invoiceResult);
+            } else if (paymentMethod === 'Mollie') {
+                // v112: Mollie hosted checkout (TEST). Direct vanuit JS naar Mollie API.
+                this.showMolliePaymentScreen(invoiceResult);
             } else if (paymentMethod === 'Overschrijving' || paymentMethod === 'Overschrijving ter plaatse') {
                 // Overschrijving ter plaatse → toon betaalscherm met QR code
                 // (legacy "Overschrijving ter plaatse" string ook ondersteund voor backward compat)
@@ -5347,6 +5350,205 @@ const app = {
 
             <div id="paymentStatus" style="margin-top:16px"></div>
         `;
+    },
+
+    // ================================================================
+    // v112: MOLLIE HOSTED CHECKOUT — TEST FLOW (debug-app only)
+    // ----------------------------------------------------------------
+    //  - API key embedded (test_… key — geen echt geld, OK voor proof
+    //    of concept). Voor productie MOET dit via een server-proxy om
+    //    de key te beschermen.
+    //  - Maakt direct vanuit JS een Mollie Payment via fetch()
+    //  - Toont checkoutUrl als QR-code + klikbare link
+    //  - Polled status elke 3s tot 'paid' / 'failed' / 'canceled' /
+    //    'expired', of tot timeout (5 min)
+    //  - OGM (paymentInstruction) gaat mee als description én in
+    //    metadata.ogm, zodat Mollie ↔ Robaws ↔ Exact via de OGM kan
+    //    matchen.
+    // ================================================================
+
+    /** Test API key uit Mollie dashboard (test-mode). Werkt enkel voor
+     *  simulated betalingen — geen echt geld kan stromen. */
+    MOLLIE_TEST_API_KEY: 'test_HWxJEyepx9WCC8jgNu4x2WGDJ4TxCS',
+    _molliePollTimer: null,
+    _molliePaymentId: null,
+
+    async showMolliePaymentScreen(invoiceResult) {
+        try { localStorage.setItem('qe_last_payment', JSON.stringify(invoiceResult)); } catch(e){}
+
+        const inv = invoiceResult.invoice || {};
+        const amount = Number(inv.totalInclVat || 0).toFixed(2);
+        const ogm = (inv.paymentInstruction || '').replace(/[^0-9]/g, '');
+        const logicId = inv.logicId || '';
+
+        this.navigate('screenPayment', true);
+        const content = document.getElementById('paymentContent');
+
+        // Toon loading-state terwijl we de Mollie-payment aanmaken
+        content.innerHTML = `
+            <div style="text-align:center;padding:32px 16px">
+                <div class="spinner" style="margin:0 auto 16px"></div>
+                <div style="font-size:15px;color:var(--qe-grey)">Mollie betaallink aanmaken...</div>
+            </div>`;
+
+        let payment;
+        try {
+            const body = {
+                amount: { currency: 'EUR', value: amount },
+                description: `Werkbon ${logicId} (OGM ${ogm})`,
+                metadata: {
+                    ogm: ogm,
+                    invoiceId: inv.id,
+                    invoiceLogicId: logicId,
+                    workOrderId: this.currentWO ? this.currentWO.id : null,
+                },
+                redirectUrl: `qewerkbon://payment-return?provider=mollie&inv=${encodeURIComponent(inv.id)}`,
+            };
+            const res = await fetch('https://api.mollie.com/v2/payments', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + this.MOLLIE_TEST_API_KEY,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                const txt = await res.text();
+                throw new Error('Mollie API HTTP ' + res.status + ': ' + txt.slice(0, 200));
+            }
+            payment = await res.json();
+            console.log('[Mollie] payment created:', payment.id, 'status:', payment.status);
+        } catch (e) {
+            console.error('[Mollie] payment-create faalde:', e);
+            content.innerHTML = `
+                <div style="padding:24px;text-align:center">
+                    <div style="font-size:36px;margin-bottom:12px">⚠</div>
+                    <div style="font-size:16px;font-weight:600;color:#c00;margin-bottom:12px">
+                        Mollie-betaling aanmaken mislukt
+                    </div>
+                    <div style="font-size:13px;color:var(--qe-grey);background:#fff3e0;padding:12px;border-radius:8px;text-align:left;white-space:pre-wrap;font-family:monospace">
+                        ${this.escapeHtml(e.message || String(e))}
+                    </div>
+                    <button onclick="app.skipPayment()" class="btn btn-outline btn-full" style="margin-top:16px">
+                        ← Terug naar planning
+                    </button>
+                </div>`;
+            return;
+        }
+
+        const checkoutUrl = (payment._links && payment._links.checkout && payment._links.checkout.href) || '';
+        this._molliePaymentId = payment.id;
+
+        // QR-code via qrserver.com (zelfde lib als EPC-QR)
+        const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&ecc=M&data=${encodeURIComponent(checkoutUrl)}`;
+
+        content.innerHTML = `
+            <div style="margin-bottom:20px">
+                <div style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#0079FF,#005FFC);
+                    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:36px;color:#fff">
+                    🟦
+                </div>
+                <h2 style="color:var(--qe-darkblue);margin:0 0 4px;font-size:22px;text-align:center">Mollie betaling</h2>
+                <div style="font-size:13px;color:var(--qe-grey);text-align:center">
+                    Factuur ${this.escapeHtml(logicId)} — €${amount}
+                </div>
+                <div style="font-size:11px;color:#999;text-align:center;margin-top:4px;font-family:monospace">
+                    ${this.escapeHtml(payment.id)} · test mode
+                </div>
+            </div>
+
+            <div style="background:#fff;border:2px solid #0079FF;border-radius:14px;padding:16px;margin-bottom:14px;text-align:center">
+                <div style="font-size:13px;color:var(--qe-grey);margin-bottom:8px">
+                    Klant scant met smartphone-camera of bank-app
+                </div>
+                <img src="${qrSrc}" alt="Mollie QR" style="width:220px;height:220px;image-rendering:pixelated">
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+                <a href="${this.escapeHtml(checkoutUrl)}" target="_blank" rel="noopener"
+                    style="padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#0079FF,#005FFC);
+                    color:#fff;font-size:15px;font-weight:600;text-decoration:none;text-align:center;
+                    display:flex;align-items:center;justify-content:center;gap:8px">
+                    🟦 Openen op dit toestel
+                </a>
+                <div style="font-size:11px;color:#999;text-align:center;word-break:break-all;padding:0 8px">
+                    ${this.escapeHtml(checkoutUrl)}
+                </div>
+            </div>
+
+            <div id="mollieStatus" style="background:#f8f9fa;border-radius:10px;padding:12px;margin-bottom:12px;
+                font-size:13px;text-align:center;color:var(--qe-grey);display:flex;align-items:center;justify-content:center;gap:10px">
+                <div class="spinner" style="width:16px;height:16px"></div>
+                <span>Wachten op betaling…</span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:8px">
+                <button onclick="app.mollieMarkPaidManually()" class="btn btn-primary btn-full"
+                    style="padding:12px;font-size:14px">
+                    ✓ Betaling ontvangen (manueel bevestigen)
+                </button>
+                <button onclick="app.skipPayment()" class="btn btn-outline btn-full"
+                    style="padding:10px;font-size:13px">
+                    Overslaan → terug naar planning
+                </button>
+            </div>
+        `;
+
+        // Start polling
+        this._stopMolliePoll();
+        let elapsed = 0;
+        const POLL_MS = 3000;
+        const TIMEOUT_MS = 5 * 60 * 1000;
+        this._molliePollTimer = setInterval(async () => {
+            elapsed += POLL_MS;
+            try {
+                const r = await fetch('https://api.mollie.com/v2/payments/' + encodeURIComponent(this._molliePaymentId), {
+                    headers: { 'Authorization': 'Bearer ' + this.MOLLIE_TEST_API_KEY },
+                });
+                if (r.ok) {
+                    const p = await r.json();
+                    console.log('[Mollie] poll', p.id, p.status);
+                    const statusEl = document.getElementById('mollieStatus');
+                    if (p.status === 'paid') {
+                        if (statusEl) statusEl.innerHTML = '<span style="color:#388e3c;font-weight:600">✓ Betaling ontvangen!</span>';
+                        this._stopMolliePoll();
+                        setTimeout(() => {
+                            this.toast('Betaling gelukt — terug naar planning');
+                            this.navigate('screenPlanning', false);
+                            this.screenHistory = [];
+                            this.loadPlanning();
+                        }, 1500);
+                    } else if (p.status === 'failed' || p.status === 'canceled' || p.status === 'expired') {
+                        if (statusEl) statusEl.innerHTML = `<span style="color:#c00;font-weight:600">✗ ${p.status}</span>`;
+                        this._stopMolliePoll();
+                    } else if (statusEl) {
+                        statusEl.innerHTML = '<div class="spinner" style="width:16px;height:16px"></div><span>Wachten op betaling… (' + p.status + ')</span>';
+                    }
+                }
+            } catch (e) {
+                console.warn('[Mollie] poll fout:', e.message);
+            }
+            if (elapsed >= TIMEOUT_MS) {
+                this._stopMolliePoll();
+                const statusEl = document.getElementById('mollieStatus');
+                if (statusEl) statusEl.innerHTML = '<span style="color:#e65100">⌛ Timeout — controleer manueel in Mollie</span>';
+            }
+        }, POLL_MS);
+    },
+
+    _stopMolliePoll() {
+        if (this._molliePollTimer) {
+            clearInterval(this._molliePollTimer);
+            this._molliePollTimer = null;
+        }
+    },
+
+    mollieMarkPaidManually() {
+        this._stopMolliePoll();
+        this.toast('Manueel bevestigd — terug naar planning');
+        this.navigate('screenPlanning', false);
+        this.screenHistory = [];
+        this.loadPlanning();
     },
 
     async startTerminalPayment(invoiceId, amount, ogm, invoiceLogicId) {
