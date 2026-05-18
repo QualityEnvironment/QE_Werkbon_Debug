@@ -1012,6 +1012,16 @@ const app = {
     async checkAndHandleOpenWorkordersBeforeClockOut(session) {
         if (!this.currentUser) return true; // safety: geen user → laat door
 
+        // v126: loading-spinner tijdens de planning-fetch
+        if (typeof this.showScanLoading === 'function') {
+            try { this.showScanLoading('Openstaande werkbons checken…'); } catch(_) {}
+        }
+        const hideLoad = () => {
+            if (typeof this.hideScanLoading === 'function') {
+                try { this.hideScanLoading(); } catch(_) {}
+            }
+        };
+
         // 1. Vandaag-planning ophalen (met hasWerkbon-vlag)
         let openItems = [];
         try {
@@ -1025,12 +1035,16 @@ const app = {
             console.warn('[ClockOut-check] planning fetch faalde:', e && e.message);
             // Bij API-fout: laat uitklokken toch toe — we willen geen
             // werknemer-blokkade op infrastructuur-issues.
+            hideLoad();
             return true;
         }
 
-        if (openItems.length === 0) return true;
+        if (openItems.length === 0) { hideLoad(); return true; }
 
         const isMonteur = this.isMonteur();
+
+        // Vanaf hier komen er modals — spinner verbergen zodat die zichtbaar zijn
+        hideLoad();
 
         // Technieker / bureel: altijd blokkeren bij open
         if (!isMonteur) {
@@ -7662,37 +7676,74 @@ const app = {
         return parts.join(', ');
     },
 
-    /** Werknemer-adres uit Robaws. Probeert meerdere veld-namen omdat
-     *  Robaws het op verschillende plekken kan zetten (address / homeAddress
-     *  / addresses[0] / extraFields). Returns geformatteerde string of null. */
+    /** Stash voor diagnostiek — bevat de laatste set keys van de employee
+     *  response zodat we in de modal kunnen tonen welke velden Robaws teruggaf. */
+    _lastEmployeeKeys: null,
+
+    /** Werknemer-adres uit Robaws. Probeert meerdere structuren omdat
+     *  Robaws het adres op verschillende plekken kan zetten:
+     *   - emp.address als object met addressLine1/postalCode/city/country
+     *   - emp.homeAddress / emp.privateAddress / emp.addresses[0]
+     *   - of als losse top-level velden direct op emp (addressLine1, street, postalCode, city, ...)
+     *  Returns geformatteerde string of null. */
     async _fetchEmployeeAddress(employeeId) {
         try {
             const res = await RobawsAPI.get('employees/' + employeeId);
             if (res.code !== 200 || !res.data) {
                 console.warn('[KM] employee fetch faalde, code', res.code);
+                this._lastEmployeeKeys = ['fetch-faalde:' + res.code];
                 return null;
             }
             const emp = res.data;
+            this._lastEmployeeKeys = Object.keys(emp);
             console.log('[KM] employee object keys:', Object.keys(emp));
-            // Probeer in volgorde van waarschijnlijkheid
-            const candidates = [
+
+            // 1) Probeer geneste address-objects
+            const objCandidates = [
                 emp.address,
                 emp.homeAddress,
                 emp.privateAddress,
                 Array.isArray(emp.addresses) ? emp.addresses[0] : null,
             ].filter(Boolean);
-            for (const cand of candidates) {
+            for (const cand of objCandidates) {
                 const formatted = this._formatRobawsAddress(cand);
                 if (formatted) {
-                    console.log('[KM] werknemer-adres gevonden:', formatted);
+                    console.log('[KM] werknemer-adres gevonden via geneste object:', formatted);
                     return formatted;
                 }
             }
-            // Last resort: misschien staat het in extraFields
+
+            // 2) Probeer een synthetisch object opgebouwd uit losse velden direct op emp.
+            //  Robaws kan in de employees-response het adres als losse properties zetten:
+            //  addressLine1, addressLine2, postalCode, city, country, street, streetNumber...
+            const synthetic = {
+                addressLine1: emp.addressLine1 || emp.street || emp.straat || null,
+                addressLine2: emp.addressLine2 || null,
+                postalCode:   emp.postalCode || emp.postcode || emp.zip || null,
+                city:         emp.city || emp.stad || null,
+                country:      emp.country || emp.land || null,
+            };
+            // Numeriek straat-nr toevoegen aan addressLine1 als er een apart `streetNumber` is
+            if (synthetic.addressLine1 && (emp.streetNumber || emp.huisnummer || emp.number)) {
+                const nr = emp.streetNumber || emp.huisnummer || emp.number;
+                if (!String(synthetic.addressLine1).match(new RegExp('\\b' + nr + '\\b'))) {
+                    synthetic.addressLine1 = synthetic.addressLine1 + ' ' + nr;
+                }
+            }
+            if (synthetic.addressLine1 || synthetic.city || synthetic.postalCode) {
+                const formatted = this._formatRobawsAddress(synthetic);
+                if (formatted) {
+                    console.log('[KM] werknemer-adres gevonden via losse velden:', formatted);
+                    return formatted;
+                }
+            }
+
+            // 3) Dump info voor debug
             if (emp.extraFields) {
                 console.log('[KM] employee extraFields keys:', Object.keys(emp.extraFields));
             }
-            console.warn('[KM] geen werknemer-adres in employee record. Beschikbare velden:', JSON.stringify(emp).slice(0, 500));
+            console.warn('[KM] geen werknemer-adres in employee record. Raw:',
+                JSON.stringify(emp).slice(0, 800));
             return null;
         } catch (e) {
             console.warn('[KM] employee-adres ophalen mislukt:', e && e.message);
@@ -7814,7 +7865,10 @@ const app = {
         // km. Toon dat expliciet zodat de gebruiker weet waarom.
         let warning = null;
         if (empAddrMissing && ok) {
-            warning = 'Geen thuisadres in Robaws — vul Adres in op het werknemerfiche';
+            const keysHint = Array.isArray(this._lastEmployeeKeys) && this._lastEmployeeKeys.length
+                ? ' [debug: ' + this._lastEmployeeKeys.slice(0, 25).join(', ') + ']'
+                : '';
+            warning = 'Werknemer-adres niet gevonden in Robaws — gerekend vanaf bureau.' + keysHint;
         }
         return {
             heen:  typeof heen  === 'number' ? heen  : 0,
