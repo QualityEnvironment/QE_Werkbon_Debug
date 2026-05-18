@@ -801,6 +801,19 @@
         </label>
     </div>
 
+    <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet) -->
+    <div class="card" id="roleSwitchCard" style="margin-bottom:12px;display:none">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">🎭 Actieve rol</div>
+        <div style="font-size:12px;color:var(--qe-grey);margin-bottom:10px;line-height:1.4">
+            Wissel tijdelijk naar een andere rol om de bijhorende app-flow te
+            gebruiken. Een technieker werkt soms ook als monteur op een werkbon.
+        </div>
+        <select class="form-input" id="roleSwitchSelect" onchange="app.switchActiveRole(this.value)">
+            <!-- opties worden dynamisch ingevuld via app.renderRoleSwitch() -->
+        </select>
+        <div id="roleSwitchNote" style="font-size:12px;color:var(--qe-orange);margin-top:8px;display:none;font-weight:500"></div>
+    </div>
+
     <!-- App update -->
     <div class="card" style="margin-bottom:12px">
         <div style="display:flex;align-items:center;justify-content:space-between">

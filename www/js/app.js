@@ -520,7 +520,8 @@ const app = {
                 'qe_submitted_wos',
                 'qe_timer_state',
                 'qe_timer_correction',
-            
+                'qe_active_role_override',  // v117: test-rolwissel uit profiel
+
                 'qe_clock_pending_',       // v72: per-user pending sync queue (prefix-match)
             ];
             const planItemPrefix = 'planItem_';
@@ -691,6 +692,9 @@ const app = {
         }
         const updateStatus = document.getElementById('updateStatus');
         if (updateStatus) updateStatus.style.display = 'none';
+
+        // v117: rol-switcher card vullen + tonen (alleen voor bureel/technieker)
+        this.renderRoleSwitch();
 
         // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
         // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
@@ -884,11 +888,114 @@ const app = {
     // registreren, geen prijzen, geen handtekening, geen betaling/factuur,
     // geen klantrapport. Alle andere rollen (Technieker, Projectleider, ...)
     // krijgen de volledige flow.
+    /**
+     * v117: actieve rol = basis-rol uit EMPLOYEES tenzij er een test-override
+     * is geactiveerd via het profielscherm. Bewaard in localStorage onder
+     * 'qe_active_role_override'. Geldigheid:
+     *   - monteur: kan NIET overriden (altijd monteur)
+     *   - technieker: kan overriden naar 'monteur' (niet 'bureel')
+     *   - bureel: kan overriden naar 'monteur' of 'technieker'
+     * Bij logout wordt de override gewist.
+     */
+    _activeRole() {
+        if (!this.currentUser) return null;
+        const base = this.currentUser.role;
+        if (base === 'monteur') return 'monteur'; // monteur: geen override toegestaan
+        let override = null;
+        try { override = localStorage.getItem('qe_active_role_override'); } catch(_) {}
+        if (!override) return base;
+        // Valideer override is toegestaan voor deze user
+        if (base === 'technieker' && (override === 'technieker' || override === 'monteur')) return override;
+        if (base === 'bureel' && (override === 'bureel' || override === 'technieker' || override === 'monteur')) return override;
+        return base;
+    },
     isMonteur() {
-        return !!(this.currentUser && this.currentUser.role === 'monteur');
+        return this._activeRole() === 'monteur';
     },
     isTechnieker() {
         return !this.isMonteur();
+    },
+
+    /** Rendert de rol-switcher card in het profielscherm. */
+    renderRoleSwitch() {
+        const card = document.getElementById('roleSwitchCard');
+        const sel = document.getElementById('roleSwitchSelect');
+        const note = document.getElementById('roleSwitchNote');
+        if (!card || !sel || !this.currentUser) return;
+
+        const base = this.currentUser.role;
+        // Monteurs zien deze card niet
+        if (base === 'monteur') {
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = '';
+
+        // Opties op basis van basis-rol
+        let options;
+        if (base === 'bureel') {
+            options = [
+                { value: 'bureel',     label: 'Bureel (standaard)' },
+                { value: 'technieker', label: 'Technieker' },
+                { value: 'monteur',    label: 'Monteur' },
+            ];
+        } else {
+            // technieker
+            options = [
+                { value: 'technieker', label: 'Technieker (standaard)' },
+                { value: 'monteur',    label: 'Monteur' },
+            ];
+        }
+
+        const active = this._activeRole();
+        sel.innerHTML = options.map(o =>
+            `<option value="${o.value}" ${o.value === active ? 'selected' : ''}>${o.label}</option>`
+        ).join('');
+
+        // Indicator zichtbaar als override actief is
+        if (active !== base) {
+            note.style.display = '';
+            note.textContent = '⚠ Test-modus: app gedraagt zich als ' + active +
+                ' (basis-rol: ' + base + ').';
+        } else {
+            note.style.display = 'none';
+            note.textContent = '';
+        }
+    },
+
+    /** Schakelt naar een andere actieve rol. */
+    switchActiveRole(newRole) {
+        if (!this.currentUser) return;
+        const base = this.currentUser.role;
+        // Validatie
+        if (base === 'monteur') {
+            this.toast('Monteurs kunnen niet van rol wisselen');
+            return;
+        }
+        const allowed = (base === 'bureel')
+            ? ['bureel', 'technieker', 'monteur']
+            : ['technieker', 'monteur'];
+        if (!allowed.includes(newRole)) {
+            this.toast('Deze rol is niet toegestaan voor jou');
+            return;
+        }
+
+        try {
+            if (newRole === base) {
+                localStorage.removeItem('qe_active_role_override');
+            } else {
+                localStorage.setItem('qe_active_role_override', newRole);
+            }
+        } catch(_) {}
+
+        this.renderRoleSwitch();
+        this.toast('Actieve rol: ' + newRole);
+
+        // Sommige UI-elementen renderen op basis van rol — herlaad de planning
+        // zodat bv. monteur-knoppen verschijnen/verdwijnen waar nodig.
+        if (this.currentScreen === 'screenPlanning') {
+            this.loadPlanning();
+        }
     },
 
     // ========================================
