@@ -7640,9 +7640,127 @@ const app = {
     },
 
     /**
+    // ================================================================
+    // v119: AUTO-KM BEREKENING via Google Maps Distance Matrix
+    // ----------------------------------------------------------------
+    //  Start/eind = bureau, tenzij "rechtstreeks van/naar thuis" → dan
+    //  het werknemer-adres uit Robaws. Werf = adres van eerste vandaag-
+    //  dagplanning. Bij "fiets" aangevinkt → km = 0.
+    //  Werkt met de Distance Matrix REST API (CORS-vriendelijk voor keys
+    //  zonder HTTP-referer-restricties).
+    // ================================================================
+    GOOGLE_MAPS_API_KEY: 'AIzaSyDdgkLVxmuOEddVcodKDl7yO4vlI_NvGYA',
+    QE_OFFICE_ADDRESS:  'Deuzeldlaan 36, 2900 Schoten, België',
+
+    /** Format een Robaws-`address`-object naar een Google-leesbare string. */
+    _formatRobawsAddress(addr) {
+        if (!addr) return null;
+        const cityLine = [addr.postalCode, addr.city].filter(Boolean).join(' ').trim();
+        const parts = [
+            (addr.addressLine1 || '').trim(),
+            cityLine,
+            (addr.country || 'België').trim(),
+        ].filter(s => s);
+        return parts.join(', ');
+    },
+
+    /** Werknemer-adres uit Robaws. Returns geformatteerde string of null. */
+    async _fetchEmployeeAddress(employeeId) {
+        try {
+            const res = await RobawsAPI.get('employees/' + employeeId);
+            if (res.code !== 200 || !res.data) return null;
+            return this._formatRobawsAddress(res.data.address);
+        } catch (e) {
+            console.warn('[KM] employee-adres ophalen mislukt:', e && e.message);
+            return null;
+        }
+    },
+
+    /** Werf-adres van vandaag voor deze werknemer.
+     *  Pakt de eerste dagplanning van vandaag met een installation-adres. */
+    async _fetchTodayWerfAddress(employeeId) {
+        try {
+            const today = RobawsAPI._localDateStr();
+            const planning = await RobawsAPI.getPlanning(employeeId, today, null);
+            const items = (planning && planning.items) || [];
+            for (const item of items) {
+                const instIds = item.installationIds || [];
+                if (instIds.length === 0) continue;
+                const instRes = await RobawsAPI.get('installations/' + instIds[0]);
+                if (instRes.code !== 200 || !instRes.data || !instRes.data.address) continue;
+                const formatted = this._formatRobawsAddress(instRes.data.address);
+                if (formatted) return formatted;
+            }
+            return null;
+        } catch (e) {
+            console.warn('[KM] werf-adres ophalen mislukt:', e && e.message);
+            return null;
+        }
+    },
+
+    /** Google Maps Distance Matrix call — returns afstand in km (geheel) of null. */
+    async _googleDistanceKm(origin, destination) {
+        if (!origin || !destination) return null;
+        try {
+            const url = 'https://maps.googleapis.com/maps/api/distancematrix/json'
+                + '?origins=' + encodeURIComponent(origin)
+                + '&destinations=' + encodeURIComponent(destination)
+                + '&units=metric'
+                + '&key=' + this.GOOGLE_MAPS_API_KEY;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status !== 'OK') {
+                console.warn('[KM] Google Maps status:', data.status, data.error_message);
+                return null;
+            }
+            const elem = data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0];
+            if (!elem || elem.status !== 'OK' || !elem.distance) {
+                console.warn('[KM] Distance element status:', elem && elem.status);
+                return null;
+            }
+            return Math.round(elem.distance.value / 1000);
+        } catch (e) {
+            console.warn('[KM] Google Maps call faalde:', e && e.message);
+            return null;
+        }
+    },
+
+    /** Hoofd-functie: bereken heen + terug km op basis van de checkboxes
+     *  in de km-popup. */
+    async _autoCalcKilometers(employeeId, options) {
+        if (options.fiets) {
+            return { heen: 0, terug: 0, source: 'fiets' };
+        }
+        const werfAddr = await this._fetchTodayWerfAddress(employeeId);
+        if (!werfAddr) {
+            return { heen: 0, terug: 0, source: 'geen-werf-gevonden' };
+        }
+        let startAddr = this.QE_OFFICE_ADDRESS;
+        let endAddr   = this.QE_OFFICE_ADDRESS;
+        if (options.directThuisWerf || options.directWerfThuis) {
+            const empAddr = await this._fetchEmployeeAddress(employeeId);
+            if (empAddr) {
+                if (options.directThuisWerf) startAddr = empAddr;
+                if (options.directWerfThuis) endAddr   = empAddr;
+            }
+        }
+        const [heen, terug] = await Promise.all([
+            this._googleDistanceKm(startAddr, werfAddr),
+            this._googleDistanceKm(werfAddr, endAddr),
+        ]);
+        return {
+            heen:  heen  != null ? heen  : 0,
+            terug: terug != null ? terug : 0,
+            source: (heen != null && terug != null) ? 'google-maps' : 'partial',
+            startAddr, werfAddr, endAddr,
+        };
+    },
+
+    /**
      * v83: Vraag de monteur om kilometers heen/terug in te geven na uitklokken,
      * en post die als commute-entry op de werkbon. Modal — kan niet weggeklikt
      * worden zonder iets in te vullen (0 is een geldige waarde).
+     * v119: bij open auto-fill via Google Maps Distance Matrix.
      */
     async promptKilometers(workOrderId, employeeId) {
         return new Promise((resolve) => {
@@ -7724,6 +7842,56 @@ const app = {
 
             // Auto-focus heen veld + select-all
             setTimeout(() => { try { heenEl.focus(); heenEl.select(); } catch(_) {} }, 100);
+
+            // ============================================================
+            // v119: Auto-bereken km via Google Maps Distance Matrix.
+            //  - Loopt bij open van de modal (na 250ms zodat user de modal ziet)
+            //  - Loopt opnieuw bij elke checkbox-wijziging (fiets / directTW / directWT)
+            //  - Tijdens berekening: inputs disabled + opacity:0.5 + placeholder "..."
+            //  - Als google iets teruggeeft → veld vullen
+            //  - User kan altijd nog handmatig overschrijven (na de async call)
+            // ============================================================
+            let _kmCalcSeq = 0;
+            const recalcKm = async () => {
+                const seq = ++_kmCalcSeq;
+                const opts = {
+                    fiets: !!(fietsEl && fietsEl.checked),
+                    directThuisWerf: !!(directTWEl && directTWEl.checked),
+                    directWerfThuis: !!(directWTEl && directWTEl.checked),
+                };
+                // Loading state
+                try {
+                    heenEl.disabled = true;
+                    terugEl.disabled = true;
+                    heenEl.style.opacity = '0.5';
+                    terugEl.style.opacity = '0.5';
+                } catch(_) {}
+                let result = null;
+                try {
+                    result = await this._autoCalcKilometers(employeeId, opts);
+                } catch (e) {
+                    console.warn('[KM] auto-calc faalde:', e && e.message);
+                }
+                // Race-check: alleen toepassen als deze call de meest recente is
+                if (seq !== _kmCalcSeq) return;
+                try {
+                    heenEl.disabled = false;
+                    terugEl.disabled = false;
+                    heenEl.style.opacity = '1';
+                    terugEl.style.opacity = '1';
+                } catch(_) {}
+                if (result) {
+                    heenEl.value = String(result.heen);
+                    terugEl.value = String(result.terug);
+                    console.log('[KM] auto-fill:', result);
+                }
+            };
+            // Initial calc - bij open
+            setTimeout(() => { recalcKm(); }, 250);
+            // Re-calc bij checkbox-wijziging
+            if (fietsEl)    fietsEl.addEventListener('change', recalcKm);
+            if (directTWEl) directTWEl.addEventListener('change', recalcKm);
+            if (directWTEl) directWTEl.addEventListener('change', recalcKm);
 
             const submit = async () => {
                 const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
