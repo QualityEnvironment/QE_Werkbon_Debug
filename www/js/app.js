@@ -7973,6 +7973,49 @@ const app = {
                         <span>🏗️➡️🏠 Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
                     </label>
 
+                    <!-- v131: knop om rit te splitsen in 2 mobiliteits-segmenten -->
+                    <button id="kmSplitToggle" type="button"
+                            style="width:100%;padding:11px;background:#fff;color:#1A237E;border:2px dashed #1A237E;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:14px">
+                        ➕ Rit splitsen (deel met andere mobiliteit)
+                    </button>
+
+                    <div id="kmSplitSection" style="display:none;border:2px solid #cfd8dc;border-radius:12px;padding:14px;margin-bottom:14px;background:#fafafa">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                            <div style="font-size:13px;font-weight:700;color:#1A237E">🚐➕ Tweede rit-segment</div>
+                            <button id="kmSplitRemove" type="button" style="background:none;border:none;color:#c62828;cursor:pointer;font-size:13px;font-weight:600;padding:0">✕ verwijder</button>
+                        </div>
+                        <div style="font-size:11px;color:#888;margin-bottom:10px;line-height:1.4">
+                            Vul hier de km in die je in een <strong>andere</strong> mobiliteit aflegde (bv. solo-deel voordat je iemand oppikte). De hoofd-keuze hierboven geldt voor de rest.
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+                            <div>
+                                <label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Heen (km)</label>
+                                <input id="kmHeen2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
+                                    style="width:100%;padding:10px;font-size:15px;border:2px solid #cfd8dc;border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
+                            </div>
+                            <div>
+                                <label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Terug (km)</label>
+                                <input id="kmTerug2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
+                                    style="width:100%;padding:10px;font-size:15px;border:2px solid #cfd8dc;border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
+                            </div>
+                        </div>
+                        <label style="font-size:11px;color:#666;display:block;margin-bottom:4px">Mobiliteit voor dit segment</label>
+                        <div id="kmMobility2Radio" style="display:grid;gap:5px">
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                                <input type="radio" name="kmMobility2" value="-3" checked style="margin:0">
+                                <span>🚐 Chauffeur zonder passagiers</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                                <input type="radio" name="kmMobility2" value="-1" style="margin:0">
+                                <span>🚐👥 Chauffeur (met passagiers)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                                <input type="radio" name="kmMobility2" value="-2" style="margin:0">
+                                <span>🧍 Passagier</span>
+                            </label>
+                        </div>
+                    </div>
+
                     <button id="kmPromptSubmit" style="width:100%;padding:14px;background:#1A237E;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer">
                         Opslaan
                     </button>
@@ -7987,6 +8030,24 @@ const app = {
             const directWTEl = document.getElementById('kmDirectWerfThuisInput');
             const errEl = document.getElementById('kmPromptError');
             const btn = document.getElementById('kmPromptSubmit');
+            // v131: split-rit elementen
+            const splitToggleEl = document.getElementById('kmSplitToggle');
+            const splitSectionEl = document.getElementById('kmSplitSection');
+            const splitRemoveEl = document.getElementById('kmSplitRemove');
+            const heen2El = document.getElementById('kmHeen2Input');
+            const terug2El = document.getElementById('kmTerug2Input');
+            const openSplit = () => {
+                splitSectionEl.style.display = 'block';
+                splitToggleEl.style.display = 'none';
+            };
+            const closeSplit = () => {
+                splitSectionEl.style.display = 'none';
+                splitToggleEl.style.display = 'block';
+                heen2El.value = '0';
+                terug2El.value = '0';
+            };
+            if (splitToggleEl) splitToggleEl.addEventListener('click', openSplit);
+            if (splitRemoveEl) splitRemoveEl.addEventListener('click', closeSplit);
 
             // Auto-focus heen veld + select-all
             setTimeout(() => { try { heenEl.focus(); heenEl.select(); } catch(_) {} }, 100);
@@ -8071,12 +8132,20 @@ const app = {
                 const directThuisWerf = !!(directTWEl && directTWEl.checked);
                 const directWerfThuis = !!(directWTEl && directWTEl.checked);
 
+                // v131: detecteer split-rit (2e mobility-blok)
+                const splitOpen = splitSectionEl && splitSectionEl.style.display !== 'none';
+                const heen2 = splitOpen ? Math.max(0, Math.round(parseFloat(heen2El.value) || 0)) : 0;
+                const terug2 = splitOpen ? Math.max(0, Math.round(parseFloat(terug2El.value) || 0)) : 0;
+                const mob2Radio = document.querySelector('input[name="kmMobility2"]:checked');
+                const mobility2TypeId = mob2Radio ? parseInt(mob2Radio.value, 10) : -3;
+                const hasSplit = splitOpen && (heen2 > 0 || terug2 > 0);
+
                 btn.disabled = true;
                 btn.textContent = 'Opslaan...';
                 errEl.style.display = 'none';
 
                 try {
-                    // Stap 1: commute-entry voor de auto-km
+                    // Stap 1: commute-entry voor de hoofd-rit
                     const r = await RobawsAPI.addCommuteEntry({
                         workOrderId,
                         employeeId,
@@ -8086,6 +8155,21 @@ const app = {
                     });
                     if (r.code !== 200 && r.code !== 201) {
                         throw new Error('Robaws (' + r.code + ')');
+                    }
+
+                    // v131: stap 1b — tweede commute-entry indien split aangevinkt
+                    if (hasSplit) {
+                        const r2 = await RobawsAPI.addCommuteEntry({
+                            workOrderId,
+                            employeeId,
+                            distance: heen2,
+                            returnDistance: terug2,
+                            mobilityTypeId: mobility2TypeId,
+                        });
+                        if (r2.code !== 200 && r2.code !== 201) {
+                            throw new Error('Robaws split (' + r2.code + ')');
+                        }
+                        console.log('[App] split commute-entry gepost:', { heen2, terug2, mobility2TypeId });
                     }
 
                     // Stap 2: checkboxes (Fietsvergoeding + Rechtstreeks routes) → set
@@ -8133,8 +8217,10 @@ const app = {
                     if (fiets) tags.push('🚲');
                     if (directThuisWerf) tags.push('🏠→🏗️');
                     if (directWerfThuis) tags.push('🏗️→🏠');
+                    if (hasSplit) tags.push('🔀');
                     const tagTxt = tags.length ? ' · ' + tags.join(' ') : '';
-                    this.toast('Kilometers opgeslagen: ' + (heen + terug) + ' km' + tagTxt);
+                    const totaalKm = (heen + terug) + (hasSplit ? (heen2 + terug2) : 0);
+                    this.toast('Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);
                     resolve(true);
                 } catch (e) {
                     console.warn('[App] km POST faalde:', e && e.message);
