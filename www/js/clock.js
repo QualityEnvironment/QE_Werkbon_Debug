@@ -441,14 +441,16 @@ window.QEClock = {
         if (!normalizedTagId) return;
         console.log('[Clock] NFC scan:', normalizedTagId);
 
-        // ── SCREEN-GUARD: alleen scannen wanneer gebruiker op het Klok-scherm
-        // staat. Voorkomt onbedoelde inclock terwijl iemand een werkbon invult.
-        // Toewijzingsmodus is een uitzondering — die mag overal werken.
-        const onClockScreen = window.app && window.app.currentScreen === 'screenClock';
-        if (!onClockScreen && !this._pendingAssignment) {
+        // ── SCREEN-GUARD: scannen mag vanuit Planning / Klok / Uren tabs
+        // (v126). Andere schermen (werkbon-invul, payment, etc.) blijven
+        // geblokkeerd om onbedoelde inclock te voorkomen. Toewijzingsmodus
+        // is een uitzondering — die mag overal werken.
+        const ALLOWED_SCAN_SCREENS = ['screenPlanning', 'screenClock', 'screenDagoverzicht'];
+        const onAllowedScreen = window.app
+            && ALLOWED_SCAN_SCREENS.includes(window.app.currentScreen);
+        if (!onAllowedScreen && !this._pendingAssignment) {
             if (window.app) {
-                app.toast('Open eerst het Klok-scherm om te scannen');
-                try { app.navigate('screenClock'); } catch(_) {}
+                app.toast('Scannen kan vanaf Planning, Klok of Uren');
             }
             return;
         }
@@ -529,9 +531,17 @@ window.QEClock = {
             // Resultaat van scan-flow voor SUCCES/MISLUKT overlay
             let scanResult = null;
 
+            // v126: helper om de loading-spinner te tonen
+            const showLoad = () => {
+                if (window.app && typeof app.showScanLoading === 'function') {
+                    try { app.showScanLoading('Bezig met verwerken…'); } catch(_) {}
+                }
+            };
+
             try {
                 // ── LADEN & LOSSEN ──
                 if (tag.type === 'laden_lossen') {
+                    showLoad();
                     scanResult = await this._handleLadenLossen(session, tag);
                     return;
                 }
@@ -578,13 +588,19 @@ window.QEClock = {
                         return;
                     }
 
+                    showLoad();
                     scanResult = await this._clockOut(session, tag);
                     return;
                 }
 
                 // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
+                showLoad();
                 scanResult = await this._clockIn(session, tag);
             } finally {
+                // v126: loading-spinner uit voor de SUCCES/MISLUKT overlay opent
+                if (window.app && typeof app.hideScanLoading === 'function') {
+                    try { app.hideScanLoading(); } catch(_) {}
+                }
                 // Toon SUCCES/MISLUKT overlay als de scan-flow iets opleverde
                 if (scanResult && window.app && typeof app.showScanResult === 'function') {
                     const refresh = !!scanResult.refresh;

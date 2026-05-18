@@ -7662,12 +7662,38 @@ const app = {
         return parts.join(', ');
     },
 
-    /** Werknemer-adres uit Robaws. Returns geformatteerde string of null. */
+    /** Werknemer-adres uit Robaws. Probeert meerdere veld-namen omdat
+     *  Robaws het op verschillende plekken kan zetten (address / homeAddress
+     *  / addresses[0] / extraFields). Returns geformatteerde string of null. */
     async _fetchEmployeeAddress(employeeId) {
         try {
             const res = await RobawsAPI.get('employees/' + employeeId);
-            if (res.code !== 200 || !res.data) return null;
-            return this._formatRobawsAddress(res.data.address);
+            if (res.code !== 200 || !res.data) {
+                console.warn('[KM] employee fetch faalde, code', res.code);
+                return null;
+            }
+            const emp = res.data;
+            console.log('[KM] employee object keys:', Object.keys(emp));
+            // Probeer in volgorde van waarschijnlijkheid
+            const candidates = [
+                emp.address,
+                emp.homeAddress,
+                emp.privateAddress,
+                Array.isArray(emp.addresses) ? emp.addresses[0] : null,
+            ].filter(Boolean);
+            for (const cand of candidates) {
+                const formatted = this._formatRobawsAddress(cand);
+                if (formatted) {
+                    console.log('[KM] werknemer-adres gevonden:', formatted);
+                    return formatted;
+                }
+            }
+            // Last resort: misschien staat het in extraFields
+            if (emp.extraFields) {
+                console.log('[KM] employee extraFields keys:', Object.keys(emp.extraFields));
+            }
+            console.warn('[KM] geen werknemer-adres in employee record. Beschikbare velden:', JSON.stringify(emp).slice(0, 500));
+            return null;
         } catch (e) {
             console.warn('[KM] employee-adres ophalen mislukt:', e && e.message);
             return null;
@@ -7761,12 +7787,14 @@ const app = {
         }
         let startAddr = this.QE_OFFICE_ADDRESS;
         let endAddr   = this.QE_OFFICE_ADDRESS;
+        let empAddrMissing = false;
         if (options.directThuisWerf || options.directWerfThuis) {
             const empAddr = await this._fetchEmployeeAddress(employeeId);
             if (empAddr) {
                 if (options.directThuisWerf) startAddr = empAddr;
                 if (options.directWerfThuis) endAddr   = empAddr;
             } else {
+                empAddrMissing = true;
                 console.warn('[KM] werknemer-adres niet gevonden, val terug op bureau');
             }
         }
@@ -7781,12 +7809,20 @@ const app = {
         const terug = terugRes && terugRes.km;
         const ok = (typeof heen === 'number' && typeof terug === 'number');
         const apiError = (heenRes && heenRes.error) || (terugRes && terugRes.error) || null;
+        // Wanneer een rechtstreeks-vinkje aanstaat maar het werknemer-adres niet
+        // gevonden is, val de berekening terug op bureau-adres → user ziet zelfde
+        // km. Toon dat expliciet zodat de gebruiker weet waarom.
+        let warning = null;
+        if (empAddrMissing && ok) {
+            warning = 'Geen thuisadres in Robaws — vul Adres in op het werknemerfiche';
+        }
         return {
             heen:  typeof heen  === 'number' ? heen  : 0,
             terug: typeof terug === 'number' ? terug : 0,
             source: ok ? 'google-maps' : 'partial',
             startAddr, eersteWerf, laatsteWerf, endAddr,
             error: ok ? null : ('Google Maps gaf geen afstand' + (apiError ? ' — ' + apiError : '')),
+            warning,
         };
     },
 
@@ -7927,6 +7963,10 @@ const app = {
                         errEl.textContent = '⚠️ ' + result.error + ' — vul handmatig in.';
                         errEl.style.color = '#e65100';
                         errEl.style.display = 'block';
+                    } else if (result.warning) {
+                        errEl.textContent = 'ℹ️ ' + result.warning;
+                        errEl.style.color = '#0277bd';
+                        errEl.style.display = 'block';
                     }
                 } else {
                     heenEl.value = '0';
@@ -8030,6 +8070,42 @@ const app = {
             terugEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
             heenEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') terugEl.focus(); });
         });
+    },
+
+    /**
+     * v125: Fullscreen loading-overlay tijdens scan → werkbon-creatie.
+     * Wordt getoond direct na de NFC-scan en blijft tot showScanResult
+     * de SUCCES/MISLUKT overlay laat zien. Idempotent — meerdere
+     * showScanLoading calls werken zonder duplicate overlays.
+     */
+    showScanLoading(message) {
+        let overlay = document.getElementById('scanLoading');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'scanLoading';
+            overlay.style.cssText =
+                'position:fixed;inset:0;z-index:99997;'
+              + 'background:rgba(26,35,126,0.97);color:#fff;'
+              + 'display:flex;flex-direction:column;align-items:center;justify-content:center;'
+              + 'gap:24px;padding:24px;text-align:center;';
+            overlay.innerHTML = `
+                <div style="width:80px;height:80px;border:6px solid rgba(255,255,255,0.25);
+                            border-top-color:#fff;border-radius:50%;
+                            animation:qeScanSpin 0.9s linear infinite"></div>
+                <div id="scanLoadingMsg" style="font-size:22px;font-weight:700">Bezig met verwerken…</div>
+                <div style="font-size:14px;opacity:0.85">Even geduld, Robaws krijgt je scan binnen.</div>
+                <style>@keyframes qeScanSpin { to { transform: rotate(360deg); } }</style>
+            `;
+            document.body.appendChild(overlay);
+        }
+        const msgEl = document.getElementById('scanLoadingMsg');
+        if (msgEl && message) msgEl.textContent = message;
+        overlay.style.display = 'flex';
+    },
+
+    hideScanLoading() {
+        const overlay = document.getElementById('scanLoading');
+        if (overlay) overlay.style.display = 'none';
     },
 
     /**
