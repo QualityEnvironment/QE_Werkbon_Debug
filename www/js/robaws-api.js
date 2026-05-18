@@ -1260,9 +1260,13 @@ const RobawsAPI = {
     // PLANNING
     // =============================================
     async getPlanning(employeeId, date, userId = null) {
+        // v112: ook gisteren toestaan zodat de date-strip met 3 chips
+        // (gisteren/vandaag/morgen) werkt. Eerder viel gisteren door de
+        // whitelist en kreeg de gebruiker vandaag-planning te zien.
+        const yesterday = this._localDateStr(null, -1);
         const today = this._localDateStr();
         const tomorrow = this._localDateStr(null, 1);
-        if (date !== today && date !== tomorrow) date = today;
+        if (date !== yesterday && date !== today && date !== tomorrow) date = today;
 
         // Haal planning items op met paginatie
         let allItems = [];
@@ -1280,9 +1284,11 @@ const RobawsAPI = {
 
             allItems = allItems.concat(items);
 
-            // Stop als we voorbij de gewenste datum zijn
+            // Stop als we voorbij de oudste mogelijke datum zijn.
+            // v112: vergelijken met `yesterday` (was `today`) — anders worden
+            // gisteren-items vroegtijdig afgekapt.
             const lastDate = (items[items.length - 1].startDate || '').split('T')[0];
-            if (lastDate < today) break;
+            if (lastDate < yesterday) break;
 
             totalPages = result.data.totalPages || 1;
             page++;
