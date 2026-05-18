@@ -394,8 +394,12 @@ const RobawsAPI = {
             return { success: false, error: 'PIN onjuist' };
         }
 
-        // PIN lokaal cachen voor offline fallback
+        // PIN lokaal cachen voor offline fallback (binnen 7 dagen)
         await this.setPin(emailLower, pin);
+        // v118: stempel timestamp van laatste succesvolle online login zodat
+        // _loginFallback kan controleren of we nog binnen de 7-dagen grace
+        // zitten. Buiten die grace → offline login geweigerd.
+        try { localStorage.setItem('qe_last_online_login_' + emailLower, String(Date.now())); } catch(_) {}
         // Werknemerdata ook lokaal cachen voor offline
         try {
             localStorage.setItem('qe_emp_cache_' + emailLower, JSON.stringify({
@@ -515,32 +519,56 @@ const RobawsAPI = {
         return { success: true };
     },
 
-    // Fallback login als Robaws onbereikbaar is (gebruikt lokaal gecachte PIN + werknemerdata)
+    // Fallback login als Robaws onbereikbaar is.
+    // v118: strenger — vereist BEIDE:
+    //   1. Geldige lokaal gecachte PIN-hash (afgeleid van een eerdere online
+    //      login — niet meer uit hardcoded seed)
+    //   2. Laatste succesvolle online login binnen 7 dagen (`qe_last_online_login_<email>`)
+    // Buiten die grace, of zonder cache → geen offline login mogelijk.
     async _loginFallback(email, pin) {
-        // Eerst proberen met lokaal gecachte werknemerdata
-        const cached = localStorage.getItem('qe_emp_cache_' + email);
-        const emp = this.EMPLOYEES[email];
+        const ONLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dagen
 
-        // PIN check via lokale cache
+        // Stap 1: PIN-cache aanwezig?
         const hasLocalPin = await this.hasPin(email);
-        if (hasLocalPin) {
-            const ok = await this.verifyPin(email, pin);
-            if (!ok) return { success: false, error: 'PIN onjuist' };
-        } else if (!cached && !emp) {
-            return { success: false, error: 'Geen verbinding met Robaws en geen lokale gegevens' };
+        if (!hasLocalPin) {
+            return {
+                success: false,
+                error: 'Geen verbinding met Robaws. Eerste login vereist internet.',
+            };
         }
 
+        // Stap 2: 7-dagen grace check
+        let lastOnline = 0;
+        try { lastOnline = parseInt(localStorage.getItem('qe_last_online_login_' + email) || '0', 10); } catch(_) {}
+        const age = Date.now() - lastOnline;
+        if (!lastOnline || age > ONLINE_GRACE_MS) {
+            const dagen = Math.floor(age / (24 * 60 * 60 * 1000));
+            return {
+                success: false,
+                error: 'Geen verbinding met Robaws. Laatste online login is te oud' +
+                       (lastOnline ? ` (${dagen} dagen geleden)` : '') +
+                       ' — verbind met internet om opnieuw in te loggen.',
+            };
+        }
+
+        // Stap 3: PIN-validatie tegen lokale cache
+        const ok = await this.verifyPin(email, pin);
+        if (!ok) return { success: false, error: 'PIN onjuist' };
+
+        // Stap 4: gebruikersgegevens samenstellen uit lokale cache
+        const cached = localStorage.getItem('qe_emp_cache_' + email);
+        const emp = this.EMPLOYEES[email];
         let user;
         if (cached) {
             const c = JSON.parse(cached);
             const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || email;
             const roleKey = (c.planningGroupName || '').toLowerCase();
             const isMonteur = roleKey.includes('monteur');
-            const isBureel = roleKey.includes('kantoor') || roleKey.includes('bureel') || roleKey.includes('service');
+            const isBureel = roleKey.includes('kantoor') || roleKey.includes('bureel')
+                          || roleKey.includes('projectleider') || roleKey.includes('service');
             let role = 'technieker';
             if (isMonteur) role = 'monteur';
             else if (isBureel) role = 'bureel';
-
             user = {
                 name: name,
                 email: email,
@@ -558,16 +586,19 @@ const RobawsAPI = {
                 role: emp.role || 'technieker',
                 roleName: emp.role || 'Technieker',
             };
+        } else {
+            return { success: false, error: 'Geen lokale werknemer-data — log eerst online in.' };
         }
 
-        console.log('[RobawsAPI] Offline fallback login:', user.name);
+        console.log('[RobawsAPI] Offline fallback login (binnen 7d grace):', user.name);
         localStorage.setItem('qe_user', JSON.stringify(user));
         return { success: true, user };
     },
 
-    // ---- PIN-AUTH (lokaal per toestel) ----
-    // Robaws v2 heeft geen password-API, dus we doen PIN-auth lokaal in localStorage.
-    // De PIN wordt gehashed bewaard met de email als salt.
+    // v118: PIN-cache helpers behouden (nodig voor 7-dagen offline-grace
+    // in `_loginFallback`), maar `seedDefaultPins()` is verwijderd zodat
+    // er geen hardcoded PINs meer op een vers toestel staan. De cache
+    // wordt ENKEL gevuld na een succesvolle online login (zie login).
     async _hashPin(email, pin) {
         const data = new TextEncoder().encode(`qe-pin|${email.toLowerCase()}|${pin}`);
         const buf = await crypto.subtle.digest('SHA-256', data);
@@ -590,36 +621,6 @@ const RobawsAPI = {
     },
     clearPin(email) {
         localStorage.removeItem('qe_pin_' + email.toLowerCase());
-    },
-
-    // Pre-seed PINs: zet standaard PINs voor alle medewerkers als er
-    // nog geen PIN in localStorage staat. Wordt 1x aangeroepen bij app-start.
-    seedDefaultPins() {
-        const defaults = {
-            'qe_pin_glycera@qe.be':             'a54c598cbb607a2623dd1d29368d5aa64229bfc224115d6fea618b2d2e79619e',
-            'qe_pin_sascha@qe.be':              '1d432b29e5217c19439da5e02fc8bc81b5006ad09198ff0ffb275557e18f7809',
-            'qe_pin_daxleekens@qe.be':          '9b5eac84180accf54ce661a253526459a2251afb6595051f3f3be2b84e3b0864',
-            'qe_pin_olivier.puchacz@qe.be':     '8575b1f59819e2a6cb5de911df99f93e9639852cc2999bff0b382562e3654953',
-            'qe_pin_yassine@qe.be':             'a9c7fd61e0a48fd12b9afd6ab8e4520989a3fe8491c44a9c0b415dab21408be7',
-            'qe_pin_levi@qe.be':                '7dfd3cb772282ee863b8eb04eb539cf56f8e05c5e028bff353edc42151aa74ec',
-            'qe_pin_stefan@qe.be':              '3a138748f7cc4993f54392b2d47c985979eb936fcb2b5d6b6ab08cbafeead5e2',
-            'qe_pin_jelle@qe.be':               'af2ec424ed0ca866c7bf798f6eb35c04b238d34f25eb2ad573cd3e073f76e5b2',
-            'qe_pin_wim@qe.be':                 '66ba111ed4633c1d266166c3c0f6b86a0df4cd239fc0e69ca74a7534e5674e38',
-            'qe_pin_jens@qe.be':                '9da1c6b5c705013b0d4255d787ec5e2b35b47d24fcd09082b9e384473631d4dc',
-            'qe_pin_herve@qe.be':               '02ab3d13cb03f01497456162a4ef1513927ce6eb3f425e96ca6037136bec2ad6',
-            'qe_pin_keng@qe.be':                '78f36df6ef01cd5ebf531ec6327562dd5838ac95fa956e0060e00097817cb5ee',
-            'qe_pin_joshua@qe.be':              'f8403d86e335eb67affe196d046aeaa8ad573de187be6f380b40b73e484e6d05',
-            'qe_pin_vince@qe.be':               'fb23a739555cf34c451e1445185272a5c1e6bfc30d5d2758196e1ad76ad18cb2',
-            'qe_pin_bjorn@qe.be':               '90b30b51a0472f2714bdb1f896403a6b1adfb2921404845eebfddc88c5cd8b21',
-            'qe_pin_bart@qe.be':                'd141f2502ee7759d344cea4b9b019957fa61627b0dcf3c969c5a6609d7979c46',
-            'qe_pin_felicity@qe.be':            'c2ffea1001f12af0b83e9a00dbd85176f6eedd6ebb62a319a47beb6368d3fbdb',
-            'qe_pin_rolf@qe.be':                '97295e4354d4aa98782a29bb40ef2b51c54f4f1a6a5cc8b248a8960728e473cf',
-        };
-        for (const [key, hash] of Object.entries(defaults)) {
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, hash);
-            }
-        }
     },
 
     // ---- EMPLOYEE PHOTO ----

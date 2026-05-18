@@ -269,10 +269,10 @@ const app = {
             window._qeBackHandlerInstalled = true;
         }
 
-        // Standaard PINs seeden (alleen als er nog geen PIN staat)
-        if (typeof RobawsAPI !== 'undefined' && RobawsAPI.seedDefaultPins) {
-            RobawsAPI.seedDefaultPins();
-        }
+        // v118: seedDefaultPins() VERWIJDERD — Robaws is nu de enige bron
+        // van PIN-validatie. Eventuele oude qe_pin_* keys in localStorage
+        // worden bij volgende online login automatisch opgeruimd
+        // (zie robaws-api.js login).
         // Ingediende werkorders + openstaande betalingen herstellen uit localStorage
         this._loadSubmittedWOs();
         // Herstel onafgemaakte werkorder-data (uren, materialen, notities)
