@@ -7735,11 +7735,10 @@ const app = {
      *  Tussenliggende werven tellen NIET mee (werknemers krijgen uurloon onderweg).
      *   - heen  = startAddr → eerste werf van de dag
      *   - terug = laatste werf van de dag → endAddr
-     *  startAddr/endAddr = bureau, tenzij "rechtstreeks van/naar thuis" → werknemer-adres. */
+     *  startAddr/endAddr = bureau, tenzij "rechtstreeks van/naar thuis" → werknemer-adres.
+     *  Fiets-vinkje heeft GEEN invloed op de km — werknemer kan met fiets naar bureau
+     *  komen en daarna met camionet vertrekken; de km worden dan nog steeds berekend. */
     async _autoCalcKilometers(employeeId, options) {
-        if (options.fiets) {
-            return { heen: 0, terug: 0, source: 'fiets' };
-        }
         const werven = await this._fetchTodayWerfAddresses(employeeId);
         if (!werven || werven.length === 0) {
             return { heen: 0, terug: 0, source: 'geen-werf-adres', error: 'Geen dagplanning-adres gevonden' };
@@ -7872,7 +7871,6 @@ const app = {
             const recalcKm = async () => {
                 const seq = ++_kmCalcSeq;
                 const opts = {
-                    fiets: !!(fietsEl && fietsEl.checked),
                     directThuisWerf: !!(directTWEl && directTWEl.checked),
                     directWerfThuis: !!(directWTEl && directWTEl.checked),
                 };
@@ -7923,8 +7921,7 @@ const app = {
             };
             // Initial calc - bij open
             setTimeout(() => { recalcKm(); }, 250);
-            // Re-calc bij checkbox-wijziging
-            if (fietsEl)    fietsEl.addEventListener('change', recalcKm);
+            // Re-calc bij thuis-werf vinkjes (fiets-vinkje heeft geen invloed meer)
             if (directTWEl) directTWEl.addEventListener('change', recalcKm);
             if (directWTEl) directWTEl.addEventListener('change', recalcKm);
 
