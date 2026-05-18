@@ -7703,8 +7703,10 @@ const app = {
             console.log('[KM] employee object keys:', Object.keys(emp));
             console.log('[KM] employee extraFields keys:', this._lastEmployeeExtraKeys);
 
-            // 1) Probeer geneste address-objects
+            // 1) Probeer geneste address-objects (Robaws gebruikt `domicileAddress`
+            //    op employees — bevestigd via debug-output v127)
             const objCandidates = [
+                emp.domicileAddress,
                 emp.address,
                 emp.homeAddress,
                 emp.privateAddress,
@@ -8148,80 +8150,242 @@ const app = {
         });
     },
 
+    /** v128: zorg dat de scan-overlay CSS-keyframes 1x geïnjecteerd zijn. */
+    _ensureScanOverlayStyles() {
+        if (document.getElementById('qeScanOverlayStyles')) return;
+        const style = document.createElement('style');
+        style.id = 'qeScanOverlayStyles';
+        style.textContent = `
+            .qe-scan-backdrop {
+                position: fixed; inset: 0; z-index: 99998;
+                background: rgba(15, 23, 42, 0.55);
+                backdrop-filter: blur(6px);
+                -webkit-backdrop-filter: blur(6px);
+                display: flex; align-items: center; justify-content: center;
+                padding: 24px;
+                opacity: 0;
+                transition: opacity 220ms ease-out;
+            }
+            .qe-scan-backdrop.qe-show { opacity: 1; }
+
+            .qe-scan-card {
+                background: #ffffff;
+                border-radius: 22px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.08);
+                padding: 36px 28px 28px;
+                max-width: 360px; width: 100%;
+                text-align: center;
+                transform: scale(0.88) translateY(16px);
+                opacity: 0;
+                transition: transform 280ms cubic-bezier(0.18, 0.89, 0.32, 1.28),
+                            opacity 200ms ease-out;
+            }
+            .qe-scan-backdrop.qe-show .qe-scan-card {
+                transform: scale(1) translateY(0);
+                opacity: 1;
+            }
+            .qe-scan-backdrop.qe-hiding {
+                opacity: 0;
+                transition: opacity 180ms ease-in;
+            }
+            .qe-scan-backdrop.qe-hiding .qe-scan-card {
+                transform: scale(0.94);
+                opacity: 0;
+                transition: transform 180ms ease-in, opacity 180ms ease-in;
+            }
+
+            .qe-scan-icon-wrap {
+                width: 84px; height: 84px;
+                border-radius: 50%;
+                display: flex; align-items: center; justify-content: center;
+                margin: 0 auto 18px;
+            }
+            .qe-scan-icon-wrap.success { background: rgba(46, 125, 50, 0.12); }
+            .qe-scan-icon-wrap.error   { background: rgba(198, 40, 40, 0.12); }
+            .qe-scan-icon-wrap.loading { background: rgba(26, 35, 126, 0.10); }
+
+            .qe-scan-icon-wrap svg { width: 56px; height: 56px; display: block; }
+            .qe-scan-icon-wrap.success svg { color: #2e7d32; }
+            .qe-scan-icon-wrap.error   svg { color: #c62828; }
+            .qe-scan-icon-wrap.loading svg { color: #1A237E; animation: qeScanSpin 1s linear infinite; }
+
+            /* SVG-stroke draw animations */
+            .qe-check-path {
+                stroke-dasharray: 50;
+                stroke-dashoffset: 50;
+                animation: qeDraw 450ms 120ms ease-out forwards;
+            }
+            .qe-cross-path {
+                stroke-dasharray: 30;
+                stroke-dashoffset: 30;
+                animation: qeDraw 350ms 120ms ease-out forwards;
+            }
+            .qe-circle-path {
+                stroke-dasharray: 190;
+                stroke-dashoffset: 190;
+                animation: qeDraw 500ms ease-out forwards;
+            }
+            @keyframes qeDraw { to { stroke-dashoffset: 0; } }
+            @keyframes qeScanSpin { to { transform: rotate(360deg); } }
+
+            .qe-scan-title {
+                font-size: 24px; font-weight: 700;
+                letter-spacing: 0.4px;
+                margin: 0 0 8px;
+            }
+            .qe-scan-title.success { color: #2e7d32; }
+            .qe-scan-title.error   { color: #c62828; }
+            .qe-scan-title.loading { color: #1A237E; }
+
+            .qe-scan-msg {
+                font-size: 15px; line-height: 1.45;
+                color: #455a64;
+                white-space: pre-line;
+                margin: 0;
+            }
+            .qe-scan-sub {
+                font-size: 13px; color: #90a4ae;
+                margin-top: 14px;
+            }
+            .qe-scan-tap-hint {
+                margin-top: 20px;
+                font-size: 12px; color: #b0bec5;
+                letter-spacing: 0.5px;
+            }
+        `;
+        document.head.appendChild(style);
+    },
+
+    /** Sluit een overlay met afsluit-animatie + roept callback.
+     *  Element wordt alleen uit DOM verwijderd als het géén persistent
+     *  wrapper is (#scanResult is persistent en wordt enkel verborgen). */
+    _closeScanOverlay(el, onDone) {
+        if (!el || el.dataset.closing === '1') return;
+        el.dataset.closing = '1';
+        el.classList.remove('qe-show');
+        el.classList.add('qe-hiding');
+        setTimeout(() => {
+            if (el.id !== 'scanResult') {
+                try { el.remove(); } catch(_) {}
+            }
+            if (typeof onDone === 'function') {
+                try { onDone(); } catch (e) { console.warn('[Scan] onDone fout:', e); }
+            }
+        }, 200);
+    },
+
     /**
-     * v125: Fullscreen loading-overlay tijdens scan → werkbon-creatie.
-     * Wordt getoond direct na de NFC-scan en blijft tot showScanResult
-     * de SUCCES/MISLUKT overlay laat zien. Idempotent — meerdere
-     * showScanLoading calls werken zonder duplicate overlays.
+     * v126/v128: Loading-overlay tussen scan en SUCCES/MISLUKT.
+     * Card-stijl met spinner. Idempotent — meerdere showScanLoading
+     * calls werken zonder duplicate overlays.
      */
     showScanLoading(message) {
+        this._ensureScanOverlayStyles();
         let overlay = document.getElementById('scanLoading');
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'scanLoading';
-            overlay.style.cssText =
-                'position:fixed;inset:0;z-index:99997;'
-              + 'background:rgba(26,35,126,0.97);color:#fff;'
-              + 'display:flex;flex-direction:column;align-items:center;justify-content:center;'
-              + 'gap:24px;padding:24px;text-align:center;';
-            overlay.innerHTML = `
-                <div style="width:80px;height:80px;border:6px solid rgba(255,255,255,0.25);
-                            border-top-color:#fff;border-radius:50%;
-                            animation:qeScanSpin 0.9s linear infinite"></div>
-                <div id="scanLoadingMsg" style="font-size:22px;font-weight:700">Bezig met verwerken…</div>
-                <div style="font-size:14px;opacity:0.85">Even geduld, Robaws krijgt je scan binnen.</div>
-                <style>@keyframes qeScanSpin { to { transform: rotate(360deg); } }</style>
-            `;
-            document.body.appendChild(overlay);
+        if (overlay) {
+            // bestaande overlay: update tekst
+            const msgEl = overlay.querySelector('.qe-scan-msg');
+            if (msgEl && message) msgEl.textContent = message;
+            return;
         }
-        const msgEl = document.getElementById('scanLoadingMsg');
-        if (msgEl && message) msgEl.textContent = message;
-        overlay.style.display = 'flex';
+        overlay = document.createElement('div');
+        overlay.id = 'scanLoading';
+        overlay.className = 'qe-scan-backdrop';
+        overlay.innerHTML = `
+            <div class="qe-scan-card">
+                <div class="qe-scan-icon-wrap loading">
+                    <svg viewBox="0 0 50 50" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round">
+                        <circle cx="25" cy="25" r="20" stroke-opacity="0.18" />
+                        <path d="M25 5 a20 20 0 0 1 20 20" />
+                    </svg>
+                </div>
+                <h3 class="qe-scan-title loading">Even geduld…</h3>
+                <p class="qe-scan-msg">${this._escapeHtml(message || 'Bezig met verwerken…')}</p>
+                <div class="qe-scan-sub">Robaws krijgt je scan binnen</div>
+            </div>`;
+        document.body.appendChild(overlay);
+        // Force reflow voor de open-animatie
+        // eslint-disable-next-line no-unused-expressions
+        overlay.offsetWidth;
+        overlay.classList.add('qe-show');
     },
 
     hideScanLoading() {
         const overlay = document.getElementById('scanLoading');
-        if (overlay) overlay.style.display = 'none';
+        if (overlay) this._closeScanOverlay(overlay);
+    },
+
+    /** Veilige escape voor inline HTML inserts (titel/melding). */
+    _escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     },
 
     /**
-     * Toon een fullscreen scan-resultaat overlay (groot SUCCES of MISLUKT).
-     * Wordt aangeroepen vanuit QEClock.onNfcScan na elke NFC-scan.
+     * Card-stijl scan-resultaat overlay (SUCCES of MISLUKT).
+     * v128: animatie + SVG icoons + professionele look.
      */
     showScanResult(success, message, onDone, duration) {
+        this._ensureScanOverlayStyles();
+        // Verberg loading direct (zonder fade) — anders zit hij in de weg
+        const loading = document.getElementById('scanLoading');
+        if (loading) { try { loading.remove(); } catch(_) {} }
+
         const overlay = document.getElementById('scanResult');
-        const icon = document.getElementById('scanResultIcon');
-        const title = document.getElementById('scanResultTitle');
-        const msgEl = document.getElementById('scanResultMsg');
         if (!overlay) {
             this.toast(message);
             if (typeof onDone === 'function') { try { onDone(); } catch(_) {} }
             return;
         }
-        if (success) {
-            overlay.style.background = 'rgba(46,125,50,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '✅';
-            title.textContent = 'SUCCES';
-        } else {
-            overlay.style.background = 'rgba(198,40,40,0.97)';
-            overlay.style.color = '#ffffff';
-            icon.textContent = '❌';
-            title.textContent = 'MISLUKT';
-        }
-        msgEl.textContent = message || '';
+
+        // Reset eventuele oude classes/state (her-show na een eerdere result)
+        overlay.classList.remove('qe-hiding', 'qe-show');
+        overlay.removeAttribute('data-closing');
+        overlay.className = 'qe-scan-backdrop';
         overlay.style.display = 'flex';
+        overlay.onclick = null;
+
+        const title = success ? 'Gelukt' : 'Mislukt';
+        const iconSvg = success
+            ? `<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                   <circle class="qe-circle-path" cx="26" cy="26" r="22" />
+                   <path class="qe-check-path" d="M14 27 l8 8 l16 -16" />
+               </svg>`
+            : `<svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                   <circle class="qe-circle-path" cx="26" cy="26" r="22" />
+                   <path class="qe-cross-path" d="M18 18 l16 16" />
+                   <path class="qe-cross-path" d="M34 18 l-16 16" />
+               </svg>`;
+        overlay.innerHTML = `
+            <div class="qe-scan-card">
+                <div class="qe-scan-icon-wrap ${success ? 'success' : 'error'}">${iconSvg}</div>
+                <h3 class="qe-scan-title ${success ? 'success' : 'error'}">${this._escapeHtml(title)}</h3>
+                <p class="qe-scan-msg">${this._escapeHtml(message || '')}</p>
+                <div class="qe-scan-tap-hint">Tik om te sluiten</div>
+            </div>`;
+        // Force reflow + show
+        // eslint-disable-next-line no-unused-expressions
+        overlay.offsetWidth;
+        overlay.classList.add('qe-show');
+
         try { if (navigator.vibrate) navigator.vibrate(success ? 120 : [80, 60, 80]); } catch(_) {}
+
         const dur = typeof duration === 'number' ? duration : (success ? 2200 : 6000);
         let closed = false;
         const close = () => {
             if (closed) return;
             closed = true;
-            overlay.style.display = 'none';
-            overlay.onclick = null;
-            if (typeof onDone === 'function') {
-                try { onDone(); } catch(e) { console.warn('[ScanResult] onDone fout:', e); }
-            }
+            this._closeScanOverlay(overlay, () => {
+                overlay.style.display = 'none';
+                overlay.innerHTML = '';
+                if (typeof onDone === 'function') {
+                    try { onDone(); } catch(e) { console.warn('[Scan] onDone fout:', e); }
+                }
+            });
         };
         overlay.onclick = close;
         setTimeout(close, dur);
