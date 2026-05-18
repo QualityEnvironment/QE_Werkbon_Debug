@@ -891,6 +891,296 @@ const app = {
         return !this.isMonteur();
     },
 
+    // ========================================
+    // v116: UITKLOK-CHECK — openstaande werkbons
+    // ========================================
+    // Wordt aangeroepen door clock.js vóór `_clockOut`. Gedrag:
+    //  - Geen openstaande werkbons → laat uitklokken door (return true).
+    //  - Technieker / bureel + ≥1 openstaande → blokkeer (return false).
+    //  - Monteur + >1 openstaande → blokkeer (return false).
+    //  - Monteur + 1 openstaande → vraag overname:
+    //        Ja → werknemer-aanvink-modal → vul uren in op die werkbon
+    //             → auto-submit via executeMonteurSubmitFlow → return true.
+    //        Nee → blokkeer (return false).
+    async checkAndHandleOpenWorkordersBeforeClockOut(session) {
+        if (!this.currentUser) return true; // safety: geen user → laat door
+
+        // 1. Vandaag-planning ophalen (met hasWerkbon-vlag)
+        let openItems = [];
+        try {
+            const today = RobawsAPI._localDateStr();
+            const empId = this.currentUser.robawsEmployeeId;
+            const userId = this.currentUser.robawsUserId;
+            const planning = await RobawsAPI.getPlanning(empId, today, userId);
+            const items = (planning && planning.items) || [];
+            openItems = items.filter(w => !w.hasWerkbon);
+        } catch(e) {
+            console.warn('[ClockOut-check] planning fetch faalde:', e && e.message);
+            // Bij API-fout: laat uitklokken toch toe — we willen geen
+            // werknemer-blokkade op infrastructuur-issues.
+            return true;
+        }
+
+        if (openItems.length === 0) return true;
+
+        const isMonteur = this.isMonteur();
+
+        // Technieker / bureel: altijd blokkeren bij open
+        if (!isMonteur) {
+            await this._showMessageModal(
+                'Openstaande werkbon',
+                `Je hebt nog ${openItems.length} openstaande ${openItems.length === 1 ? 'werkbon' : 'werkbons'}. ` +
+                'Werk die eerst af voor je uitklokt.'
+            );
+            return false;
+        }
+
+        // Monteur + >1 open → blokkeren
+        if (openItems.length > 1) {
+            await this._showMessageModal(
+                'Te veel openstaande werkbons',
+                `Je hebt ${openItems.length} openstaande werkbons. Auto-overname werkt alleen bij ` +
+                '1 openstaande werkbon. Werk de extra eerst manueel af.'
+            );
+            return false;
+        }
+
+        // Monteur + exact 1 open → vraag overname
+        const wo = openItems[0];
+        const accepted = await this._showKlokOvernameConfirm(wo);
+        if (!accepted) {
+            await this._showMessageModal(
+                'Niet uitgeklokt',
+                'Je mag niet uitklokken met een openstaande werkbon. Vul hem eerst af.'
+            );
+            return false;
+        }
+
+        // Werknemer-aanvink
+        const employees = await this._showEmployeeCheckList(wo);
+        if (!employees || employees.length === 0) {
+            // Gebruiker heeft geannuleerd of geen werknemers → niet uitklokken
+            return false;
+        }
+
+        // Vul uren in op de werkbon's woData
+        this._fillKlokurenForMonteur(wo, employees, session);
+
+        // Set currentWO + automatische uurcode (monteurProject)
+        this.currentWO = wo;
+        this.selectedUurcode = {
+            id: RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject,
+            name: 'Werkuur monteur - Project',
+            salePrice: 65,
+        };
+
+        // Auto-submit. executeMonteurSubmitFlow navigeert intern naar planning;
+        // dat is OK — daarna mag uitklokken alsnog doorgaan.
+        try {
+            await this.executeMonteurSubmitFlow();
+        } catch(e) {
+            console.warn('[ClockOut-check] monteur auto-submit faalde:', e && e.message);
+            await this._showMessageModal(
+                'Werkbon niet verzonden',
+                'De werkbon kon niet automatisch verstuurd worden. ' +
+                'Vul hem manueel af voor je uitklokt.'
+            );
+            return false;
+        }
+        return true; // OK om uit te klokken
+    },
+
+    /** Vul uren-blokken in op woData voor elke aangevinkte werknemer.
+     *  Eén blok per werknemer met dezelfde start/eind/duur/pauze. */
+    _fillKlokurenForMonteur(wo, employees, session) {
+        const woId = wo.id;
+        if (!this.woData[woId]) {
+            this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
+        }
+
+        // v74 kwartier-afronding zoals _clockOut hem berekent (4 min tolerantie)
+        const TOL = 4;
+        const roundUp15 = (mins) => {
+            const r = mins % 15;
+            if (r > 0 && r <= TOL) return mins - r;
+            return Math.ceil(mins / 15) * 15;
+        };
+        const roundDown15 = (mins) => {
+            const r = mins % 15;
+            const d = (15 - r) % 15;
+            if (d > 0 && d <= TOL) return mins + d;
+            return Math.floor(mins / 15) * 15;
+        };
+        const toMin = (hhmm) => {
+            const parts = String(hhmm).split(':');
+            return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+        };
+        const fromMin = (mins) => {
+            const h = Math.floor(mins / 60) % 24;
+            const m = mins % 60;
+            return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+        };
+
+        // Start = session start tijd, eind = huidige tijd
+        const startTime = session && session.startTime ? session.startTime : '08:00';
+        const now = new Date();
+        const endTimeRaw = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+
+        const entryStartMin = roundUp15(toMin(startTime));
+        const entryEndMin   = roundDown15(toMin(endTimeRaw));
+        const entryStart = fromMin(entryStartMin);
+        const entryEnd   = fromMin(entryEndMin);
+
+        // Pauze: persoonlijke pauze van de uitklokkende monteur
+        const pauze = (window.QEClock && QEClock._personalPauze != null)
+            ? QEClock._personalPauze : 60;
+
+        const grossMin = Math.max(0, entryEndMin - entryStartMin);
+        const netMin = Math.max(0, grossMin - pauze);
+
+        const baseId = Date.now();
+        employees.forEach((emp, idx) => {
+            this.woData[woId].hours.push({
+                id: baseId + idx,
+                type: 'klant',
+                startTime: entryStart,
+                endTime: entryEnd,
+                duration: netMin,
+                pauze: pauze,
+                employeeId: String(emp.id),
+                employeeName: emp.name,
+            });
+        });
+
+        this._saveWoData();
+        console.log('[ClockOut-check] uren ingevuld op werkbon', woId,
+            entryStart, '->', entryEnd, 'voor', employees.map(e => e.name).join(', '));
+    },
+
+    /** Modal die de monteur vraagt of hij de geklokte uren wil overnemen. */
+    async _showKlokOvernameConfirm(wo) {
+        return new Promise(resolve => {
+            const clientName = (wo.client && wo.client.name) || wo.summary || 'Werkbon';
+            document.getElementById('modalContent').innerHTML = `
+                <h3>⏰ Geklokte uren overnemen?</h3>
+                <p style="font-size:14px;color:var(--qe-grey);margin:8px 0 14px">
+                    Je hebt nog een openstaande werkbon:
+                </p>
+                <div style="background:#f8f9fa;border-radius:10px;padding:14px;margin-bottom:14px;border-left:4px solid var(--qe-purple)">
+                    <div style="font-weight:600;font-size:15px">${this.escapeHtml(clientName)}</div>
+                    ${wo.summary && clientName !== wo.summary
+                        ? `<div style="font-size:12px;color:var(--qe-grey);margin-top:4px">${this.escapeHtml(wo.summary)}</div>`
+                        : ''}
+                </div>
+                <p style="font-size:14px;line-height:1.45;margin-bottom:14px">
+                    Wil je de geklokte uren overnemen naar deze werkbon en automatisch versturen?
+                    Daarna word je uitgeklokt.
+                </p>
+                <button onclick="window._klokOvResp(true)" class="btn btn-primary btn-full"
+                    style="padding:14px;font-size:15px;margin-bottom:8px">
+                    ✓ Ja, overnemen + uitklokken
+                </button>
+                <button onclick="window._klokOvResp(false)" class="btn btn-outline btn-full"
+                    style="padding:12px;font-size:14px">
+                    Nee, blijf ingeklokt
+                </button>
+            `;
+            this.openModal();
+            window._klokOvResp = (val) => {
+                this.closeModal();
+                delete window._klokOvResp;
+                resolve(val);
+            };
+        });
+    },
+
+    /** Modal met checkbox-lijst van werknemers gelinkt aan de werkbon.
+     *  Returns: array van { id, name } of null bij annuleren. */
+    async _showEmployeeCheckList(wo) {
+        const empIds = (wo.employeeIds || []).map(String);
+        let employees = [];
+        try {
+            employees = empIds.length > 0 ? await this._getEmployeeNames(empIds) : [];
+        } catch(e) {
+            console.warn('[ClockOut-check] _getEmployeeNames faalde:', e && e.message);
+        }
+        // Fallback: alleen huidige user
+        if (employees.length === 0 && this.currentUser) {
+            employees = [{
+                id: String(this.currentUser.robawsEmployeeId),
+                name: this.currentUser.name || 'Ik',
+            }];
+        }
+
+        return new Promise(resolve => {
+            const checkboxes = employees.map(e => `
+                <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;
+                    border:1px solid #ddd;border-radius:10px;margin-bottom:8px;cursor:pointer;
+                    background:#fff">
+                    <input type="checkbox" class="emp-check"
+                        data-id="${this.escapeHtml(String(e.id))}"
+                        data-name="${this.escapeHtml(e.name)}"
+                        checked
+                        style="width:22px;height:22px;cursor:pointer">
+                    <span style="font-size:15px;font-weight:500">${this.escapeHtml(e.name)}</span>
+                </label>
+            `).join('');
+
+            document.getElementById('modalContent').innerHTML = `
+                <h3>👷 Voor wie zijn de uren?</h3>
+                <p style="font-size:13px;color:var(--qe-grey);margin:8px 0 14px;line-height:1.4">
+                    Vink aan wie er vandaag op deze werkbon werkte.
+                    Iedereen krijgt dezelfde uren.
+                </p>
+                ${checkboxes}
+                <button onclick="window._klokEmpResp(true)" class="btn btn-primary btn-full"
+                    style="padding:14px;font-size:15px;margin-top:14px">
+                    ✓ Bevestigen
+                </button>
+                <button onclick="window._klokEmpResp(false)" class="btn btn-outline btn-full"
+                    style="padding:12px;font-size:14px;margin-top:8px">
+                    Annuleren
+                </button>
+            `;
+            this.openModal();
+            window._klokEmpResp = (ok) => {
+                if (!ok) {
+                    this.closeModal();
+                    delete window._klokEmpResp;
+                    resolve(null);
+                    return;
+                }
+                const checked = Array.from(document.querySelectorAll('.emp-check:checked'))
+                    .map(cb => ({ id: cb.dataset.id, name: cb.dataset.name }));
+                this.closeModal();
+                delete window._klokEmpResp;
+                resolve(checked);
+            };
+        });
+    },
+
+    /** Simpele info-modal met 1 OK-knop. */
+    async _showMessageModal(title, message) {
+        return new Promise(resolve => {
+            document.getElementById('modalContent').innerHTML = `
+                <h3>${this.escapeHtml(title)}</h3>
+                <p style="margin:14px 0;font-size:14px;line-height:1.5;color:var(--qe-darkblue)">
+                    ${this.escapeHtml(message)}
+                </p>
+                <button onclick="window._klokMsgResp()" class="btn btn-primary btn-full"
+                    style="padding:14px;font-size:15px;margin-top:8px">
+                    OK
+                </button>
+            `;
+            this.openModal();
+            window._klokMsgResp = () => {
+                this.closeModal();
+                delete window._klokMsgResp;
+                resolve();
+            };
+        });
+    },
+
     async backgroundSync() {
         try {
             // Quick sync: alleen als >1 uur geleden of nooit

@@ -552,6 +552,32 @@ window.QEClock = {
                         console.log('[Clock] Uitklokken geannuleerd door gebruiker');
                         return;
                     }
+
+                    // v116: vóór uitklokken — controleer openstaande werkbons.
+                    // Voor techniekers blokkeert dit ALTIJD bij >=1 openstaande.
+                    // Voor monteurs met 1 openstaande werkbon biedt het de uren-
+                    // overname + auto-submit aan. Bij blokkade: niet uitklokken.
+                    let canProceed = true;
+                    try {
+                        if (window.app && typeof app.checkAndHandleOpenWorkordersBeforeClockOut === 'function') {
+                            canProceed = await app.checkAndHandleOpenWorkordersBeforeClockOut(session);
+                        }
+                    } catch(e) {
+                        console.warn('[Clock] openstaande-werkbon check faalde:', e && e.message);
+                        // Bij onverwachte fout: laat uitklokken door zodat een
+                        // bug in de check de werknemer niet vasthoudt.
+                        canProceed = true;
+                    }
+                    if (!canProceed) {
+                        console.log('[Clock] Uitklokken geblokkeerd — openstaande werkbon(s)');
+                        scanResult = {
+                            ok: false,
+                            message: 'Niet uitgeklokt — openstaande werkbon',
+                            refresh: false,
+                        };
+                        return;
+                    }
+
                     scanResult = await this._clockOut(session, tag);
                     return;
                 }
