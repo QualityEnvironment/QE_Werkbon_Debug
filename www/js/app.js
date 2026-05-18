@@ -2083,9 +2083,13 @@ const app = {
             </div>` : '';
 
         // v112: Pincode-stijl tijdinvoer — losse uren-/minuten-inputs met
-        // numeriek toetsenbord. Na 2 cijfers springt focus automatisch naar
-        // het volgende veld. Sneller dan dropdowns op een touchscreen.
-        const pinInput = (id, value, nextId) => `
+        // numeriek toetsenbord. Smart auto-pad:
+        //  - Uren: cijfers 0-2 wachten op een 2e (kan 00-23 worden),
+        //          cijfers 3-9 worden meteen "0X" en focus springt verder.
+        //  - Minuten: cijfers 0-5 wachten op een 2e (kan 00-59 worden),
+        //             cijfers 6-9 worden meteen "0X" en focus springt verder.
+        //  - Bij blur: padding leading zero + clamp naar geldige range.
+        const pinInput = (id, value, nextId, mode) => `
             <input type="text"
                 inputmode="numeric"
                 pattern="[0-9]*"
@@ -2094,7 +2098,8 @@ const app = {
                 id="${id}"
                 value="${String(value).padStart(2,'0')}"
                 onfocus="this.select()"
-                oninput="app._pinTimeInput(this${nextId ? ", '" + nextId + "'" : ''})"
+                oninput="app._pinTimeInput(this, '${mode}'${nextId ? ", '" + nextId + "'" : ''})"
+                onblur="app._pinTimeBlur(this, '${mode}')"
                 style="flex:1;text-align:center;font-size:20px;font-weight:600;letter-spacing:2px;padding:14px 8px">
         `;
 
@@ -2104,17 +2109,17 @@ const app = {
             <div class="form-group" style="margin-bottom:12px">
                 <label>Van</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    ${pinInput('fromH', nowH, 'fromM')}
+                    ${pinInput('fromH', nowH, 'fromM', 'hour')}
                     <span style="font-size:24px;font-weight:700">:</span>
-                    ${pinInput('fromM', nowM, 'toH')}
+                    ${pinInput('fromM', nowM, 'toH', 'minute')}
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
                 <label>Tot</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    ${pinInput('toH', (nowH + 1) % 24, 'toM')}
+                    ${pinInput('toH', (nowH + 1) % 24, 'toM', 'hour')}
                     <span style="font-size:24px;font-weight:700">:</span>
-                    ${pinInput('toM', nowM, null)}
+                    ${pinInput('toM', nowM, null, 'minute')}
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
@@ -2127,26 +2132,85 @@ const app = {
     },
 
     /**
-     * v112: helper voor de pincode-stijl tijdinvoer. Strip niet-cijfers,
-     * en spring naar het volgende veld zodra 2 cijfers ingevuld zijn.
-     * Bij verlaten van het laatste veld: blur zodat het keyboard verdwijnt.
+     * v112: helper voor de pincode-stijl tijdinvoer. Smart auto-pad:
+     *   - mode='hour':   cijfers 3-9 worden meteen "0X" en focus springt
+     *                    door. Cijfers 0-2 wachten op een 2e cijfer.
+     *   - mode='minute': cijfers 6-9 worden meteen "0X" en focus springt
+     *                    door. Cijfers 0-5 wachten op een 2e cijfer.
+     * Bij 2 cijfers: range-validatie (uur max 23, minuut max 59).
+     * Bij ongeldig 2-cijferig getal: trim naar 1 cijfer met leading zero,
+     * zodat de gebruiker opnieuw kan typen.
      */
-    _pinTimeInput(input, nextFieldId) {
-        // Strip niet-numerieke karakters (bv. als de gebruiker per ongeluk
-        // een dubbelpunt typt vanuit pre-fill).
-        const clean = (input.value || '').replace(/[^0-9]/g, '');
-        if (clean !== input.value) input.value = clean;
-        if (clean.length >= 2) {
+    _pinTimeInput(input, mode, nextFieldId) {
+        // Strip niet-numerieke karakters
+        let v = (input.value || '').replace(/[^0-9]/g, '');
+        if (v !== input.value) input.value = v;
+        if (v.length === 0) return;
+
+        const max = (mode === 'hour') ? 23 : 59;
+        const padThreshold = (mode === 'hour') ? 3 : 6;
+
+        if (v.length === 1) {
+            const d = parseInt(v, 10);
+            if (d >= padThreshold) {
+                // Cijfer kan niet als eerste van een 2-cijferig getal werken
+                // → forceer "0X" en spring door naar volgend veld
+                input.value = '0' + v;
+                if (nextFieldId) {
+                    const next = document.getElementById(nextFieldId);
+                    if (next) { next.focus(); next.select(); }
+                } else {
+                    input.blur();
+                }
+            }
+            // else: wachten op 2e cijfer
+            return;
+        }
+
+        if (v.length === 2) {
+            const num = parseInt(v, 10);
+            if (num > max) {
+                // 2e cijfer maakt het ongeldig → strip 2e cijfer en pad
+                // het 1e met leading zero zodat de gebruiker opnieuw kan typen
+                input.value = '0' + v[0];
+                // Nu staat er bv. "07" — als die ook > max is, clamp.
+                if (parseInt(input.value, 10) > max) {
+                    input.value = String(max).padStart(2, '0');
+                }
+                // Spring door (we hebben nu 2 geldige cijfers)
+                if (nextFieldId) {
+                    const next = document.getElementById(nextFieldId);
+                    if (next) { next.focus(); next.select(); }
+                } else {
+                    input.blur();
+                }
+                return;
+            }
+            // Geldig 2-cijferig getal → spring door
             if (nextFieldId) {
                 const next = document.getElementById(nextFieldId);
-                if (next) {
-                    next.focus();
-                    next.select();
-                }
+                if (next) { next.focus(); next.select(); }
             } else {
                 input.blur();
             }
         }
+    },
+
+    /**
+     * v112: bij verlaten van een pin-input: leading zero padding en
+     * range-clamp. Lege input wordt "00".
+     */
+    _pinTimeBlur(input, mode) {
+        let v = (input.value || '').replace(/[^0-9]/g, '');
+        if (v.length === 0) {
+            input.value = '00';
+            return;
+        }
+        if (v.length === 1) v = '0' + v;
+        const max = (mode === 'hour') ? 23 : 59;
+        let num = parseInt(v, 10);
+        if (num > max) num = max;
+        input.value = String(num).padStart(2, '0');
     },
 
     saveManualHours(type) {
