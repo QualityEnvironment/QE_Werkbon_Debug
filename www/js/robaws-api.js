@@ -2525,6 +2525,12 @@ const RobawsAPI = {
 
         const toStr = v => (v == null || v === '') ? null : String(v);
 
+        // v112: Postcode van de werf — bewaard in functie-scope. Wordt gevuld
+        // wanneer we het installatie-adres ophalen voor `siteAddress`, en later
+        // gebruikt als extra TEXT-lijn op de factuur (zodat de back-office
+        // direct kan zien welke postcode bij de werkbon hoort).
+        let invoicePostalCode = '';
+
         // Stap 1: Werkorder details
         const woResult = await this.get(`work-orders/${workOrderId}`);
         if (woResult.code !== 200) throw new Error('Werkorder niet gevonden');
@@ -2597,6 +2603,8 @@ const RobawsAPI = {
             if (resolvedUserId) invFull.assignedUserId = toStr(resolvedUserId);
 
             // Werfadres: installatie-adres ophalen → siteAddress (verschijnt in titel factuur)
+            // v112: we promote `instAddrPostalCode` to function scope zodat de postcode-textlijn
+            // (sectie 3a verderop) hem ook kan gebruiken.
             try {
                 let instAddr = null;
                 if (installationIds && installationIds.length > 0) {
@@ -2616,6 +2624,7 @@ const RobawsAPI = {
                         city: instAddr.city || null,
                         country: instAddr.country || null,
                     };
+                    invoicePostalCode = instAddr.postalCode || '';
                 }
             } catch(e) {
                 console.warn('Installatie-adres ophalen voor factuur mislukt:', e);
@@ -2649,6 +2658,20 @@ const RobawsAPI = {
 
             const textResult = await this.post(`sales-invoices/${invoiceId}/line-items`, textLineData);
             if (textResult.code === 201 || textResult.code === 200) addedLines++;
+        }
+
+        // 3b: v112 — Postcode-tekstlijn (uit dagplanning werfadres) zodat de
+        // back-office in één oogopslag weet welke postcode bij deze factuur
+        // hoort. Komt rechts ná de notities-lijn.
+        if (invoicePostalCode && String(invoicePostalCode).trim()) {
+            const postcodeLine = {
+                type: 'TEXT',
+                description: String(invoicePostalCode).trim(),
+            };
+            if (woSalesOrderId) postcodeLine.orderId = woSalesOrderId;
+            const r = await this.post(`sales-invoices/${invoiceId}/line-items`, postcodeLine);
+            if (r.code === 201 || r.code === 200) addedLines++;
+            else console.warn('[Invoice] postcode-lijn POST faalde:', r.code, r.data);
         }
 
         // 3c: Materialen van frontend (betrouwbaarder dan WO material-entries)

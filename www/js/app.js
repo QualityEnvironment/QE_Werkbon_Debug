@@ -994,11 +994,24 @@ const app = {
     },
 
     // ========================================
-    // DATE STRIP — vandaag en volgende werkdag (weekend skippen)
+    // DATE STRIP — vorige werkdag + vandaag + volgende werkdag (weekend skippen)
+    // v112: 3 chips i.p.v. 2 — monteurs moeten ook werkbonnen van gisteren
+    // (of vorige vrijdag, op maandag) kunnen inzien en invullen.
     // ========================================
     buildDateStrip() {
         const strip = document.getElementById('dateStrip');
         const today = new Date();
+
+        // v112: skip weekend voor "vorige werkdag"
+        //   - maandag → vrijdag (3 dagen terug)
+        //   - zondag  → vrijdag (2 dagen terug)
+        //   - zaterdag → vrijdag (1 dag terug)
+        //   - andere dagen → −1 dag
+        const prev = new Date(today);
+        prev.setDate(today.getDate() - 1);
+        while (prev.getDay() === 0 || prev.getDay() === 6) {
+            prev.setDate(prev.getDate() - 1);
+        }
 
         // v92+: skip weekend voor "volgende werkdag"
         //   - vrijdag → maandag (3 dagen verder)
@@ -1014,7 +1027,13 @@ const app = {
         const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
         const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-        const dates = [today, next];
+        const dates = [prev, today, next];
+
+        // Bepaal label voor "vorige werkdag" — Gisteren als het echt -1 dag is,
+        // anders de weekdag-naam (bv. "Vrijdag" als vandaag maandag is).
+        const yesterdayReal = new Date(today);
+        yesterdayReal.setDate(today.getDate() - 1);
+        const prevIsRealYesterday = prev.toDateString() === yesterdayReal.toDateString();
 
         // Bepaal het label voor de "volgende werkdag" — afhankelijk van of het morgen
         // letterlijk is, of een andere weekdag (bv. ma als het vandaag vr is)
@@ -1027,9 +1046,12 @@ const app = {
             const dateStr = this._localDateStr(d);
             const isToday = d.toDateString() === today.toDateString();
             const isActive = d.toDateString() === this.currentDate.toDateString();
+            const isPrev = d.toDateString() === prev.toDateString();
             const label = isToday
                 ? 'Vandaag'
-                : (nextIsRealTomorrow ? 'Morgen' : dayNames[d.getDay()]);
+                : isPrev
+                    ? (prevIsRealYesterday ? 'Gisteren' : dayNames[d.getDay()])
+                    : (nextIsRealTomorrow ? 'Morgen' : dayNames[d.getDay()]);
 
             return `
                 <div class="date-chip ${isActive ? 'active' : ''} ${isToday ? 'today' : ''}"
@@ -2060,23 +2082,39 @@ const app = {
                 </select>
             </div>` : '';
 
+        // v112: Pincode-stijl tijdinvoer — losse uren-/minuten-inputs met
+        // numeriek toetsenbord. Na 2 cijfers springt focus automatisch naar
+        // het volgende veld. Sneller dan dropdowns op een touchscreen.
+        const pinInput = (id, value, nextId) => `
+            <input type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="2"
+                class="form-input pin-time"
+                id="${id}"
+                value="${String(value).padStart(2,'0')}"
+                onfocus="this.select()"
+                oninput="app._pinTimeInput(this${nextId ? ", '" + nextId + "'" : ''})"
+                style="flex:1;text-align:center;font-size:20px;font-weight:600;letter-spacing:2px;padding:14px 8px">
+        `;
+
         document.getElementById('modalContent').innerHTML = `
             <h3>${label}</h3>
             ${employeeSelect}
             <div class="form-group" style="margin-bottom:12px">
                 <label>Van</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    <select class="form-input" id="fromH" style="flex:1">${hourOpts(nowH)}</select>
-                    <span style="font-size:20px;font-weight:600">:</span>
-                    <select class="form-input" id="fromM" style="flex:1">${minOpts(nowM)}</select>
+                    ${pinInput('fromH', nowH, 'fromM')}
+                    <span style="font-size:24px;font-weight:700">:</span>
+                    ${pinInput('fromM', nowM, 'toH')}
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
                 <label>Tot</label>
                 <div style="display:flex;gap:8px;align-items:center">
-                    <select class="form-input" id="toH" style="flex:1">${hourOpts((nowH + 1) % 24)}</select>
-                    <span style="font-size:20px;font-weight:600">:</span>
-                    <select class="form-input" id="toM" style="flex:1">${minOpts(nowM)}</select>
+                    ${pinInput('toH', (nowH + 1) % 24, 'toM')}
+                    <span style="font-size:24px;font-weight:700">:</span>
+                    ${pinInput('toM', nowM, null)}
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
@@ -2088,11 +2126,46 @@ const app = {
         `;
     },
 
+    /**
+     * v112: helper voor de pincode-stijl tijdinvoer. Strip niet-cijfers,
+     * en spring naar het volgende veld zodra 2 cijfers ingevuld zijn.
+     * Bij verlaten van het laatste veld: blur zodat het keyboard verdwijnt.
+     */
+    _pinTimeInput(input, nextFieldId) {
+        // Strip niet-numerieke karakters (bv. als de gebruiker per ongeluk
+        // een dubbelpunt typt vanuit pre-fill).
+        const clean = (input.value || '').replace(/[^0-9]/g, '');
+        if (clean !== input.value) input.value = clean;
+        if (clean.length >= 2) {
+            if (nextFieldId) {
+                const next = document.getElementById(nextFieldId);
+                if (next) {
+                    next.focus();
+                    next.select();
+                }
+            } else {
+                input.blur();
+            }
+        }
+    },
+
     saveManualHours(type) {
-        const fh = parseInt(document.getElementById('fromH').value);
-        const fm = parseInt(document.getElementById('fromM').value);
-        const th = parseInt(document.getElementById('toH').value);
-        const tm = parseInt(document.getElementById('toM').value);
+        // v112: pin-inputs kunnen lege strings of buiten-range waarden geven.
+        // Parse defensief en valideer uren 0-23, minuten 0-59.
+        const parseHM = (raw, max) => {
+            const n = parseInt(raw, 10);
+            if (isNaN(n)) return null;
+            if (n < 0 || n > max) return null;
+            return n;
+        };
+        const fh = parseHM(document.getElementById('fromH').value, 23);
+        const fm = parseHM(document.getElementById('fromM').value, 59);
+        const th = parseHM(document.getElementById('toH').value,   23);
+        const tm = parseHM(document.getElementById('toM').value,   59);
+        if (fh == null || fm == null || th == null || tm == null) {
+            this.toast('Vul geldige tijden in (00:00–23:59)');
+            return;
+        }
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
         const pauze = parseInt(document.getElementById('hourPauze')?.value || 0);
@@ -4115,6 +4188,49 @@ const app = {
         };
     },
 
+    /**
+     * v112: Foto's uploaden naar een sales-invoice in Robaws.
+     * Werkt rechtstreeks vanuit JS (geen server-side proxy) want de
+     * Robaws-credentials zitten reeds in RobawsAPI. Wordt vanuit
+     * executeSubmitFlow aangeroepen ná invoice-creation, zodat dezelfde
+     * foto's die op de werkbon staan ook bij de factuur-bestanden te
+     * vinden zijn.
+     */
+    async _uploadPhotosToInvoice(photos, invoiceId) {
+        if (!photos || !photos.length || !invoiceId) return;
+        const auth = btoa(RobawsAPI.API_KEY + ':' + RobawsAPI.API_SECRET);
+        const BASE = RobawsAPI.BASE_URL || 'https://app.robaws.com/api/v2';
+        for (let i = 0; i < photos.length; i++) {
+            const p = photos[i];
+            const name = (p && p.name) || ('foto_' + (i + 1) + '.jpg');
+            try {
+                let base64 = (p && p.data) || '';
+                if (base64.includes(',')) base64 = base64.split(',')[1];
+                const binary = atob(base64);
+                const bytes = new Uint8Array(binary.length);
+                for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                let mime = 'image/jpeg';
+                if (/\.png$/i.test(name)) mime = 'image/png';
+                else if (/\.heic$/i.test(name)) mime = 'image/heic';
+                else if (/\.webp$/i.test(name)) mime = 'image/webp';
+                const blob = new Blob([bytes], { type: mime });
+                const fd = new FormData();
+                fd.append('file', blob, name);
+                const res = await fetch(BASE + '/sales-invoices/' + invoiceId + '/documents', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Basic ' + auth,
+                        'X-Tenant': RobawsAPI.TENANT,
+                    },
+                    body: fd,
+                });
+                console.log('[Photo→Invoice] ' + name + ' → HTTP ' + res.status);
+            } catch (e) {
+                console.warn('[Photo→Invoice] upload mislukt voor ' + name + ':', e && e.message);
+            }
+        }
+    },
+
     async _uploadPhotosAndSignature(data, workOrderId, signatureName, signatureData) {
         // Foto's
         if (data.photos.length > 0 && workOrderId) {
@@ -4376,6 +4492,17 @@ const app = {
                 }
             }
 
+            // v112: dezelfde foto's die op de werkbon staan ook uploaden naar
+            // de factuur-bestanden. Loopt parallel met de werkbon-flow zodat
+            // bv. de boekhouding ze direct bij de factuur ziet hangen.
+            if (invoiceId && data.photos && data.photos.length > 0) {
+                try {
+                    await this._uploadPhotosToInvoice(data.photos, invoiceId);
+                } catch (e) {
+                    console.warn('[App] Foto-upload naar factuur faalde (niet kritiek):', e && e.message);
+                }
+            }
+
             this._markWOSubmitted(data);
 
             // v88: Sla "laatste betaling" context op zodat Olivier op de Uitgevoerd-tab
@@ -4397,9 +4524,6 @@ const app = {
             if (paymentMethod === 'Viva wallet') {
                 // Viva Wallet → toon betaalscherm met terminal/QR
                 this.showPaymentScreen(invoiceResult);
-            } else if (paymentMethod === 'Mollie') {
-                // v112: Mollie hosted checkout (TEST). Direct vanuit JS naar Mollie API.
-                this.showMolliePaymentScreen(invoiceResult);
             } else if (paymentMethod === 'Overschrijving' || paymentMethod === 'Overschrijving ter plaatse') {
                 // Overschrijving ter plaatse → toon betaalscherm met QR code
                 // (legacy "Overschrijving ter plaatse" string ook ondersteund voor backward compat)
@@ -5350,205 +5474,6 @@ const app = {
 
             <div id="paymentStatus" style="margin-top:16px"></div>
         `;
-    },
-
-    // ================================================================
-    // v112: MOLLIE HOSTED CHECKOUT — TEST FLOW (debug-app only)
-    // ----------------------------------------------------------------
-    //  - API key embedded (test_… key — geen echt geld, OK voor proof
-    //    of concept). Voor productie MOET dit via een server-proxy om
-    //    de key te beschermen.
-    //  - Maakt direct vanuit JS een Mollie Payment via fetch()
-    //  - Toont checkoutUrl als QR-code + klikbare link
-    //  - Polled status elke 3s tot 'paid' / 'failed' / 'canceled' /
-    //    'expired', of tot timeout (5 min)
-    //  - OGM (paymentInstruction) gaat mee als description én in
-    //    metadata.ogm, zodat Mollie ↔ Robaws ↔ Exact via de OGM kan
-    //    matchen.
-    // ================================================================
-
-    /** Test API key uit Mollie dashboard (test-mode). Werkt enkel voor
-     *  simulated betalingen — geen echt geld kan stromen. */
-    MOLLIE_TEST_API_KEY: 'test_HWxJEyepx9WCC8jgNu4x2WGDJ4TxCS',
-    _molliePollTimer: null,
-    _molliePaymentId: null,
-
-    async showMolliePaymentScreen(invoiceResult) {
-        try { localStorage.setItem('qe_last_payment', JSON.stringify(invoiceResult)); } catch(e){}
-
-        const inv = invoiceResult.invoice || {};
-        const amount = Number(inv.totalInclVat || 0).toFixed(2);
-        const ogm = (inv.paymentInstruction || '').replace(/[^0-9]/g, '');
-        const logicId = inv.logicId || '';
-
-        this.navigate('screenPayment', true);
-        const content = document.getElementById('paymentContent');
-
-        // Toon loading-state terwijl we de Mollie-payment aanmaken
-        content.innerHTML = `
-            <div style="text-align:center;padding:32px 16px">
-                <div class="spinner" style="margin:0 auto 16px"></div>
-                <div style="font-size:15px;color:var(--qe-grey)">Mollie betaallink aanmaken...</div>
-            </div>`;
-
-        let payment;
-        try {
-            const body = {
-                amount: { currency: 'EUR', value: amount },
-                description: `Werkbon ${logicId} (OGM ${ogm})`,
-                metadata: {
-                    ogm: ogm,
-                    invoiceId: inv.id,
-                    invoiceLogicId: logicId,
-                    workOrderId: this.currentWO ? this.currentWO.id : null,
-                },
-                redirectUrl: `qewerkbon://payment-return?provider=mollie&inv=${encodeURIComponent(inv.id)}`,
-            };
-            const res = await fetch('https://api.mollie.com/v2/payments', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + this.MOLLIE_TEST_API_KEY,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) {
-                const txt = await res.text();
-                throw new Error('Mollie API HTTP ' + res.status + ': ' + txt.slice(0, 200));
-            }
-            payment = await res.json();
-            console.log('[Mollie] payment created:', payment.id, 'status:', payment.status);
-        } catch (e) {
-            console.error('[Mollie] payment-create faalde:', e);
-            content.innerHTML = `
-                <div style="padding:24px;text-align:center">
-                    <div style="font-size:36px;margin-bottom:12px">⚠</div>
-                    <div style="font-size:16px;font-weight:600;color:#c00;margin-bottom:12px">
-                        Mollie-betaling aanmaken mislukt
-                    </div>
-                    <div style="font-size:13px;color:var(--qe-grey);background:#fff3e0;padding:12px;border-radius:8px;text-align:left;white-space:pre-wrap;font-family:monospace">
-                        ${this.escapeHtml(e.message || String(e))}
-                    </div>
-                    <button onclick="app.skipPayment()" class="btn btn-outline btn-full" style="margin-top:16px">
-                        ← Terug naar planning
-                    </button>
-                </div>`;
-            return;
-        }
-
-        const checkoutUrl = (payment._links && payment._links.checkout && payment._links.checkout.href) || '';
-        this._molliePaymentId = payment.id;
-
-        // QR-code via qrserver.com (zelfde lib als EPC-QR)
-        const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&ecc=M&data=${encodeURIComponent(checkoutUrl)}`;
-
-        content.innerHTML = `
-            <div style="margin-bottom:20px">
-                <div style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#0079FF,#005FFC);
-                    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:36px;color:#fff">
-                    🟦
-                </div>
-                <h2 style="color:var(--qe-darkblue);margin:0 0 4px;font-size:22px;text-align:center">Mollie betaling</h2>
-                <div style="font-size:13px;color:var(--qe-grey);text-align:center">
-                    Factuur ${this.escapeHtml(logicId)} — €${amount}
-                </div>
-                <div style="font-size:11px;color:#999;text-align:center;margin-top:4px;font-family:monospace">
-                    ${this.escapeHtml(payment.id)} · test mode
-                </div>
-            </div>
-
-            <div style="background:#fff;border:2px solid #0079FF;border-radius:14px;padding:16px;margin-bottom:14px;text-align:center">
-                <div style="font-size:13px;color:var(--qe-grey);margin-bottom:8px">
-                    Klant scant met smartphone-camera of bank-app
-                </div>
-                <img src="${qrSrc}" alt="Mollie QR" style="width:220px;height:220px;image-rendering:pixelated">
-            </div>
-
-            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-                <a href="${this.escapeHtml(checkoutUrl)}" target="_blank" rel="noopener"
-                    style="padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#0079FF,#005FFC);
-                    color:#fff;font-size:15px;font-weight:600;text-decoration:none;text-align:center;
-                    display:flex;align-items:center;justify-content:center;gap:8px">
-                    🟦 Openen op dit toestel
-                </a>
-                <div style="font-size:11px;color:#999;text-align:center;word-break:break-all;padding:0 8px">
-                    ${this.escapeHtml(checkoutUrl)}
-                </div>
-            </div>
-
-            <div id="mollieStatus" style="background:#f8f9fa;border-radius:10px;padding:12px;margin-bottom:12px;
-                font-size:13px;text-align:center;color:var(--qe-grey);display:flex;align-items:center;justify-content:center;gap:10px">
-                <div class="spinner" style="width:16px;height:16px"></div>
-                <span>Wachten op betaling…</span>
-            </div>
-
-            <div style="display:flex;flex-direction:column;gap:8px">
-                <button onclick="app.mollieMarkPaidManually()" class="btn btn-primary btn-full"
-                    style="padding:12px;font-size:14px">
-                    ✓ Betaling ontvangen (manueel bevestigen)
-                </button>
-                <button onclick="app.skipPayment()" class="btn btn-outline btn-full"
-                    style="padding:10px;font-size:13px">
-                    Overslaan → terug naar planning
-                </button>
-            </div>
-        `;
-
-        // Start polling
-        this._stopMolliePoll();
-        let elapsed = 0;
-        const POLL_MS = 3000;
-        const TIMEOUT_MS = 5 * 60 * 1000;
-        this._molliePollTimer = setInterval(async () => {
-            elapsed += POLL_MS;
-            try {
-                const r = await fetch('https://api.mollie.com/v2/payments/' + encodeURIComponent(this._molliePaymentId), {
-                    headers: { 'Authorization': 'Bearer ' + this.MOLLIE_TEST_API_KEY },
-                });
-                if (r.ok) {
-                    const p = await r.json();
-                    console.log('[Mollie] poll', p.id, p.status);
-                    const statusEl = document.getElementById('mollieStatus');
-                    if (p.status === 'paid') {
-                        if (statusEl) statusEl.innerHTML = '<span style="color:#388e3c;font-weight:600">✓ Betaling ontvangen!</span>';
-                        this._stopMolliePoll();
-                        setTimeout(() => {
-                            this.toast('Betaling gelukt — terug naar planning');
-                            this.navigate('screenPlanning', false);
-                            this.screenHistory = [];
-                            this.loadPlanning();
-                        }, 1500);
-                    } else if (p.status === 'failed' || p.status === 'canceled' || p.status === 'expired') {
-                        if (statusEl) statusEl.innerHTML = `<span style="color:#c00;font-weight:600">✗ ${p.status}</span>`;
-                        this._stopMolliePoll();
-                    } else if (statusEl) {
-                        statusEl.innerHTML = '<div class="spinner" style="width:16px;height:16px"></div><span>Wachten op betaling… (' + p.status + ')</span>';
-                    }
-                }
-            } catch (e) {
-                console.warn('[Mollie] poll fout:', e.message);
-            }
-            if (elapsed >= TIMEOUT_MS) {
-                this._stopMolliePoll();
-                const statusEl = document.getElementById('mollieStatus');
-                if (statusEl) statusEl.innerHTML = '<span style="color:#e65100">⌛ Timeout — controleer manueel in Mollie</span>';
-            }
-        }, POLL_MS);
-    },
-
-    _stopMolliePoll() {
-        if (this._molliePollTimer) {
-            clearInterval(this._molliePollTimer);
-            this._molliePollTimer = null;
-        }
-    },
-
-    mollieMarkPaidManually() {
-        this._stopMolliePoll();
-        this.toast('Manueel bevestigd — terug naar planning');
-        this.navigate('screenPlanning', false);
-        this.screenHistory = [];
-        this.loadPlanning();
     },
 
     async startTerminalPayment(invoiceId, amount, ogm, invoiceLogicId) {
