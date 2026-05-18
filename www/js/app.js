@@ -7679,6 +7679,7 @@ const app = {
     /** Stash voor diagnostiek — bevat de laatste set keys van de employee
      *  response zodat we in de modal kunnen tonen welke velden Robaws teruggaf. */
     _lastEmployeeKeys: null,
+    _lastEmployeeExtraKeys: null,
 
     /** Werknemer-adres uit Robaws. Probeert meerdere structuren omdat
      *  Robaws het adres op verschillende plekken kan zetten:
@@ -7696,7 +7697,11 @@ const app = {
             }
             const emp = res.data;
             this._lastEmployeeKeys = Object.keys(emp);
+            this._lastEmployeeExtraKeys = (emp.extraFields && typeof emp.extraFields === 'object')
+                ? Object.keys(emp.extraFields)
+                : null;
             console.log('[KM] employee object keys:', Object.keys(emp));
+            console.log('[KM] employee extraFields keys:', this._lastEmployeeExtraKeys);
 
             // 1) Probeer geneste address-objects
             const objCandidates = [
@@ -7738,10 +7743,23 @@ const app = {
                 }
             }
 
-            // 3) Dump info voor debug
-            if (emp.extraFields) {
-                console.log('[KM] employee extraFields keys:', Object.keys(emp.extraFields));
+            // 3) Probeer extraFields — Robaws bewaart custom velden hier.
+            //    Adres kan staan als 'Adres', 'Address', 'Thuisadres', etc.
+            if (emp.extraFields && typeof emp.extraFields === 'object') {
+                for (const [key, val] of Object.entries(emp.extraFields)) {
+                    const lcKey = key.toLowerCase();
+                    if (!lcKey.includes('adres') && !lcKey.includes('address')) continue;
+                    // ExtraField kan een string of een object zijn
+                    const stringValue = (val && typeof val === 'object')
+                        ? (val.stringValue || val.value || val.textValue || null)
+                        : (typeof val === 'string' ? val : null);
+                    if (stringValue && stringValue.trim()) {
+                        console.log('[KM] werknemer-adres uit extraFields["' + key + '"]:', stringValue);
+                        return stringValue.trim();
+                    }
+                }
             }
+
             console.warn('[KM] geen werknemer-adres in employee record. Raw:',
                 JSON.stringify(emp).slice(0, 800));
             return null;
@@ -7865,9 +7883,13 @@ const app = {
         // km. Toon dat expliciet zodat de gebruiker weet waarom.
         let warning = null;
         if (empAddrMissing && ok) {
-            const keysHint = Array.isArray(this._lastEmployeeKeys) && this._lastEmployeeKeys.length
-                ? ' [debug: ' + this._lastEmployeeKeys.slice(0, 25).join(', ') + ']'
-                : '';
+            let keysHint = '';
+            if (Array.isArray(this._lastEmployeeKeys) && this._lastEmployeeKeys.length) {
+                keysHint = ' [emp keys: ' + this._lastEmployeeKeys.join(', ') + ']';
+            }
+            if (Array.isArray(this._lastEmployeeExtraKeys) && this._lastEmployeeExtraKeys.length) {
+                keysHint += ' [extraFields: ' + this._lastEmployeeExtraKeys.join(', ') + ']';
+            }
             warning = 'Werknemer-adres niet gevonden in Robaws — gerekend vanaf bureau.' + keysHint;
         }
         return {
