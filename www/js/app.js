@@ -7639,15 +7639,13 @@ const app = {
         return '+++' + s.substr(0, 3) + '/' + s.substr(3, 4) + '/' + s.substr(7, 5) + '+++';
     },
 
-    /**
     // ================================================================
-    // v119: AUTO-KM BEREKENING via Google Maps Distance Matrix
+    // v119+: AUTO-KM BEREKENING via Google Routes API
     // ----------------------------------------------------------------
     //  Start/eind = bureau, tenzij "rechtstreeks van/naar thuis" → dan
-    //  het werknemer-adres uit Robaws. Werf = adres van eerste vandaag-
-    //  dagplanning. Bij "fiets" aangevinkt → km = 0.
-    //  Werkt met de Distance Matrix REST API (CORS-vriendelijk voor keys
-    //  zonder HTTP-referer-restricties).
+    //  het werknemer-adres uit Robaws. Werf-adressen uit dagplanning.
+    //  heen = startAddr → eerste werf van de dag
+    //  terug = laatste werf van de dag → endAddr
     // ================================================================
     GOOGLE_MAPS_API_KEY: 'AIzaSyDdgkLVxmuOEddVcodKDl7yO4vlI_NvGYA',
     QE_OFFICE_ADDRESS:  'Deuzeldlaan 36, 2900 Schoten, België',
