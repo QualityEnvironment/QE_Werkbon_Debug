@@ -7676,24 +7676,30 @@ const app = {
         }
     },
 
-    /** Werf-adres van vandaag voor deze werknemer.
-     *  Pakt de eerste dagplanning van vandaag met een installation-adres. */
-    async _fetchTodayWerfAddress(employeeId) {
+    /** Werf-adressen uit dagplanning van vandaag, in volgorde (vroegst → laatst).
+     *  Returns array van geformatteerde adres-strings, of null. */
+    async _fetchTodayWerfAddresses(employeeId) {
         try {
             const today = RobawsAPI._localDateStr();
             const planning = await RobawsAPI.getPlanning(employeeId, today, null);
             const items = (planning && planning.items) || [];
-            for (const item of items) {
-                const instIds = item.installationIds || [];
-                if (instIds.length === 0) continue;
-                const instRes = await RobawsAPI.get('installations/' + instIds[0]);
-                if (instRes.code !== 200 || !instRes.data || !instRes.data.address) continue;
-                const formatted = this._formatRobawsAddress(instRes.data.address);
-                if (formatted) return formatted;
+            // getPlanning sorteert al op startDate ascending — items[0] = eerste, items[len-1] = laatste
+            const addrs = items
+                .map(it => (it.address || '').trim())
+                .filter(a => a);
+            if (addrs.length === 0) {
+                console.warn('[KM] geen dagplanning-items met adres voor vandaag');
+                return null;
             }
-            return null;
+            // De-duplicate opeenvolgende identieke adressen (bv. 2 planningen op dezelfde werf)
+            const dedup = [];
+            for (const a of addrs) {
+                if (dedup.length === 0 || dedup[dedup.length - 1] !== a) dedup.push(a);
+            }
+            console.log('[KM] dagplanning adressen vandaag (' + dedup.length + '):', dedup);
+            return dedup;
         } catch (e) {
-            console.warn('[KM] werf-adres ophalen mislukt:', e && e.message);
+            console.warn('[KM] dagplanning-adressen ophalen faalde:', e && e.message);
             return null;
         }
     },
@@ -7725,15 +7731,18 @@ const app = {
         }
     },
 
-    /** Hoofd-functie: bereken heen + terug km op basis van de checkboxes
-     *  in de km-popup. */
+    /** Hoofd-functie: bereken heen + terug enkel tot/van eerste/laatste werf.
+     *  Tussenliggende werven tellen NIET mee (werknemers krijgen uurloon onderweg).
+     *   - heen  = startAddr → eerste werf van de dag
+     *   - terug = laatste werf van de dag → endAddr
+     *  startAddr/endAddr = bureau, tenzij "rechtstreeks van/naar thuis" → werknemer-adres. */
     async _autoCalcKilometers(employeeId, options) {
         if (options.fiets) {
             return { heen: 0, terug: 0, source: 'fiets' };
         }
-        const werfAddr = await this._fetchTodayWerfAddress(employeeId);
-        if (!werfAddr) {
-            return { heen: 0, terug: 0, source: 'geen-werf-gevonden' };
+        const werven = await this._fetchTodayWerfAddresses(employeeId);
+        if (!werven || werven.length === 0) {
+            return { heen: 0, terug: 0, source: 'geen-werf-adres', error: 'Geen dagplanning-adres gevonden' };
         }
         let startAddr = this.QE_OFFICE_ADDRESS;
         let endAddr   = this.QE_OFFICE_ADDRESS;
@@ -7742,17 +7751,24 @@ const app = {
             if (empAddr) {
                 if (options.directThuisWerf) startAddr = empAddr;
                 if (options.directWerfThuis) endAddr   = empAddr;
+            } else {
+                console.warn('[KM] werknemer-adres niet gevonden, val terug op bureau');
             }
         }
+        const eersteWerf  = werven[0];
+        const laatsteWerf = werven[werven.length - 1];
+        console.log('[KM] berekenen:', { startAddr, eersteWerf, laatsteWerf, endAddr });
         const [heen, terug] = await Promise.all([
-            this._googleDistanceKm(startAddr, werfAddr),
-            this._googleDistanceKm(werfAddr, endAddr),
+            this._googleDistanceKm(startAddr, eersteWerf),
+            this._googleDistanceKm(laatsteWerf, endAddr),
         ]);
+        const ok = (heen != null && terug != null);
         return {
             heen:  heen  != null ? heen  : 0,
             terug: terug != null ? terug : 0,
-            source: (heen != null && terug != null) ? 'google-maps' : 'partial',
-            startAddr, werfAddr, endAddr,
+            source: ok ? 'google-maps' : 'partial',
+            startAddr, eersteWerf, laatsteWerf, endAddr,
+            error: ok ? null : 'Google Maps gaf geen afstand',
         };
     },
 
@@ -7852,6 +7868,7 @@ const app = {
             //  - User kan altijd nog handmatig overschrijven (na de async call)
             // ============================================================
             let _kmCalcSeq = 0;
+            const self = this;
             const recalcKm = async () => {
                 const seq = ++_kmCalcSeq;
                 const opts = {
@@ -7865,12 +7882,17 @@ const app = {
                     terugEl.disabled = true;
                     heenEl.style.opacity = '0.5';
                     terugEl.style.opacity = '0.5';
+                    heenEl.value = '...';
+                    terugEl.value = '...';
+                    errEl.style.display = 'none';
                 } catch(_) {}
                 let result = null;
+                let thrownMsg = null;
                 try {
-                    result = await this._autoCalcKilometers(employeeId, opts);
+                    result = await self._autoCalcKilometers(employeeId, opts);
                 } catch (e) {
-                    console.warn('[KM] auto-calc faalde:', e && e.message);
+                    thrownMsg = e && e.message || String(e);
+                    console.warn('[KM] auto-calc faalde:', thrownMsg);
                 }
                 // Race-check: alleen toepassen als deze call de meest recente is
                 if (seq !== _kmCalcSeq) return;
@@ -7884,6 +7906,19 @@ const app = {
                     heenEl.value = String(result.heen);
                     terugEl.value = String(result.terug);
                     console.log('[KM] auto-fill:', result);
+                    if (result.error) {
+                        errEl.textContent = '⚠️ ' + result.error + ' — vul handmatig in.';
+                        errEl.style.color = '#e65100';
+                        errEl.style.display = 'block';
+                    }
+                } else {
+                    heenEl.value = '0';
+                    terugEl.value = '0';
+                    if (thrownMsg) {
+                        errEl.textContent = '⚠️ Auto-km mislukt (' + thrownMsg + ') — vul handmatig in.';
+                        errEl.style.color = '#e65100';
+                        errEl.style.display = 'block';
+                    }
                 }
             };
             // Initial calc - bij open
