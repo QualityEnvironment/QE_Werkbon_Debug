@@ -7704,12 +7704,11 @@ const app = {
         }
     },
 
-    /** Google Routes API (v2) — moderne vervanger van Distance Matrix.
-     *  Heeft CORS support (Access-Control-Allow-Origin: *) en werkt dus
-     *  direct via fetch vanuit een Android WebView (file:// origin).
-     *  Returns rij-afstand in km (geheel) of null. */
+    /** Google Routes API (v2). Returns:
+     *   { km: <number> }                op succes
+     *   { km: null, error: <string> }   op fout (exacte fout-tekst voor debug) */
     async _googleDistanceKm(origin, destination) {
-        if (!origin || !destination) return null;
+        if (!origin || !destination) return { km: null, error: 'origin/destination leeg' };
         try {
             const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
                 method: 'POST',
@@ -7725,20 +7724,28 @@ const app = {
                     routingPreference: 'TRAFFIC_UNAWARE',
                 }),
             });
-            const data = await res.json();
+            let body = '';
+            try { body = await res.text(); } catch(_) {}
+            let data = null;
+            try { data = body ? JSON.parse(body) : null; } catch(_) {}
             if (!res.ok) {
-                console.warn('[KM] Routes API HTTP', res.status, data && data.error && data.error.message);
-                return null;
+                const msg = (data && data.error && data.error.message)
+                    || `HTTP ${res.status}`
+                    + (body ? (' — ' + body.slice(0, 200)) : '');
+                console.warn('[KM] Routes API non-OK:', res.status, msg);
+                return { km: null, error: 'HTTP ' + res.status + ': ' + msg };
             }
             const meters = data && data.routes && data.routes[0] && data.routes[0].distanceMeters;
             if (typeof meters !== 'number') {
                 console.warn('[KM] Routes API geen distanceMeters:', data);
-                return null;
+                return { km: null, error: 'Geen distanceMeters in response' };
             }
-            return Math.round(meters / 1000);
+            return { km: Math.round(meters / 1000) };
         } catch (e) {
-            console.warn('[KM] Routes API call faalde:', e && e.message);
-            return null;
+            const msg = (e && e.message) || String(e);
+            console.warn('[KM] Routes API fetch gooi-fout:', msg);
+            // CORS / netwerk faal geeft typisch "Failed to fetch" of "Load failed"
+            return { km: null, error: 'Fetch faalde: ' + msg };
         }
     },
 
@@ -7768,17 +7775,20 @@ const app = {
         const eersteWerf  = werven[0];
         const laatsteWerf = werven[werven.length - 1];
         console.log('[KM] berekenen:', { startAddr, eersteWerf, laatsteWerf, endAddr });
-        const [heen, terug] = await Promise.all([
+        const [heenRes, terugRes] = await Promise.all([
             this._googleDistanceKm(startAddr, eersteWerf),
             this._googleDistanceKm(laatsteWerf, endAddr),
         ]);
-        const ok = (heen != null && terug != null);
+        const heen  = heenRes  && heenRes.km;
+        const terug = terugRes && terugRes.km;
+        const ok = (typeof heen === 'number' && typeof terug === 'number');
+        const apiError = (heenRes && heenRes.error) || (terugRes && terugRes.error) || null;
         return {
-            heen:  heen  != null ? heen  : 0,
-            terug: terug != null ? terug : 0,
+            heen:  typeof heen  === 'number' ? heen  : 0,
+            terug: typeof terug === 'number' ? terug : 0,
             source: ok ? 'google-maps' : 'partial',
             startAddr, eersteWerf, laatsteWerf, endAddr,
-            error: ok ? null : 'Google Maps gaf geen afstand',
+            error: ok ? null : ('Google Maps gaf geen afstand' + (apiError ? ' — ' + apiError : '')),
         };
     },
 
@@ -7854,7 +7864,7 @@ const app = {
                     <button id="kmPromptSubmit" style="width:100%;padding:14px;background:#1A237E;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer">
                         Opslaan
                     </button>
-                    <div id="kmPromptError" style="font-size:12px;color:#c62828;margin-top:8px;text-align:center;display:none"></div>
+                    <div id="kmPromptError" style="font-size:11px;color:#e65100;background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>
                 </div>`;
             document.body.appendChild(m);
 
