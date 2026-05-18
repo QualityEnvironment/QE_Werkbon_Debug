@@ -7704,31 +7704,76 @@ const app = {
         }
     },
 
-    /** Google Maps Distance Matrix call — returns afstand in km (geheel) of null. */
+    /** Laadt de Google Maps JS SDK dynamisch (idempotent).
+     *  Gebruikt een `<script>`-tag (geen CORS check), met `referrerpolicy=no-referrer`
+     *  zodat de file://-origin niet meegezonden wordt (Google zou die weigeren). */
+    _gmapsLoadPromise: null,
+    _loadGoogleMapsJs() {
+        if (window.google && window.google.maps && window.google.maps.DistanceMatrixService) {
+            return Promise.resolve(true);
+        }
+        if (this._gmapsLoadPromise) return this._gmapsLoadPromise;
+        this._gmapsLoadPromise = new Promise((resolve) => {
+            // Globale callback voor de Google loader
+            window.__qeGmapsReady = () => {
+                console.log('[KM] Google Maps JS SDK geladen');
+                resolve(true);
+            };
+            const script = document.createElement('script');
+            script.src = 'https://maps.googleapis.com/maps/api/js?key='
+                + encodeURIComponent(this.GOOGLE_MAPS_API_KEY)
+                + '&callback=__qeGmapsReady&loading=async';
+            script.async = true;
+            script.defer = true;
+            script.referrerPolicy = 'no-referrer';
+            script.onerror = (e) => {
+                console.warn('[KM] Google Maps JS SDK laden faalde:', e);
+                resolve(false);
+            };
+            // Veiligheids-timeout: als callback niet binnen 10s vuurt → geef op
+            setTimeout(() => resolve(!!(window.google && window.google.maps)), 10000);
+            document.head.appendChild(script);
+        });
+        return this._gmapsLoadPromise;
+    },
+
+    /** Distance Matrix via JS SDK — geen CORS issues, werkt vanuit file:// WebView.
+     *  Returns afstand in km (geheel) of null. */
     async _googleDistanceKm(origin, destination) {
         if (!origin || !destination) return null;
-        try {
-            const url = 'https://maps.googleapis.com/maps/api/distancematrix/json'
-                + '?origins=' + encodeURIComponent(origin)
-                + '&destinations=' + encodeURIComponent(destination)
-                + '&units=metric'
-                + '&key=' + this.GOOGLE_MAPS_API_KEY;
-            const res = await fetch(url);
-            const data = await res.json();
-            if (data.status !== 'OK') {
-                console.warn('[KM] Google Maps status:', data.status, data.error_message);
-                return null;
-            }
-            const elem = data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0];
-            if (!elem || elem.status !== 'OK' || !elem.distance) {
-                console.warn('[KM] Distance element status:', elem && elem.status);
-                return null;
-            }
-            return Math.round(elem.distance.value / 1000);
-        } catch (e) {
-            console.warn('[KM] Google Maps call faalde:', e && e.message);
+        const loaded = await this._loadGoogleMapsJs();
+        if (!loaded) {
+            console.warn('[KM] Google Maps JS SDK niet beschikbaar');
             return null;
         }
+        return new Promise((resolve) => {
+            try {
+                const service = new google.maps.DistanceMatrixService();
+                service.getDistanceMatrix({
+                    origins: [origin],
+                    destinations: [destination],
+                    travelMode: google.maps.TravelMode.DRIVING,
+                    unitSystem: google.maps.UnitSystem.METRIC,
+                }, (response, status) => {
+                    if (status !== 'OK') {
+                        console.warn('[KM] DM status:', status);
+                        resolve(null);
+                        return;
+                    }
+                    const elem = response && response.rows && response.rows[0]
+                        && response.rows[0].elements && response.rows[0].elements[0];
+                    if (!elem || elem.status !== 'OK' || !elem.distance) {
+                        console.warn('[KM] DM element status:', elem && elem.status);
+                        resolve(null);
+                        return;
+                    }
+                    resolve(Math.round(elem.distance.value / 1000));
+                });
+            } catch (e) {
+                console.warn('[KM] DM call gooi-fout:', e && e.message);
+                resolve(null);
+            }
+        });
     },
 
     /** Hoofd-functie: bereken heen + terug enkel tot/van eerste/laatste werf.
