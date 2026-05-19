@@ -338,8 +338,22 @@ const RobawsAPI = {
         // Stap 1: Zoek de werknemer op email in Robaws.
         // v132: retry 1x bij transient failure + 3e fallback zonder status-filter
         // zodat ook niet-"actieve" werknemers gevonden worden.
+        // v134: gebruik cache van check-email om dubbele Robaws-calls te voorkomen
+        //       (kritiek voor werknemers waar ?email= filter niet werkt — die
+        //       hebben pagination nodig, en 2x pagination triggert rate-limit).
         let employee = null;
         let lastSearchError = null;
+        try {
+            const cachedRaw = localStorage.getItem('qe_login_emp_cache_' + emailLower);
+            if (cachedRaw) {
+                const cached = JSON.parse(cachedRaw);
+                const ageMs = Date.now() - (cached.at || 0);
+                if (cached.emp && ageMs < 5 * 60 * 1000 && (cached.emp.email || '').toLowerCase() === emailLower) {
+                    employee = cached.emp;
+                    console.log('[RobawsAPI] employee cache hit (uit check-email):', employee.id);
+                }
+            }
+        } catch(_) {}
         const fetchEmployee = async () => {
             // 1a) Filter op email
             const searchRes = await this.get(`employees?email=${encodeURIComponent(emailLower)}&limit=50`);
@@ -376,30 +390,36 @@ const RobawsAPI = {
             }
             return emp || null;
         };
-        try {
-            employee = await fetchEmployee();
-        } catch(e) {
-            lastSearchError = e;
-            console.warn('[RobawsAPI] Eerste werknemer-zoek faalde, retry over 1.2s:', e && e.message);
-            await new Promise(r => setTimeout(r, 1200));
-            try { employee = await fetchEmployee(); }
-            catch(e2) {
-                console.error('[RobawsAPI] Beide werknemer-zoek pogingen faalden:', e2 && e2.message);
-                lastSearchError = e2;
+        if (!employee) {
+            try {
+                employee = await fetchEmployee();
+            } catch(e) {
+                lastSearchError = e;
+                console.warn('[RobawsAPI] Eerste werknemer-zoek faalde, retry over 1.2s:', e && e.message);
+                await new Promise(r => setTimeout(r, 1200));
+                try { employee = await fetchEmployee(); }
+                catch(e2) {
+                    console.error('[RobawsAPI] Beide werknemer-zoek pogingen faalden:', e2 && e2.message);
+                    lastSearchError = e2;
+                }
             }
         }
         if (!employee && lastSearchError) {
-            // Echte connection-fout
-            return this._loginFallback(emailLower, pin);
+            // Echte connection-fout — geef originele error door voor diagnostiek
+            return this._loginFallback(emailLower, pin, lastSearchError);
         }
 
         if (!employee) {
-            // Laatste poging: fallback mapping
+            // Werknemer niet gevonden in Robaws ook NA paginated search.
+            // Dit is een data-issue, geen connection-issue.
             if (this.EMPLOYEES[emailLower]) {
                 console.warn('[RobawsAPI] Werknemer niet gevonden via API, fallback naar EMPLOYEES mapping');
-                return this._loginFallback(emailLower, pin);
+                return this._loginFallback(emailLower, pin, new Error('Niet in API-resultaat'));
             }
-            return { success: false, error: 'Onbekend emailadres' };
+            return {
+                success: false,
+                error: 'Werknemer niet gevonden in Robaws (v135). Vraag Levi om je werknemerfiche te controleren.',
+            };
         }
 
         console.log('[RobawsAPI] Werknemer gevonden:', employee.id, employee.firstName, employee.lastName);
@@ -571,15 +591,18 @@ const RobawsAPI = {
     //      login — niet meer uit hardcoded seed)
     //   2. Laatste succesvolle online login binnen 7 dagen (`qe_last_online_login_<email>`)
     // Buiten die grace, of zonder cache → geen offline login mogelijk.
-    async _loginFallback(email, pin) {
+    async _loginFallback(email, pin, originalError) {
         const ONLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dagen
+
+        // v134: log waarom we in de fallback zitten zodat we de echte fout zien
+        const ctx = originalError ? (' — oorzaak: ' + (originalError.message || originalError)) : '';
 
         // Stap 1: PIN-cache aanwezig?
         const hasLocalPin = await this.hasPin(email);
         if (!hasLocalPin) {
             return {
                 success: false,
-                error: 'Geen verbinding met Robaws. Eerste login vereist internet.',
+                error: 'Robaws onbereikbaar tijdens login (v135)' + ctx + '. Probeer opnieuw of contacteer Levi.',
             };
         }
 

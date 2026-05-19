@@ -206,6 +206,14 @@ const APIBridge = {
                     found = all.find(e => (e.email || '').toLowerCase() === email);
                 }
                 if (found) {
+                    // v134: cache het gevonden employee object voor 5 min zodat
+                    // login() geen tweede zoektocht moet doen (voorkomt Robaws
+                    // rate-limit voor werknemers waar ?email= filter niet werkt
+                    // en pagination nodig is — typisch techniekers).
+                    try {
+                        localStorage.setItem('qe_login_emp_cache_' + email,
+                            JSON.stringify({ at: Date.now(), emp: found }));
+                    } catch(_) {}
                     // v132: PIN-detectie robuuster — probeer meerdere veld-namen +
                     // value-types omdat admin de PIN handmatig in Robaws kan
                     // hebben ingegeven onder een afwijkende key.
