@@ -25,6 +25,14 @@ const MollieAPI = {
     APP_ID_DEBUG:   'be.qe.werkbon.debug',
     APP_ID_RELEASE: 'be.qe.werkbon',
 
+    // v147: Mollie REST API key voor GET /v2/payments/{id} verificatie.
+    // LET OP: de Tap-to-Pay POS credentials zijn LIVE → de payments zijn LIVE.
+    // Deze TEST key kan LIVE payments NIET ophalen (Mollie returnt 404/401).
+    // Voor productie moet je een LIVE API key gebruiken: ga in Mollie dashboard
+    // naar Ontwikkelaars → API-sleutels → kopieer de "live_..." token.
+    API_BASE: 'https://api.mollie.com/v2',
+    API_KEY:  'test_BPDStCB4QHfGzR8gVgFttHebsdWyTn',
+
     // v144: Robaws/eForge proxy-webhook — Mollie post hier de payment-status
     // updates naartoe, en eForge forwardt naar Robaws die de factuur op
     // betaald zet. Zelfde URL die de Robaws ↔ Mollie betaallinks-integratie
@@ -80,6 +88,31 @@ const MollieAPI = {
             }
         } catch(_) {}
         return false;
+    },
+
+    /** v147: GET een Mollie payment via de REST API. Returns
+     *  { ok: true, payment } op success of { ok: false, status, error } op fout. */
+    async getPayment(paymentId) {
+        if (!paymentId) return { ok: false, error: 'paymentId ontbreekt' };
+        const url = this.API_BASE + '/payments/' + encodeURIComponent(paymentId);
+        try {
+            const res = await fetch(url, {
+                headers: {
+                    'Authorization': 'Bearer ' + this.API_KEY,
+                    'Accept': 'application/json',
+                },
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok) {
+                const msg = (data && data.detail) || (data && data.title) || ('HTTP ' + res.status);
+                console.warn('[Mollie] getPayment', paymentId, '→', res.status, msg);
+                return { ok: false, status: res.status, error: msg };
+            }
+            return { ok: true, payment: data };
+        } catch (e) {
+            console.warn('[Mollie] getPayment fetch faalde:', e && e.message);
+            return { ok: false, error: 'Netwerkfout: ' + (e && e.message || '?') };
+        }
     },
 
     /** Map de finale Mollie status naar een UI-bericht. */
