@@ -6485,62 +6485,121 @@ const app = {
         this.showPaymentFailed('Handmatig geannuleerd');
     },
 
-    // Volledig-scherm succes-overlay na betaling
+    // v151: Card-stijl succes-overlay (consistent met v130 SUCCES/MISLUKT scan-cards).
+    // Witte card op blurred backdrop, geanimeerde groene check, bedrag + factuur,
+    // OK-knop om terug naar planning.
     showPaymentSuccess(amount, invoiceLogicId) {
-        // Verwijder eventueel bestaande overlay
+        if (typeof this._ensureScanOverlayStyles === 'function') this._ensureScanOverlayStyles();
         const existing = document.getElementById('paymentOverlay');
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');
         overlay.id = 'paymentOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:#2e7d32;color:#fff;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center';
+        overlay.className = 'qe-scan-backdrop';
+
+        const amountHtml = amount > 0
+            ? `<div style="font-size:30px;font-weight:700;color:#2e7d32;margin:6px 0 2px">€ ${Number(amount).toFixed(2)}</div>`
+            : '';
+        const invHtml = invoiceLogicId
+            ? `<div style="font-size:13px;color:#90a4ae;margin-bottom:4px">Factuur ${this._escapeHtml(invoiceLogicId)}</div>`
+            : '';
+
         overlay.innerHTML = `
-            <div style="font-size:96px;margin-bottom:16px">✅</div>
-            <div style="font-size:32px;font-weight:700;margin-bottom:8px">Betaling gelukt!</div>
-            ${amount > 0 ? `<div style="font-size:22px;opacity:0.9;margin-bottom:4px">€ ${Number(amount).toFixed(2)}</div>` : ''}
-            ${invoiceLogicId ? `<div style="font-size:14px;opacity:0.8;margin-bottom:32px">Factuur ${this.escapeHtml(invoiceLogicId)}</div>` : '<div style="margin-bottom:32px"></div>'}
-            <button id="paymentOverlayOk" style="background:#fff;color:#2e7d32;border:none;border-radius:12px;padding:16px 48px;font-size:18px;font-weight:600;cursor:pointer">OK — Terug naar planning</button>
-        `;
+            <div class="qe-scan-card">
+                <div class="qe-scan-icon-wrap success">
+                    <svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle class="qe-circle-path" cx="26" cy="26" r="22" />
+                        <path class="qe-check-path" d="M14 27 l8 8 l16 -16" />
+                    </svg>
+                </div>
+                <h3 class="qe-scan-title success">Betaling gelukt</h3>
+                ${amountHtml}
+                ${invHtml}
+                <button id="paymentOverlayOk"
+                    style="margin-top:18px;width:100%;padding:13px;background:#2e7d32;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
+                    Terug naar planning
+                </button>
+            </div>`;
         document.body.appendChild(overlay);
+        // eslint-disable-next-line no-unused-expressions
+        overlay.offsetWidth;
+        overlay.classList.add('qe-show');
+
+        try { if (navigator.vibrate) navigator.vibrate(120); } catch(_) {}
+
         document.getElementById('paymentOverlayOk').onclick = () => {
-            overlay.remove();
-            this.navigate('screenPlanning', false);
-            this.screenHistory = [];
-            this.loadPlanning();
+            overlay.classList.remove('qe-show');
+            overlay.classList.add('qe-hiding');
+            setTimeout(() => {
+                try { overlay.remove(); } catch(_) {}
+                this.navigate('screenPlanning', false);
+                this.screenHistory = [];
+                this.loadPlanning();
+            }, 200);
         };
     },
 
-    // Volledig-scherm fout-overlay met retry-optie
+    // v151: Card-stijl fout-overlay — zelfde design-taal als success.
     showPaymentFailed(reason) {
+        if (typeof this._ensureScanOverlayStyles === 'function') this._ensureScanOverlayStyles();
         const existing = document.getElementById('paymentOverlay');
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');
         overlay.id = 'paymentOverlay';
-        overlay.style.cssText = 'position:fixed;inset:0;background:#c62828;color:#fff;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center';
+        overlay.className = 'qe-scan-backdrop';
+
         overlay.innerHTML = `
-            <div style="font-size:96px;margin-bottom:16px">⚠️</div>
-            <div style="font-size:28px;font-weight:700;margin-bottom:8px">Betaling niet gelukt</div>
-            <div style="font-size:15px;opacity:0.9;max-width:320px;margin-bottom:8px">${this.escapeHtml(reason || '')}</div>
-            <div style="font-size:13px;opacity:0.85;max-width:340px;margin-bottom:32px">De factuur is bewaard. Je kan de betaling opnieuw proberen vanuit de dagplanning.</div>
-            <div style="display:flex;gap:12px;flex-direction:column;width:100%;max-width:300px">
-                <button id="paymentRetryBtn" style="background:#fff;color:#c62828;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:600;cursor:pointer">🔄 Opnieuw proberen</button>
-                <button id="paymentLaterBtn" style="background:transparent;color:#fff;border:2px solid #fff;border-radius:12px;padding:14px;font-size:15px;font-weight:500;cursor:pointer">Later betalen</button>
-            </div>
-        `;
+            <div class="qe-scan-card">
+                <div class="qe-scan-icon-wrap error">
+                    <svg viewBox="0 0 52 52" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle class="qe-circle-path" cx="26" cy="26" r="22" />
+                        <path class="qe-cross-path" d="M18 18 l16 16" />
+                        <path class="qe-cross-path" d="M34 18 l-16 16" />
+                    </svg>
+                </div>
+                <h3 class="qe-scan-title error">Betaling niet gelukt</h3>
+                <p class="qe-scan-msg">${this._escapeHtml(reason || 'Onbekende fout')}</p>
+                <div style="font-size:12px;color:#90a4ae;margin-top:8px">
+                    De factuur is bewaard. Je kan de betaling opnieuw proberen vanuit Uitgevoerd.
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px;margin-top:18px">
+                    <button id="paymentRetryBtn"
+                        style="width:100%;padding:13px;background:#c62828;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
+                        🔄 Opnieuw proberen
+                    </button>
+                    <button id="paymentLaterBtn"
+                        style="width:100%;padding:13px;background:#fff;color:#c62828;border:2px solid #ffcdd2;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">
+                        Later betalen
+                    </button>
+                </div>
+            </div>`;
         document.body.appendChild(overlay);
+        // eslint-disable-next-line no-unused-expressions
+        overlay.offsetWidth;
+        overlay.classList.add('qe-show');
+
+        try { if (navigator.vibrate) navigator.vibrate([80, 60, 80]); } catch(_) {}
+
+        const closeWithAnim = (cb) => {
+            overlay.classList.remove('qe-show');
+            overlay.classList.add('qe-hiding');
+            setTimeout(() => { try { overlay.remove(); } catch(_) {} if (cb) cb(); }, 200);
+        };
         document.getElementById('paymentRetryBtn').onclick = () => {
-            overlay.remove();
-            const pp = this._pendingPayment;
-            if (pp && pp.invoiceId) {
-                this.startTerminalPayment(pp.invoiceId, pp.amount, pp.ogm, pp.invoiceLogicId);
-            }
+            closeWithAnim(() => {
+                const pp = this._pendingPayment;
+                if (pp && pp.invoiceId) {
+                    this.startTerminalPayment(pp.invoiceId, pp.amount, pp.ogm, pp.invoiceLogicId);
+                }
+            });
         };
         document.getElementById('paymentLaterBtn').onclick = () => {
-            overlay.remove();
-            this.navigate('screenPlanning', false);
-            this.screenHistory = [];
-            this.loadPlanning();
+            closeWithAnim(() => {
+                this.navigate('screenPlanning', false);
+                this.screenHistory = [];
+                this.loadPlanning();
+            });
         };
     },
 
