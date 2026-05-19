@@ -6116,13 +6116,18 @@ const app = {
     },
 
     // =====================================================================
-    // v139: MOLLIE TAP-TO-PAY flow
+    // v142: MOLLIE TAP-TO-PAY (app-to-app intent flow)
     // =====================================================================
 
-    /** Start de Mollie Tap-to-Pay flow: maak payment + launch Tap app. */
+    /** Start de Mollie Tap-to-Pay flow: bouw payload + launch via Java bridge. */
     async payWithMollieTap(invoiceResult) {
         if (typeof MollieAPI === 'undefined') {
-            this.toast('Mollie module niet geladen — fallback naar handmatig');
+            this.toast('Mollie module niet geladen');
+            this.showPaymentScreen(invoiceResult);
+            return;
+        }
+        if (typeof QEBridge === 'undefined' || !QEBridge.openMollieTap) {
+            this.toast('Mollie bridge niet beschikbaar — APK update nodig');
             this.showPaymentScreen(invoiceResult);
             return;
         }
@@ -6131,142 +6136,85 @@ const app = {
         const description = 'Factuur ' + (inv.logicId || inv.id) + ' — QE Werkbon';
         const workOrderId = this.currentWO ? this.currentWO.id : null;
 
-        // Bewaar context voor de return-handler
+        // Context bewaren voor de result-handler (intent kan onze app kill'en)
         this._mollieContext = {
             invoiceId: inv.id,
             amount: parseFloat(inv.totalInclVat),
             invoiceLogicId: inv.logicId || '',
             ogm: inv.paymentInstruction || '',
         };
+        try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
+        this._mollieHandled = false;
 
-        // Toon loading-overlay (gebruikt bestaande v130 card-stijl)
+        // Bouw payload
+        const payload = MollieAPI.buildPaymentRequest({
+            amountCents,
+            description,
+            workOrderId,
+            invoiceId: inv.id,
+        });
+        console.log('[Mollie] payload:', payload);
+
         if (typeof this.showScanLoading === 'function') {
-            this.showScanLoading('Mollie betaling voorbereiden…');
+            this.showScanLoading('Mollie Tap openen…');
         }
 
+        // Launch via Java bridge — Java doet de HMAC-signing + intent
+        let launched = false;
         try {
-            const payment = await MollieAPI.createPosPayment({
-                amountCents, description, workOrderId,
-            });
-            this._mollieContext.paymentId = payment.id;
-            // Persist over app-restart (voor het geval Mollie Tap onze app kill't)
-            try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
-
-            // v141: voor POS-payments met terminalId geeft Mollie GEEN checkout-URL
-            // terug — de payment wordt direct naar de terminal-app gepushed
-            // (Mollie Tap toont notificatie + bedrag automatisch). Toch proberen
-            // we alle bekende link-varianten te launchen voor zekerheid.
-            const links = payment._links || {};
-            const possibleUrl =
-                (links.checkout && links.checkout.href)
-             || (links.deeplink && links.deeplink.href)
-             || (links.terminalDeepLink && links.terminalDeepLink.href)
-             || (links.mobileAppCheckout && links.mobileAppCheckout.href)
-             || null;
-            console.log('[Mollie] payment links:', Object.keys(links), 'launch URL:', possibleUrl || '(geen)');
-
-            // Toon "wacht op betaling" overlay
-            if (typeof this.showScanLoading === 'function') {
-                this.showScanLoading('Bedrag wordt op de terminal getoond — laat de klant betalen…');
-            }
-
-            // Probeer de Tap-app te launchen als we een URL hebben
-            if (possibleUrl) {
-                try {
-                    if (typeof QEBridge !== 'undefined' && QEBridge.openMollieTap) {
-                        QEBridge.openMollieTap(possibleUrl);
-                    }
-                } catch(e) { console.warn('[Mollie] launch faalde:', e && e.message); }
-            }
-            // Zonder URL: vertrouwen op Mollie's push naar de terminal-app
-            // (klant ziet bedrag automatisch op het Mollie Tap-toestel)
-
-            // Polling is altijd nodig (geen redirect bij POS-payments)
-            this._mollieBackgroundPoll(payment.id);
+            launched = QEBridge.openMollieTap(JSON.stringify(payload));
         } catch (e) {
+            console.warn('[Mollie] bridge openMollieTap gooi-fout:', e && e.message);
+        }
+        if (!launched) {
             if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
-            console.warn('[Mollie] payWithMollieTap fout:', e);
-            this.showPaymentFailed('Mollie: ' + (e && e.message || 'onbekende fout'));
-            // Toon fallback-scherm zodat user via overschrijving kan
-            setTimeout(() => this.showPaymentScreen(invoiceResult), 6500);
+            this.showPaymentFailed('Mollie Tap app niet gevonden of niet geïnstalleerd');
+            setTimeout(() => this.showPaymentScreen(invoiceResult), 5000);
         }
+        // Geen polling/return URL handling — alles loopt via onMollieTapResult().
     },
 
-    /** Background polling — fallback voor als de return-callback niet binnenkomt
-     *  (Mollie Tap kill't onze app, of redirect faalt). */
-    async _mollieBackgroundPoll(paymentId) {
-        if (this._molliePollActive) return;  // voorkom duplicaat
-        this._molliePollActive = true;
-        try {
-            const final = await MollieAPI.pollUntilFinal(paymentId, {
-                maxSeconds: 240,    // 4 min — kaartlezer + PIN kost soms tijd
-                intervalMs: 3000,
-            });
-            // Alleen verwerken als nog geen handler dit gedaan heeft
-            if (this._mollieHandled) return;
-            this._mollieHandled = true;
-            this._processMollieFinalStatus(final);
-        } finally {
-            this._molliePollActive = false;
-        }
-    },
-
-    /** Wordt aangeroepen vanuit MainActivity.onNewIntent met de redirect-URL. */
-    async onMolliePaymentReturn(url) {
-        console.log('[Mollie return]', url);
-        if (this._mollieHandled) return;     // background poll was er al eerst
+    /** Wordt aangeroepen vanuit MainActivity.onActivityResult na een Mollie Tap betaling.
+     *  Resultaat-object met velden: { canceled, status, paymentId, referenceId,
+     *  failureMessage, failureSupportCode, signatureValid, resultCode }. */
+    onMollieTapResult(result) {
+        console.log('[Mollie result]', result);
+        if (this._mollieHandled) return;
         this._mollieHandled = true;
 
-        const ctx = this._mollieContext
-            || (() => { try { return JSON.parse(localStorage.getItem('qe_mollie_pending') || 'null'); } catch(_) { return null; } })();
-        if (!ctx || !ctx.paymentId) {
-            console.warn('[Mollie return] geen pending context — negeer');
-            return;
-        }
-        if (typeof this.showScanLoading === 'function') {
-            this.showScanLoading('Betaling controleren…');
-        }
-        try {
-            const final = await MollieAPI.pollUntilFinal(ctx.paymentId, {
-                maxSeconds: 30,    // Mollie heeft de status meestal direct na redirect
-                intervalMs: 1500,
-            });
-            this._processMollieFinalStatus(final);
-        } catch (e) {
-            console.warn('[Mollie return] status check faalde:', e);
-            if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
-            this.showPaymentFailed('Status check faalde: ' + (e && e.message));
-        }
-    },
-
-    /** Verwerkt de finale status van een Mollie payment. */
-    _processMollieFinalStatus(payment) {
         if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
-        const ctx = this._mollieContext || {};
+
+        const ctx = this._mollieContext
+            || (() => { try { return JSON.parse(localStorage.getItem('qe_mollie_pending') || 'null'); } catch(_) { return null; } })()
+            || {};
         try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
 
-        if (payment && payment.status === 'paid') {
-            console.log('[Mollie] payment paid:', payment.id);
-            // Markeer factuur als betaald in Robaws
+        // Signature-validatie waarschuwing (paid status met ongeldige signature = verdacht)
+        if (result && result.status === 'paid' && result.signatureValid === false) {
+            console.warn('[Mollie] paid status met ONGELDIGE signature — niet vertrouwen');
+            this.showPaymentFailed('Betaling ongeldig (signature mismatch) — controleer in Mollie dashboard');
+            return;
+        }
+
+        if (result && result.status === 'paid') {
+            console.log('[Mollie] betaling gelukt:', result.paymentId);
+            // Markeer factuur als betaald in Robaws (best-effort)
             if (ctx.invoiceId) {
                 fetch('api/payment.php?action=mark-paid', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ invoiceId: ctx.invoiceId }),
                 }).catch(() => {});
-                this._removePendingPayment && this._removePendingPayment(ctx.invoiceId);
+                if (this._removePendingPayment) this._removePendingPayment(ctx.invoiceId);
             }
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
-        } else {
-            const status = (payment && payment.status) || 'onbekend';
-            const msg = status === 'canceled' ? 'Klant heeft geannuleerd'
-                      : status === 'expired'  ? 'Betaling is verlopen'
-                      : status === 'failed'   ? 'Betaling geweigerd'
-                      : status === 'timeout'  ? 'Geen reactie van Mollie — controleer in dashboard'
-                      : 'Status: ' + status;
-            console.warn('[Mollie] payment niet voltooid:', status);
-            this.showPaymentFailed(msg);
+            return;
         }
+
+        // Niet-paid → toon foutreden
+        const msg = MollieAPI.statusToMessage(result);
+        console.warn('[Mollie] betaling niet voltooid:', msg);
+        this.showPaymentFailed(msg);
     },
 
     // Gebruiker bevestigt handmatig dat de betaling gelukt is.

@@ -1,167 +1,94 @@
 /* ============================================================
- * QE Werkbon — Mollie Tap-to-Pay integratie (v139)
+ * QE Werkbon — Mollie Tap-to-Pay (v142 — correcte app-to-app flow)
  * ------------------------------------------------------------
- * Flow:
- *   1. createPosPayment(amountCents, description, workOrderId)
- *      → POST /v2/payments met method=pointofsale + terminalId
- *      → Mollie returnt een tr_xxx ID + _links.checkout URL
- *   2. App launcht de checkout URL via Java-bridge openMollieTap()
- *   3. Mollie Tap-app: klant tikt NFC kaart
- *   4. Mollie redirect terug naar qewerkbondebug://payment-return?id=tr_xxx
- *   5. MainActivity.onNewIntent → JS app.onMolliePaymentReturn(url)
- *   6. JS polled GET /v2/payments/tr_xxx tot status definitief is
+ * Flow (per Mollie docs "Integrating Tap to Pay in Your Android App"):
+ *   1. JS bouwt een PaymentRequest JSON (amount/description/refId/etc)
+ *   2. JS roept QEBridge.openMollieTap(payloadJson) aan
+ *   3. Java canonicaliseert + signeert met HMAC-SHA256 (secret in Java!)
+ *   4. Java launcht Intent naar com.mollie.pos/MainActivity
+ *   5. Mollie Tap voert NFC-betaling uit
+ *   6. Result via onActivityResult → JS.app.onMollieTapResult(jsonObj)
  *
- * Credentials staan hardcoded — Mollie test-omgeving, niet kritiek
- * voor security. Voor live deployment moeten ze server-side gemoved
- * worden, maar voor in-house gebruik is hardcoded acceptabel.
+ * BELANGRIJK: de POS Secret-key blijft 100% in Java. Hier alleen de
+ * Secret-ID die in elke gesigneerde payload moet — die is niet geheim.
+ *
+ * webhookUrl: voorlopig null. Voor productie zou een server-side endpoint
+ * Mollie's status-pushes oppikken voor late updates. Voor nu vertrouwen we
+ * op het intent result (volgens Mollie docs is dat voldoende voor normaal
+ * gebruik; webhook is voor "payment flow interrupted" edge-cases).
  * ============================================================ */
 
 const MollieAPI = {
-    // === CREDENTIALS — Test omgeving ===
-    API_BASE:    'https://api.mollie.com/v2',
-    API_KEY:     'test_BPDStCB4QHfGzR8gVgFttHebsdWyTn',
-    PROFILE_ID:  'pfl_F9o2anpX8f',
-    TERMINAL_ID: 'term_dL2X7EqP4unuGkUKTf6RJ',
+    // De Secret-ID is NIET geheim (zit in elke gesigneerde payload, mag in JS).
+    // De Secret-key is wel geheim en zit alleen in Java/MainActivity.java.
+    // Voor debug-build halen we de POS-ID uit Java zodat het altijd matched.
+    APP_ID_DEBUG:   'be.qe.werkbon.debug',
+    APP_ID_RELEASE: 'be.qe.werkbon',
 
-    // POS-credentials per package (debug vs release)
-    // We detecteren runtime via getPackageName() of de debug-build draait.
-    POS_DEBUG_ID:     'possecr_4imehLQB8HPAAEBNpiQRJ',
-    POS_DEBUG_SECRET: 'SpfeJ9adGUSv8cQHWetcpjrw2ytaB8PG',
-    POS_RELEASE_ID:     'possecr_3EkteYDQo25DZEJ3kiQRJ',
-    POS_RELEASE_SECRET: 'gxr7bnzwR8K4GBdKt8ru3x2M2geV7KFz',
+    /** Lees POS-ID via de Java bridge (Java weet of we debug of release zijn). */
+    getPosId() {
+        try {
+            if (typeof QEBridge !== 'undefined' && QEBridge.getMolliePosId) {
+                return QEBridge.getMolliePosId();
+            }
+        } catch(_) {}
+        // Fallback (test-omgeving)
+        return 'possecr_4imehLQB8HPAAEBNpiQRJ';
+    },
 
-    /** Bepaal of we in een debug-build draaien (package eindigt op .debug). */
-    _isDebugBuild() {
+    getAppId() {
         try {
             if (typeof QEBridge !== 'undefined' && QEBridge.getApkVersionName) {
                 const v = QEBridge.getApkVersionName() || '';
-                return v.toLowerCase().includes('debug');
+                if (v.toLowerCase().includes('debug')) return this.APP_ID_DEBUG;
             }
         } catch(_) {}
-        // Fallback: assume debug (we zijn in dev)
-        return true;
+        return this.APP_ID_RELEASE;
     },
 
-    getPosCredentials() {
-        return this._isDebugBuild()
-            ? { id: this.POS_DEBUG_ID, secret: this.POS_DEBUG_SECRET }
-            : { id: this.POS_RELEASE_ID, secret: this.POS_RELEASE_SECRET };
-    },
-
-    /** Bearer Authorization headers voor Mollie REST API. */
-    _headers() {
-        return {
-            'Authorization': 'Bearer ' + this.API_KEY,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        };
-    },
-
-    /** Custom redirect URI — komt overeen met manifest intent-filter scheme. */
-    _redirectUri() {
-        // Beide schemes worden door MainActivity opgevangen; debug-app heeft
-        // alleen `qewerkbondebug` geregistreerd, release zou `qewerkbon` hebben.
-        return this._isDebugBuild()
-            ? 'qewerkbondebug://payment-return'
-            : 'qewerkbon://payment-return';
-    },
-
-    /**
-     * Stap 1: Maak een Point-of-Sale payment aan. Returns het volledige
-     * Mollie Payment object met id en _links.checkout.
-     */
-    async createPosPayment({ amountCents, description, workOrderId }) {
-        if (!amountCents || amountCents <= 0) {
-            throw new Error('Bedrag moet > 0 zijn');
-        }
-        const value = (amountCents / 100).toFixed(2);
-        // v140: profileId NIET meesturen — de API key is al aan een profile
-        // gekoppeld. Mollie weigert de body met "Non-existent body parameter".
-        const body = {
-            amount: { value, currency: 'EUR' },
+    /** Bouw een PaymentRequest JSON-payload voor de intent.
+     *  Java zal de keys alfabetisch sorteren + signen voor verzending. */
+    buildPaymentRequest({ amountCents, description, workOrderId, invoiceId }) {
+        const value = (Math.round(amountCents) / 100).toFixed(2);
+        const referenceId = invoiceId
+            ? ('inv_' + invoiceId + '_' + Date.now())
+            : ('qe_' + (workOrderId || 'unknown') + '_' + Date.now());
+        const payload = {
+            amount: { currency: 'EUR', value },
+            appId: this.getAppId(),
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
-            method: 'pointofsale',
-            terminalId: this.TERMINAL_ID,
-            redirectUrl: this._redirectUri(),
-            metadata: {
-                workOrderId: String(workOrderId || ''),
-                source: 'qe-werkbon-app',
-            },
+            referenceId: referenceId.slice(0, 255),
+            secretId: this.getPosId(),
+            // webhookUrl: laat weg / null — we vertrouwen op intent result.
+            // Mollie docs zeggen dat 'webhookUrl' optioneel is.
         };
-        console.log('[Mollie] createPosPayment:', body);
-        const res = await fetch(this.API_BASE + '/payments', {
-            method: 'POST',
-            headers: this._headers(),
-            body: JSON.stringify(body),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
-            const msg = (data && data.detail) || (data && data.title) || ('HTTP ' + res.status);
-            console.warn('[Mollie] createPosPayment faalde:', msg, data);
-            throw new Error('Mollie: ' + msg);
-        }
-        console.log('[Mollie] payment aangemaakt:', data.id, 'status:', data.status);
-        return data;
+        return payload;
     },
 
-    /** Stap 6: Haal de huidige status van een payment op. */
-    async getPaymentStatus(paymentId) {
-        if (!paymentId) throw new Error('paymentId ontbreekt');
-        const res = await fetch(this.API_BASE + '/payments/' + encodeURIComponent(paymentId), {
-            headers: this._headers(),
-        });
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
-            const msg = (data && data.detail) || ('HTTP ' + res.status);
-            throw new Error('Mollie status: ' + msg);
-        }
-        return data;
-    },
-
-    /**
-     * Poll tot de payment status definitief is (paid/failed/canceled/expired).
-     * onUpdate(status) wordt elke poll-iteratie aangeroepen zodat UI kan updaten.
-     * Returns het finale payment-object.
-     */
-    async pollUntilFinal(paymentId, { maxSeconds = 180, intervalMs = 2000, onUpdate } = {}) {
-        const FINAL_STATUSES = ['paid', 'failed', 'canceled', 'expired'];
-        const deadline = Date.now() + (maxSeconds * 1000);
-        let lastStatus = null;
-        while (Date.now() < deadline) {
-            try {
-                const p = await this.getPaymentStatus(paymentId);
-                if (p.status !== lastStatus) {
-                    console.log('[Mollie] status update:', p.status);
-                    lastStatus = p.status;
-                    if (typeof onUpdate === 'function') {
-                        try { onUpdate(p.status, p); } catch(_) {}
-                    }
-                }
-                if (FINAL_STATUSES.includes(p.status)) return p;
-            } catch (e) {
-                console.warn('[Mollie] poll fout:', e && e.message);
-            }
-            await new Promise(r => setTimeout(r, intervalMs));
-        }
-        // Timeout — geef laatste bekende status terug
-        return { status: 'timeout', id: paymentId };
-    },
-
-    /** Parse de inkomende qewerkbondebug://payment-return?id=tr_xxx URL */
-    parseReturnUrl(url) {
+    /** Check of de Mollie Tap app aanwezig is via de Java bridge. */
+    isInstalled() {
         try {
-            const u = new URL(url);
-            return {
-                paymentId: u.searchParams.get('id') || u.searchParams.get('paymentId') || null,
-                status:    u.searchParams.get('status') || null,
-            };
-        } catch(_) {
-            // Fallback regex
-            const m = String(url).match(/[?&]id=([^&]+)/);
-            return { paymentId: m ? decodeURIComponent(m[1]) : null, status: null };
+            if (typeof QEBridge !== 'undefined' && QEBridge.isMollieTapInstalled) {
+                return QEBridge.isMollieTapInstalled();
+            }
+        } catch(_) {}
+        return false;
+    },
+
+    /** Map de finale Mollie status naar een UI-bericht. */
+    statusToMessage(result) {
+        if (!result) return 'Onbekend';
+        if (result.canceled) return 'Klant heeft de betaling geannuleerd';
+        if (result.status === 'paid') return 'Betaling gelukt';
+        if (result.status === 'failed') {
+            const msg = result.failureMessage || 'Betaling geweigerd';
+            const code = result.failureSupportCode ? ' (' + result.failureSupportCode + ')' : '';
+            return msg + code;
         }
+        if (result.status === 'error') return 'Fout: ' + (result.failureMessage || '?');
+        return 'Status: ' + (result.status || 'onbekend');
     },
 };
 
-// Maak globaal beschikbaar
+// Globaal beschikbaar
 if (typeof window !== 'undefined') window.MollieAPI = MollieAPI;
