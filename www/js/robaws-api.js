@@ -335,16 +335,18 @@ const RobawsAPI = {
         const emailLower = email.toLowerCase().trim();
         console.log('[RobawsAPI] Login poging voor:', emailLower);
 
-        // Stap 1: Zoek de werknemer op email in Robaws
+        // Stap 1: Zoek de werknemer op email in Robaws.
+        // v132: retry 1x bij transient failure + 3e fallback zonder status-filter
+        // zodat ook niet-"actieve" werknemers gevonden worden.
         let employee = null;
-        try {
-            // Probeer eerst te zoeken op email
+        let lastSearchError = null;
+        const fetchEmployee = async () => {
+            // 1a) Filter op email
             const searchRes = await this.get(`employees?email=${encodeURIComponent(emailLower)}&limit=50`);
             const allEmps = (searchRes.data && searchRes.data.items) || [];
-            employee = allEmps.find(e => (e.email || '').toLowerCase() === emailLower);
-
-            // Als niet gevonden via filter, haal alle actieve werknemers op
-            if (!employee) {
+            let emp = allEmps.find(e => (e.email || '').toLowerCase() === emailLower);
+            // 1b) Niet gevonden — probeer alle actieve werknemers
+            if (!emp) {
                 let page = 0;
                 const allActive = [];
                 do {
@@ -355,11 +357,39 @@ const RobawsAPI = {
                     page++;
                     if (page >= (res.data.totalPages || 1)) break;
                 } while (page < 5);
-                employee = allActive.find(e => (e.email || '').toLowerCase() === emailLower);
+                emp = allActive.find(e => (e.email || '').toLowerCase() === emailLower);
             }
+            // 1c) Nog niet gevonden — probeer ZONDER status-filter
+            //     (werknemer kan andere status hebben dan "actief")
+            if (!emp) {
+                let page = 0;
+                const allEmps2 = [];
+                do {
+                    const res = await this.get(`employees?limit=100&page=${page}`);
+                    const items = (res.data && res.data.items) || [];
+                    if (items.length === 0) break;
+                    allEmps2.push(...items);
+                    page++;
+                    if (page >= (res.data.totalPages || 1)) break;
+                } while (page < 5);
+                emp = allEmps2.find(e => (e.email || '').toLowerCase() === emailLower);
+            }
+            return emp || null;
+        };
+        try {
+            employee = await fetchEmployee();
         } catch(e) {
-            console.error('[RobawsAPI] Fout bij werknemers ophalen:', e);
-            // Fallback naar hardcoded EMPLOYEES als Robaws onbereikbaar
+            lastSearchError = e;
+            console.warn('[RobawsAPI] Eerste werknemer-zoek faalde, retry over 1.2s:', e && e.message);
+            await new Promise(r => setTimeout(r, 1200));
+            try { employee = await fetchEmployee(); }
+            catch(e2) {
+                console.error('[RobawsAPI] Beide werknemer-zoek pogingen faalden:', e2 && e2.message);
+                lastSearchError = e2;
+            }
+        }
+        if (!employee && lastSearchError) {
+            // Echte connection-fout
             return this._loginFallback(emailLower, pin);
         }
 
@@ -374,11 +404,27 @@ const RobawsAPI = {
 
         console.log('[RobawsAPI] Werknemer gevonden:', employee.id, employee.firstName, employee.lastName);
 
-        // PIN checken via extra veld "Pincode" (groep "QE Werkbon app", type TEXT)
+        // PIN checken via extra veld "Pincode" (groep "QE Werkbon app", type TEXT).
+        // v132: ook andere veld-naam-varianten + value-types proberen voor het geval
+        // de PIN handmatig in Robaws onder een afwijkende key is gezet.
         const extraFields = employee.extraFields || {};
-        console.log('[RobawsAPI] extraFields:', JSON.stringify(extraFields));
-        const pinField = extraFields['Pincode'] || null;
-        const storedPin = pinField ? String(pinField.stringValue ?? pinField.intValue ?? pinField.value ?? '') : '';
+        console.log('[RobawsAPI] extraFields keys:', Object.keys(extraFields));
+        let storedPin = '';
+        const tryKeys = ['Pincode', 'PIN', 'Pin', 'pincode', 'pin'];
+        for (const k of tryKeys) {
+            const pf = extraFields[k];
+            if (!pf) continue;
+            const v = pf.stringValue ?? pf.intValue ?? pf.value ?? pf.numberValue ?? null;
+            if (v != null && String(v).trim()) { storedPin = String(v).trim(); break; }
+        }
+        if (!storedPin) {
+            // Scan alle extraFields op key die "pin" bevat
+            for (const [k, pf] of Object.entries(extraFields)) {
+                if (!/pin/i.test(k)) continue;
+                const v = pf && (pf.stringValue ?? pf.intValue ?? pf.value ?? pf.numberValue);
+                if (v != null && String(v).trim()) { storedPin = String(v).trim(); break; }
+            }
+        }
         console.log('[RobawsAPI] storedPin:', storedPin ? '***(' + storedPin.length + ' chars)' : '(leeg)');
 
         if (!storedPin) {
