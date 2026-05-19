@@ -410,15 +410,29 @@ const RobawsAPI = {
         }
 
         if (!employee) {
-            // Werknemer niet gevonden in Robaws ook NA paginated search.
-            // Dit is een data-issue, geen connection-issue.
-            if (this.EMPLOYEES[emailLower]) {
-                console.warn('[RobawsAPI] Werknemer niet gevonden via API, fallback naar EMPLOYEES mapping');
-                return this._loginFallback(emailLower, pin, new Error('Niet in API-resultaat'));
+            // v136: Werknemer niet gevonden via email-search of pagination.
+            // Mogelijk omdat hun email in Robaws afwijkt van wat de user typt
+            // (bv. dax.leekens@qe.be vs daxleekens@qe.be).
+            // → Als de user in EMPLOYEES mapping staat, doe een DIRECTE
+            //   employees/{id} lookup ipv te zoeken op email.
+            const mapped = this.EMPLOYEES[emailLower];
+            if (mapped && mapped.employeeId) {
+                try {
+                    console.log('[RobawsAPI] Email-search miste werknemer, directe lookup via EMPLOYEES mapping id=' + mapped.employeeId);
+                    const directRes = await this.get(`employees/${mapped.employeeId}`);
+                    if (directRes.code === 200 && directRes.data) {
+                        employee = directRes.data;
+                    }
+                } catch(e) {
+                    console.warn('[RobawsAPI] Directe employee lookup faalde:', e && e.message);
+                }
             }
+        }
+        if (!employee) {
+            // Geen mapping én geen API-result → echt onbekend
             return {
                 success: false,
-                error: 'Werknemer niet gevonden in Robaws (v135). Vraag Levi om je werknemerfiche te controleren.',
+                error: 'Werknemer niet gevonden in Robaws (v136). Vraag Levi om je werknemerfiche te controleren.',
             };
         }
 
@@ -602,7 +616,7 @@ const RobawsAPI = {
         if (!hasLocalPin) {
             return {
                 success: false,
-                error: 'Robaws onbereikbaar tijdens login (v135)' + ctx + '. Probeer opnieuw of contacteer Levi.',
+                error: 'Robaws onbereikbaar tijdens login (v136)' + ctx + '. Probeer opnieuw of contacteer Levi.',
             };
         }
 

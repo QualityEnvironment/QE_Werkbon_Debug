@@ -205,6 +205,21 @@ const APIBridge = {
                     } while (page < 5);
                     found = all.find(e => (e.email || '').toLowerCase() === email);
                 }
+                // v136: derde poging — directe lookup via EMPLOYEES mapping
+                // (voor wanneer Robaws-email afwijkt van de getypte email,
+                // bv. dax.leekens@qe.be vs daxleekens@qe.be).
+                if (!found) {
+                    const mapped = RobawsAPI.EMPLOYEES[email];
+                    if (mapped && mapped.employeeId) {
+                        try {
+                            const direct = await RobawsAPI.get(`employees/${mapped.employeeId}`);
+                            if (direct.code === 200 && direct.data) {
+                                found = direct.data;
+                                console.log('[APIBridge] check-email: gevonden via directe lookup id=' + mapped.employeeId);
+                            }
+                        } catch(_) {}
+                    }
+                }
                 if (found) {
                     // v134: cache het gevonden employee object voor 5 min zodat
                     // login() geen tweede zoektocht moet doen (voorkomt Robaws
