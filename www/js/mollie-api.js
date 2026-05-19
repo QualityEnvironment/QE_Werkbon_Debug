@@ -75,13 +75,14 @@ const MollieAPI = {
             throw new Error('Bedrag moet > 0 zijn');
         }
         const value = (amountCents / 100).toFixed(2);
+        // v140: profileId NIET meesturen — de API key is al aan een profile
+        // gekoppeld. Mollie weigert de body met "Non-existent body parameter".
         const body = {
             amount: { value, currency: 'EUR' },
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
             method: 'pointofsale',
             terminalId: this.TERMINAL_ID,
             redirectUrl: this._redirectUri(),
-            profileId: this.PROFILE_ID,
             metadata: {
                 workOrderId: String(workOrderId || ''),
                 source: 'qe-werkbon-app',
