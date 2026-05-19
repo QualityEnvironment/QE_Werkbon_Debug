@@ -6200,11 +6200,26 @@ const app = {
             this._removePendingPayment(ctx.invoiceId);
         }
 
-        // v147: GEEN paymentId → kunnen niet via API verifiëren. Toon waarschuwing.
+        // v148: GEEN paymentId → kunnen niet via API verifiëren.
+        // Toon ALLE intent data zodat we kunnen zien wat Mollie Tap wel/niet stuurde.
         if (!result || !result.paymentId) {
+            const debugLines = [];
+            debugLines.push('resultCode: ' + (result && result.resultCode));
+            debugLines.push('hasData: ' + (result && result.hasData));
+            if (result && result.extrasKeys && Object.keys(result.extrasKeys).length > 0) {
+                debugLines.push('Intent-extras: ' + JSON.stringify(result.extrasKeys));
+            } else {
+                debugLines.push('Intent-extras: (leeg)');
+            }
+            if (result && result.status) debugLines.push('status="' + result.status + '"');
+            if (result && result.failureMessage) debugLines.push('failureMessage="' + result.failureMessage + '"');
+
+            console.warn('[Mollie] geen paymentId — debug:', result);
             this.showPaymentFailed(
-                'Geen payment ID ontvangen van Mollie Tap. ' +
-                'Controleer in Mollie dashboard of de betaling toch slaagde.'
+                'Geen payment ID ontvangen van Mollie Tap.\n\n' +
+                'DEBUG:\n' + debugLines.join('\n') + '\n\n' +
+                'Tip: als "Intent-extras" leeg is → Mollie Tap is nooit gestart of de intent ging verloren. ' +
+                'Als er WEL extras zijn maar geen paymentId → de Tap app gebruikt mogelijk een andere key-naam.'
             );
             return;
         }
