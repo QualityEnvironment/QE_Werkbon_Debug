@@ -474,10 +474,19 @@ const app = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const data = await res.json();
-            if (data.error || !data.success) {
-                errorEl.textContent = data.error || 'Verkeerde PIN — probeer opnieuw';
+            // v132: ook bij non-OK status de body lezen — APIBridge stuurt
+            // 401 met de echte foutmelding in `error`. Vroeger werd dat
+            // overschreven door een generieke "Toegang geweigerd (HTTP 401)".
+            let data = null;
+            try { data = await res.json(); } catch(_) {}
+            if (!res.ok) {
+                const msg = (data && data.error) ? data.error : ('HTTP ' + res.status);
+                console.warn('[App] login PIN fout (server):', res.status, msg);
+                errorEl.textContent = msg;
+                return;
+            }
+            if (!data || data.error || !data.success) {
+                errorEl.textContent = (data && data.error) || 'Verkeerde PIN — probeer opnieuw';
                 return;
             }
             this.currentUser = data.user;
