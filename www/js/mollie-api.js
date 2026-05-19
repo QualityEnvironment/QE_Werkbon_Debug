@@ -25,6 +25,12 @@ const MollieAPI = {
     APP_ID_DEBUG:   'be.qe.werkbon.debug',
     APP_ID_RELEASE: 'be.qe.werkbon',
 
+    // v144: Robaws/eForge proxy-webhook — Mollie post hier de payment-status
+    // updates naartoe, en eForge forwardt naar Robaws die de factuur op
+    // betaald zet. Zelfde URL die de Robaws ↔ Mollie betaallinks-integratie
+    // gebruikt, hergebruikt voor onze Tap-to-Pay payments.
+    WEBHOOK_URL: 'https://payments.eforge.be/mollie/robaws_prod:r_eb7cbxhcpkf59kc6/webhook',
+
     /** Lees POS-ID via de Java bridge (Java weet of we debug of release zijn). */
     getPosId() {
         try {
@@ -59,8 +65,9 @@ const MollieAPI = {
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
             referenceId: referenceId.slice(0, 255),
             secretId: this.getPosId(),
-            // webhookUrl: laat weg / null — we vertrouwen op intent result.
-            // Mollie docs zeggen dat 'webhookUrl' optioneel is.
+            // v144: webhook URL meegeven zodat Mollie de Robaws-connector pingt
+            // bij elke status-wijziging → factuur automatisch op betaald.
+            webhookUrl: this.WEBHOOK_URL,
         };
         return payload;
     },
