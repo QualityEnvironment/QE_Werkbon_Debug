@@ -3106,6 +3106,82 @@ const RobawsAPI = {
         // enkel nog zodat de app-flow kan doorgaan na een geslaagde terminal-betaling.
         return { success: true, code: 200, skipped: true };
     },
+
+    /**
+     * v146: Registreer een EXTERNE betaling op een Robaws sales-invoice.
+     * Gebruikt voor Mollie Tap-to-Pay payments die buiten Robaws zelf zijn
+     * geïnitieerd. Het volledige bedrag posten zet de factuur automatisch
+     * op "betaald" (openstaand saldo = 0).
+     *
+     * Robaws v2 endpoint: POST /sales-invoices/{id}/payments
+     *
+     * @param {Object} opts
+     * @param {string|number} opts.invoiceId  - factuur ID in Robaws
+     * @param {number} opts.amount            - totaal incl. BTW (in EUR)
+     * @param {string} [opts.date]            - YYYY-MM-DD (default: vandaag)
+     * @param {string} [opts.paymentMethod]   - bv. "Mollie Tap" / "Bancontact"
+     * @param {string} [opts.reference]       - bv. Mollie tr_xxxx voor traceability
+     * @returns {Promise<{success, code, data, error?}>}
+     */
+    async registerInvoicePayment({ invoiceId, amount, date, paymentMethod, reference }) {
+        if (!invoiceId) return { success: false, error: 'invoiceId verplicht' };
+        if (!amount || amount <= 0) return { success: false, error: 'amount > 0 verplicht' };
+
+        const isoDate = date || this._localDateStr();
+        const amountStr = (Math.round(parseFloat(amount) * 100) / 100).toFixed(2);
+
+        // Robaws v2 verwacht bedragen als string in het amount-object (zelfde
+        // patroon als bij sales-invoices/line-items). We proberen meerdere
+        // gangbare body-vormen indien de eerste een 4xx geeft.
+        const bodyVariants = [
+            // Variant A: amount object met value/currency (Mollie-stijl)
+            {
+                amount: { value: amountStr, currency: 'EUR' },
+                date: isoDate,
+                paymentMethod: paymentMethod || 'Bancontact',
+                remark: reference ? ('Mollie ' + reference) : '',
+            },
+            // Variant B: flat amount (legacy v1-stijl)
+            {
+                amount: parseFloat(amountStr),
+                date: isoDate,
+                paymentMethod: paymentMethod || 'Bancontact',
+                remark: reference ? ('Mollie ' + reference) : '',
+            },
+            // Variant C: minimal (alleen amount + date)
+            {
+                amount: { value: amountStr, currency: 'EUR' },
+                date: isoDate,
+            },
+        ];
+
+        const path = `sales-invoices/${invoiceId}/payments`;
+        let lastErr = null;
+        for (let i = 0; i < bodyVariants.length; i++) {
+            const body = bodyVariants[i];
+            console.log('[Robaws] registerInvoicePayment poging ' + (i+1) + ':', body);
+            try {
+                const res = await this.post(path, body);
+                console.log('[Robaws] registerInvoicePayment response:', res.code, res.data);
+                if (res.code === 200 || res.code === 201 || res.code === 204) {
+                    return { success: true, code: res.code, data: res.data, variant: i + 1 };
+                }
+                lastErr = { code: res.code, data: res.data };
+                // 400/422 = body-format probleem → probeer volgende variant
+                if (res.code !== 400 && res.code !== 422) break;
+            } catch (e) {
+                lastErr = { error: e && e.message };
+                break;
+            }
+        }
+        return {
+            success: false,
+            code: lastErr && lastErr.code,
+            error: (lastErr && lastErr.data && (lastErr.data.message || JSON.stringify(lastErr.data).slice(0, 200)))
+                || (lastErr && lastErr.error)
+                || 'onbekende fout',
+        };
+    },
     // =============================================
     // TIJDSREGISTRATIE VIA WERKBONNEN (v58+)
     // =============================================

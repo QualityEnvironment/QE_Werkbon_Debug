@@ -6200,21 +6200,47 @@ const app = {
             this._removePendingPayment(ctx.invoiceId);
         }
 
-        // Signature-mismatch met paid status: log warning maar toon WEL success.
-        // Mollie's webhook regelt de definitieve factuur-koppeling, dus zelfs
-        // bij een signature edge case is de payment in Mollie bewezen geldig.
-        if (result && result.status === 'paid' && result.signatureValid === false) {
-            console.warn('[Mollie] paid maar signature ongeldig — toch tonen als gelukt (webhook is bron van waarheid)');
-        }
-
         if (result && result.status === 'paid') {
             console.log('[Mollie] betaling gelukt:', result.paymentId);
-            // v145: app triggert zelf de eForge webhook (Mollie's eigen webhook-
-            // service geeft 500 voor onze Tap-to-Pay payments — proberen of een
-            // directe POST wel werkt). Fire-and-forget — we wachten niet op
-            // antwoord want CORS kan de response verbergen.
-            this._triggerRobawsWebhook(result.paymentId);
+
+            // v146: idempotency — voorkom dubbele Robaws-call als deze handler
+            // tweemaal getriggerd wordt (bv. user gaat snel terug + opnieuw).
+            const dedupKey = 'qe_mollie_processed_' + (result.paymentId || ctx.invoiceId);
+            const alreadyProcessed = (() => {
+                try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; }
+            })();
+
+            // v146: signature-validatie is hier KRITIEK want we gaan zelf een
+            // betaling registreren in Robaws. Bij ongeldige signature:
+            //   - Toon success aan klant (Mollie zegt paid)
+            //   - Maar registreer NIET in Robaws — log warning + toast voor admin
+            const sigOk = result.signatureValid !== false;
+            if (!sigOk) {
+                console.warn('[Mollie] signature ongeldig — factuur NIET automatisch op betaald');
+                this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
+                setTimeout(() => this.toast(
+                    '⚠️ Factuur niet automatisch op betaald (signature-check) — zet ze handmatig in Robaws'
+                ), 1500);
+                return;
+            }
+
+            if (alreadyProcessed) {
+                console.log('[Mollie] paymentId al verwerkt, skip Robaws-update');
+                this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
+                return;
+            }
+
+            // v146: Toon success direct, registreer in Robaws op achtergrond.
+            // De user hoeft daar niet op te wachten — bij fout komt er een toast.
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
+            this._registerMolliePaymentInRobaws({
+                invoiceId:     ctx.invoiceId,
+                invoiceLogicId: ctx.invoiceLogicId,
+                amount:        ctx.amount,
+                paymentId:     result.paymentId,
+                referenceId:   result.referenceId,
+                dedupKey:      dedupKey,
+            });
             return;
         }
 
@@ -6234,32 +6260,107 @@ const app = {
         this.showPaymentFailed(msg);
     },
 
-    /** v145: roep de eForge / Robaws webhook proxy zelf aan met de payment-ID.
-     *  Mollie's eigen webhook-service geeft 500 voor onze Tap-to-Pay payments,
-     *  maar mogelijk werkt een directe POST wel omdat de eForge endpoint dan
-     *  geen tussenliggende validatie doet. Proberen eerst standaard fetch met
-     *  CORS; bij blocked-CORS valt fallback naar no-cors zodat de POST in elk
-     *  geval verstuurd is (we lezen het antwoord toch niet). */
-    async _triggerRobawsWebhook(paymentId) {
-        if (!paymentId) return;
-        if (!MollieAPI || !MollieAPI.WEBHOOK_URL) return;
-        const url = MollieAPI.WEBHOOK_URL;
-        const body = 'id=' + encodeURIComponent(paymentId);
-        const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
-        // Poging 1: normale fetch (we kunnen de status zien)
-        try {
-            const res = await fetch(url, { method: 'POST', headers, body });
-            console.log('[Mollie] eForge webhook trigger →', res.status, res.statusText);
+    // v146: localStorage key voor de retry-queue van mislukte Robaws-updates.
+    _MOLLIE_RETRY_KEY: 'qe_mollie_retry_queue',
+
+    /** Stuur de Robaws factuur-betaling registratie naar Robaws. Bij failure:
+     *  bewaar in retry-queue + toon waarschuwing zodat admin weet dat hij
+     *  handmatig moet ingrijpen. Bij success: markeer dedup zodat retry niet
+     *  opnieuw probeert. */
+    async _registerMolliePaymentInRobaws({ invoiceId, invoiceLogicId, amount, paymentId, referenceId, dedupKey }) {
+        if (!invoiceId) {
+            console.warn('[Mollie→Robaws] geen invoiceId — skip');
             return;
-        } catch (e) {
-            console.warn('[Mollie] eForge webhook (CORS?) faalde:', e && e.message);
         }
-        // Poging 2: no-cors — POST gaat door maar we kunnen de response niet lezen
+        console.log('[Mollie→Robaws] register payment', { invoiceId, amount, paymentId });
         try {
-            await fetch(url, { method: 'POST', headers, body, mode: 'no-cors' });
-            console.log('[Mollie] eForge webhook trigger (no-cors) verstuurd');
+            const res = await RobawsAPI.registerInvoicePayment({
+                invoiceId,
+                amount,
+                paymentMethod: 'Bancontact',  // Mollie Tap = Bancontact in Robaws-terminologie
+                reference: paymentId || referenceId || '',
+            });
+            if (res.success) {
+                console.log('[Mollie→Robaws] factuur op betaald gezet (variant ' + (res.variant || '?') + ')');
+                try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
+                setTimeout(() => this.toast('✓ Factuur ' + (invoiceLogicId || invoiceId) + ' op betaald'), 1200);
+                return;
+            }
+            // Niet gelukt → naar retry-queue
+            console.warn('[Mollie→Robaws] Robaws weigerde:', res.error);
+            this._enqueueMollieRetry({ invoiceId, invoiceLogicId, amount, paymentId, referenceId, dedupKey });
+            setTimeout(() => this.toast(
+                '⚠️ Factuur niet op betaald (Robaws-fout) — wordt later opnieuw geprobeerd'
+            ), 1500);
         } catch (e) {
-            console.warn('[Mollie] eForge webhook no-cors faalde:', e && e.message);
+            console.warn('[Mollie→Robaws] gooi-fout:', e && e.message);
+            this._enqueueMollieRetry({ invoiceId, invoiceLogicId, amount, paymentId, referenceId, dedupKey });
+            setTimeout(() => this.toast(
+                '⚠️ Netwerkfout — factuur wordt later opnieuw op betaald gezet'
+            ), 1500);
+        }
+    },
+
+    /** Voeg een mislukte Robaws-update toe aan de retry-queue (localStorage). */
+    _enqueueMollieRetry(entry) {
+        try {
+            const raw = localStorage.getItem(this._MOLLIE_RETRY_KEY);
+            const list = raw ? JSON.parse(raw) : [];
+            // Voorkom duplicaten op paymentId
+            if (entry.paymentId && list.some(e => e.paymentId === entry.paymentId)) return;
+            entry.queuedAt = Date.now();
+            entry.attempts = 0;
+            list.push(entry);
+            localStorage.setItem(this._MOLLIE_RETRY_KEY, JSON.stringify(list));
+            console.log('[Mollie→Robaws] queued for retry — queue size:', list.length);
+        } catch (e) {
+            console.warn('[Mollie→Robaws] kon queue niet schrijven:', e);
+        }
+    },
+
+    /** Loop de retry-queue af en probeer elke pending entry opnieuw.
+     *  Wordt aangeroepen bij app-start + online-event + na elke succesvolle login. */
+    async processMollieRetryQueue() {
+        if (!navigator.onLine) return;
+        let list;
+        try {
+            const raw = localStorage.getItem(this._MOLLIE_RETRY_KEY);
+            list = raw ? JSON.parse(raw) : [];
+        } catch (_) { return; }
+        if (!list || list.length === 0) return;
+        console.log('[Mollie→Robaws] retry queue size:', list.length);
+        const remaining = [];
+        for (const entry of list) {
+            entry.attempts = (entry.attempts || 0) + 1;
+            // Geef op na 10 pogingen — admin moet dan handmatig in Robaws aanpassen
+            if (entry.attempts > 10) {
+                console.warn('[Mollie→Robaws] entry opgegeven na 10 pogingen:', entry.paymentId);
+                continue;
+            }
+            try {
+                const res = await RobawsAPI.registerInvoicePayment({
+                    invoiceId: entry.invoiceId,
+                    amount: entry.amount,
+                    paymentMethod: 'Bancontact',
+                    reference: entry.paymentId || entry.referenceId || '',
+                });
+                if (res.success) {
+                    console.log('[Mollie→Robaws] retry success voor', entry.paymentId);
+                    if (entry.dedupKey) {
+                        try { localStorage.setItem(entry.dedupKey, String(Date.now())); } catch(_) {}
+                    }
+                    // niet meer in queue
+                    continue;
+                }
+                remaining.push(entry);
+            } catch (e) {
+                console.warn('[Mollie→Robaws] retry gooi-fout:', e && e.message);
+                remaining.push(entry);
+            }
+        }
+        try { localStorage.setItem(this._MOLLIE_RETRY_KEY, JSON.stringify(remaining)); } catch(_) {}
+        if (remaining.length === 0 && list.length > 0) {
+            this.toast('✓ Alle wachtende Mollie-betalingen op betaald gezet');
         }
     },
 
@@ -8951,6 +9052,10 @@ const app = {
             // Klokdata synchroniseren
             if (typeof QEClock !== 'undefined' && QEClock.syncPending) {
                 QEClock.syncPending().catch(e => console.warn('[App] Klok sync fout:', e));
+            }
+            // v146: probeer wachtende Mollie→Robaws updates opnieuw
+            if (typeof this.processMollieRetryQueue === 'function') {
+                this.processMollieRetryQueue().catch(e => console.warn('[App] Mollie retry fout:', e));
             }
         }
     },
