@@ -6209,8 +6209,11 @@ const app = {
 
         if (result && result.status === 'paid') {
             console.log('[Mollie] betaling gelukt:', result.paymentId);
-            // GEEN mark-paid hier — Mollie's webhook stuurt het naar Robaws.
-            // App is ALLEEN een trigger, geen state-bron voor betalingen.
+            // v145: app triggert zelf de eForge webhook (Mollie's eigen webhook-
+            // service geeft 500 voor onze Tap-to-Pay payments — proberen of een
+            // directe POST wel werkt). Fire-and-forget — we wachten niet op
+            // antwoord want CORS kan de response verbergen.
+            this._triggerRobawsWebhook(result.paymentId);
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
             return;
         }
@@ -6229,6 +6232,35 @@ const app = {
         const msg = MollieAPI.statusToMessage(result);
         console.warn('[Mollie] betaling niet voltooid:', msg);
         this.showPaymentFailed(msg);
+    },
+
+    /** v145: roep de eForge / Robaws webhook proxy zelf aan met de payment-ID.
+     *  Mollie's eigen webhook-service geeft 500 voor onze Tap-to-Pay payments,
+     *  maar mogelijk werkt een directe POST wel omdat de eForge endpoint dan
+     *  geen tussenliggende validatie doet. Proberen eerst standaard fetch met
+     *  CORS; bij blocked-CORS valt fallback naar no-cors zodat de POST in elk
+     *  geval verstuurd is (we lezen het antwoord toch niet). */
+    async _triggerRobawsWebhook(paymentId) {
+        if (!paymentId) return;
+        if (!MollieAPI || !MollieAPI.WEBHOOK_URL) return;
+        const url = MollieAPI.WEBHOOK_URL;
+        const body = 'id=' + encodeURIComponent(paymentId);
+        const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+        // Poging 1: normale fetch (we kunnen de status zien)
+        try {
+            const res = await fetch(url, { method: 'POST', headers, body });
+            console.log('[Mollie] eForge webhook trigger →', res.status, res.statusText);
+            return;
+        } catch (e) {
+            console.warn('[Mollie] eForge webhook (CORS?) faalde:', e && e.message);
+        }
+        // Poging 2: no-cors — POST gaat door maar we kunnen de response niet lezen
+        try {
+            await fetch(url, { method: 'POST', headers, body, mode: 'no-cors' });
+            console.log('[Mollie] eForge webhook trigger (no-cors) verstuurd');
+        } catch (e) {
+            console.warn('[Mollie] eForge webhook no-cors faalde:', e && e.message);
+        }
     },
 
     // Gebruiker bevestigt handmatig dat de betaling gelukt is.
