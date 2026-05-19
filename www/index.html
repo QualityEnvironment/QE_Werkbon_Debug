@@ -953,77 +953,10 @@
 <!-- ========== SCAN-RESULTAAT OVERLAY (gevuld door app.js — card-stijl met animaties) ========== -->
 <div id="scanResult" style="display:none"></div>
 
-<!-- ========== v147: MOLLIE PAYMENT VERIFIER OVERLAY ========== -->
-<div id="mollieVerifyOverlay" style="display:none"></div>
-<style>
-/* Verifier-overlay — body-scroll lock klasse */
-body.qe-modal-lock { overflow: hidden !important; touch-action: none !important; }
+<!-- v151: Mollie verifier-overlay verwijderd — we vertrouwen direct op de
+     intent return van Mollie Tap (geen API-check meer nodig). De gewone
+     SUCCES/MISLUKT card uit v130 (showScanResult) doet alle UI. -->
 
-.qe-mollie-verify-backdrop {
-    position: fixed; inset: 0; z-index: 99999;
-    background: rgba(15, 23, 42, 0.65);
-    backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
-    display: flex; align-items: center; justify-content: center;
-    padding: 24px;
-    opacity: 0;
-    transition: opacity 200ms ease-out;
-    /* Vang ALLE scroll/touch zodat de gebruiker niet kan refreshen */
-    touch-action: none; overscroll-behavior: contain;
-}
-.qe-mollie-verify-backdrop.qe-show { opacity: 1; }
-.qe-mollie-verify-card {
-    background: #ffffff; border-radius: 22px;
-    box-shadow: 0 24px 60px rgba(0,0,0,0.32);
-    padding: 32px 26px 24px; max-width: 380px; width: 100%;
-    text-align: center;
-    transform: scale(0.9) translateY(12px); opacity: 0;
-    transition: transform 260ms cubic-bezier(0.18, 0.89, 0.32, 1.25), opacity 200ms ease-out;
-}
-.qe-mollie-verify-backdrop.qe-show .qe-mollie-verify-card {
-    transform: scale(1) translateY(0); opacity: 1;
-}
-.qe-mollie-spinner-wrap {
-    width: 84px; height: 84px;
-    background: rgba(26, 35, 126, 0.10);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    margin: 0 auto 18px;
-}
-.qe-mollie-spinner-wrap svg {
-    width: 56px; height: 56px; color: #1A237E;
-    animation: qeMollieSpin 0.9s linear infinite;
-}
-@keyframes qeMollieSpin { to { transform: rotate(360deg); } }
-.qe-mollie-verify-title {
-    font-size: 22px; font-weight: 700; color: #1A237E;
-    margin: 0 0 6px;
-}
-.qe-mollie-verify-msg {
-    font-size: 14px; color: #455a64; line-height: 1.5;
-    margin: 0 0 4px;
-}
-.qe-mollie-verify-sub {
-    font-size: 12px; color: #90a4ae; margin-top: 6px;
-    min-height: 18px;
-}
-.qe-mollie-verify-actions {
-    display: flex; flex-direction: column; gap: 8px;
-    margin-top: 22px;
-}
-.qe-mollie-verify-btn {
-    padding: 12px; border-radius: 10px; font-size: 15px; font-weight: 600;
-    cursor: pointer; border: none;
-}
-.qe-mollie-verify-btn-retry {
-    background: #1A237E; color: #fff;
-}
-.qe-mollie-verify-btn-cancel {
-    background: #fff; color: #c62828; border: 2px solid #ffcdd2;
-}
-.qe-mollie-verify-btn-cancel:hover, .qe-mollie-verify-btn-cancel:active {
-    background: #fff5f5;
-}
-</style>
 
 <!-- ========== v137: FLOATING ACTION BUTTON — Nieuwe werkbon (alleen techniekers, alleen op planning-tab) ========== -->
 <button id="newWoFab" type="button" onclick="app.openNewWorkOrderModal()" aria-label="Nieuwe werkbon"

@@ -6177,11 +6177,17 @@ const app = {
         // Geen polling/return URL handling — alles loopt via onMollieTapResult().
     },
 
-    /** Wordt aangeroepen vanuit MainActivity.onActivityResult na een Mollie Tap betaling.
-     *  v147: We vertrouwen NIET meer op de intent result als bron van waarheid —
-     *        we polled Mollie's REST API (GET /v2/payments/{id}) tot we een
-     *        definitieve status hebben. Reden: intent result is soms onvolledig
-     *        of geeft "mislukt" terwijl Mollie wel betaald is. */
+    /** v151: simpele, eerlijke intent-based detection.
+     *  Mollie Tap onActivityResult geeft ons via Java een result-object met:
+     *    { status, paymentId, referenceId, failureMessage, failureSupportCode,
+     *      signatureValid, canceled, hasData, resultCode, extrasKeys }
+     *  We vertrouwen daar 100% op — geen API check meer.
+     *
+     *  Statuswaarden volgens Mollie Tap docs:
+     *    - "paid"     → SUCCES + factuur op betaald in Robaws
+     *    - "failed"   → MISLUKT met failureMessage / supportCode
+     *    - geen status → user heeft Tap-app afgesloten zonder te betalen
+     */
     onMollieTapResult(result) {
         console.log('[Mollie intent result]', JSON.stringify(result));
         if (this._mollieHandled) return;
@@ -6189,298 +6195,85 @@ const app = {
 
         if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
 
+        // Context ophalen die we vóór de Tap-launch bewaarden
         const ctx = this._mollieContext
             || (() => { try { return JSON.parse(localStorage.getItem('qe_mollie_pending') || 'null'); } catch(_) { return null; } })()
             || {};
         try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
-
-        // Verwijder uit pending-payments — Mollie heeft de definitieve status,
-        // wij hoeven hem niet meer zelf bij te houden.
         if (this._removePendingPayment && ctx.invoiceId) {
             this._removePendingPayment(ctx.invoiceId);
         }
 
-        // v148: GEEN paymentId → kunnen niet via API verifiëren.
-        // Toon ALLE intent data zodat we kunnen zien wat Mollie Tap wel/niet stuurde.
-        if (!result || !result.paymentId) {
-            const debugLines = [];
-            debugLines.push('resultCode: ' + (result && result.resultCode));
-            debugLines.push('hasData: ' + (result && result.hasData));
-            if (result && result.extrasKeys && Object.keys(result.extrasKeys).length > 0) {
-                debugLines.push('Intent-extras: ' + JSON.stringify(result.extrasKeys));
-            } else {
-                debugLines.push('Intent-extras: (leeg)');
-            }
-            if (result && result.status) debugLines.push('status="' + result.status + '"');
-            if (result && result.failureMessage) debugLines.push('failureMessage="' + result.failureMessage + '"');
+        const status   = result && result.status;
+        const paymentId = result && result.paymentId;
+        const sigOk    = !(result && result.signatureValid === false);   // null/undefined/true = OK
+        const canceled = result && (result.canceled === true || result.resultCode === 0);
 
-            console.warn('[Mollie] geen paymentId — debug:', result);
-            this.showPaymentFailed(
-                'Geen payment ID ontvangen van Mollie Tap.\n\n' +
-                'DEBUG:\n' + debugLines.join('\n') + '\n\n' +
-                'Tip: als "Intent-extras" leeg is → Mollie Tap is nooit gestart of de intent ging verloren. ' +
-                'Als er WEL extras zijn maar geen paymentId → de Tap app gebruikt mogelijk een andere key-naam.'
-            );
-            return;
-        }
-
-        // v147: launch de verifier-overlay die via Mollie API de status checkt
-        this.startMollieVerification({
-            paymentId: result.paymentId,
-            ctx: ctx,
-            intentStatus: result.status,    // hint, maar API is bron van waarheid
-        });
-    },
-
-    // =====================================================================
-    // v147: MOLLIE PAYMENT VERIFIER OVERLAY (cancel + retry, modal-lock)
-    // =====================================================================
-
-    /** Polling state — we houden 'm op `this` zodat retry/cancel knoppen
-     *  toegang hebben tot dezelfde sessie. */
-    _mollieVerify: null,
-
-    /** Open de verifier-overlay en start het polling-process. */
-    startMollieVerification({ paymentId, ctx, intentStatus }) {
-        // Body scroll/refresh lock
-        document.body.classList.add('qe-modal-lock');
-
-        const overlay = document.getElementById('mollieVerifyOverlay');
-        if (!overlay) {
-            // Fallback — moet er zijn in v147 index.html
-            console.warn('[Mollie verify] overlay element ontbreekt — direct success/fail');
-            this._finishMollieVerification({ paymentId, ctx, status: intentStatus || 'unknown' });
-            return;
-        }
-
-        // Init state
-        this._mollieVerify = {
-            paymentId,
-            ctx,
-            startedAt: Date.now(),
-            attempt: 0,
-            cancelled: false,
-            roundTimer: null,
-            pollTimer: null,
-        };
-
-        overlay.style.display = 'flex';
-        overlay.className = 'qe-mollie-verify-backdrop';
-        overlay.innerHTML = `
-            <div class="qe-mollie-verify-card" id="mollieVerifyCard">
-                <div class="qe-mollie-spinner-wrap">
-                    <svg viewBox="0 0 50 50" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round">
-                        <circle cx="25" cy="25" r="20" stroke-opacity="0.18" />
-                        <path d="M25 5 a20 20 0 0 1 20 20" />
-                    </svg>
-                </div>
-                <h3 class="qe-mollie-verify-title">Betaling controleren</h3>
-                <p class="qe-mollie-verify-msg" id="mollieVerifyMsg">Even geduld — Mollie wordt gecontacteerd.</p>
-                <div class="qe-mollie-verify-sub" id="mollieVerifySub"></div>
-                <div class="qe-mollie-verify-actions" id="mollieVerifyActions">
-                    <button class="qe-mollie-verify-btn qe-mollie-verify-btn-cancel" onclick="app.cancelMollieVerification()">
-                        ✕ Annuleren
-                    </button>
-                </div>
-            </div>`;
-        // Verhinder dat scroll/touch op de backdrop door naar de body gaat
-        overlay.ontouchmove = (e) => e.preventDefault();
-        overlay.onwheel = (e) => e.preventDefault();
-
-        // eslint-disable-next-line no-unused-expressions
-        overlay.offsetWidth;
-        overlay.classList.add('qe-show');
-
-        // Start eerste 10s-ronde
-        this._startMollieVerifyRound();
-    },
-
-    /** Start een ronde van 10 seconden polling (elke 1.5s een API call). */
-    _startMollieVerifyRound() {
-        const v = this._mollieVerify;
-        if (!v || v.cancelled) return;
-        v.attempt++;
-        const subEl = document.getElementById('mollieVerifySub');
-        const actEl = document.getElementById('mollieVerifyActions');
-        if (subEl) subEl.textContent = v.attempt === 1
-            ? 'Status ophalen…'
-            : 'Opnieuw zoeken… (poging ' + v.attempt + ')';
-        if (actEl) {
-            // Tijdens ronde: alleen Annuleren
-            actEl.innerHTML = `
-                <button class="qe-mollie-verify-btn qe-mollie-verify-btn-cancel" onclick="app.cancelMollieVerification()">
-                    ✕ Annuleren
-                </button>`;
-        }
-
-        const roundStart = Date.now();
-        const ROUND_MS = 10000;
-        const POLL_MS  = 1500;
-
-        const pollOnce = async () => {
-            if (!this._mollieVerify || this._mollieVerify.cancelled) return;
-            const res = await MollieAPI.getPayment(this._mollieVerify.paymentId);
-            if (!this._mollieVerify || this._mollieVerify.cancelled) return;
-
-            if (res.ok && res.payment) {
-                const status = res.payment.status;
-                console.log('[Mollie verify] status:', status);
-                if (['paid', 'failed', 'canceled', 'expired'].includes(status)) {
-                    this._finishMollieVerification({
-                        paymentId: this._mollieVerify.paymentId,
-                        ctx: this._mollieVerify.ctx,
-                        status: status,
-                        payment: res.payment,
-                    });
-                    return;
-                }
-                // status open/pending → blijven pollen
-            } else if (res.status === 404) {
-                // Test API key kan live payment niet zien — meld dat duidelijk
-                this._showVerifierError(
-                    'Mollie API kan deze betaling niet vinden (404). ' +
-                    'Mogelijk staat de app op test-key maar is de betaling live.'
-                );
-                return;
-            } else if (res.status === 401) {
-                this._showVerifierError(
-                    'Mollie API key wordt geweigerd (401). ' +
-                    'Vraag Levi om de live API key in te stellen.'
-                );
-                return;
-            }
-            // Niet definitief → volgende poll
-            if (Date.now() - roundStart >= ROUND_MS) {
-                this._showRetryPrompt();
-                return;
-            }
-            v.pollTimer = setTimeout(pollOnce, POLL_MS);
-        };
-
-        // Eerste poll na korte vertraging zodat de overlay-animatie eerst loopt
-        v.pollTimer = setTimeout(pollOnce, 400);
-        // Hard cap als timer wedstrijd hangt
-        v.roundTimer = setTimeout(() => {
-            if (this._mollieVerify && !this._mollieVerify.cancelled) {
-                if (v.pollTimer) clearTimeout(v.pollTimer);
-                this._showRetryPrompt();
-            }
-        }, ROUND_MS + 500);
-    },
-
-    /** Toon de retry-knop na een verstreken 10s-ronde. */
-    _showRetryPrompt() {
-        const subEl = document.getElementById('mollieVerifySub');
-        const actEl = document.getElementById('mollieVerifyActions');
-        if (subEl) subEl.textContent = 'Nog steeds geen definitieve status. Probeer opnieuw of annuleer.';
-        if (actEl) {
-            actEl.innerHTML = `
-                <button class="qe-mollie-verify-btn qe-mollie-verify-btn-retry" onclick="app.retryMollieVerification()">
-                    🔄 Opnieuw zoeken (10s)
-                </button>
-                <button class="qe-mollie-verify-btn qe-mollie-verify-btn-cancel" onclick="app.cancelMollieVerification()">
-                    ✕ Annuleren
-                </button>`;
-        }
-    },
-
-    /** Toon een fatale fout in de verifier (bv. 401/404 die niet gaat verbeteren bij retry). */
-    _showVerifierError(text) {
-        const subEl = document.getElementById('mollieVerifySub');
-        const msgEl = document.getElementById('mollieVerifyMsg');
-        const actEl = document.getElementById('mollieVerifyActions');
-        if (msgEl) msgEl.textContent = 'Status check niet mogelijk';
-        if (subEl) { subEl.textContent = text; subEl.style.color = '#c62828'; }
-        if (actEl) {
-            actEl.innerHTML = `
-                <button class="qe-mollie-verify-btn qe-mollie-verify-btn-retry" onclick="app.retryMollieVerification()">
-                    🔄 Opnieuw proberen
-                </button>
-                <button class="qe-mollie-verify-btn qe-mollie-verify-btn-cancel" onclick="app.cancelMollieVerification()">
-                    ✕ Sluiten
-                </button>`;
-        }
-    },
-
-    retryMollieVerification() {
-        if (!this._mollieVerify || this._mollieVerify.cancelled) return;
-        // Reset sub-tekst kleur (kon rood zijn na error)
-        const subEl = document.getElementById('mollieVerifySub');
-        if (subEl) subEl.style.color = '';
-        this._startMollieVerifyRound();
-    },
-
-    cancelMollieVerification() {
-        if (!this._mollieVerify) {
-            this._closeMollieVerifyOverlay();
-            return;
-        }
-        this._mollieVerify.cancelled = true;
-        if (this._mollieVerify.pollTimer)  clearTimeout(this._mollieVerify.pollTimer);
-        if (this._mollieVerify.roundTimer) clearTimeout(this._mollieVerify.roundTimer);
-        const ctx = this._mollieVerify.ctx || {};
-        const pid = this._mollieVerify.paymentId;
-        this._closeMollieVerifyOverlay();
-        // Toon mislukt-scherm met optie om handmatig in Mollie te controleren
-        this.showPaymentFailed(
-            'Betaling status niet bevestigd via Mollie API. ' +
-            (pid ? 'Payment ID: ' + pid + '. ' : '') +
-            'Controleer manueel in het Mollie dashboard.'
-        );
-    },
-
-    _closeMollieVerifyOverlay() {
-        document.body.classList.remove('qe-modal-lock');
-        const overlay = document.getElementById('mollieVerifyOverlay');
-        if (!overlay) return;
-        overlay.classList.remove('qe-show');
-        setTimeout(() => {
-            overlay.style.display = 'none';
-            overlay.innerHTML = '';
-        }, 200);
-        this._mollieVerify = null;
-    },
-
-    /** Afsluiten met een definitieve status — toont success/fail + start Robaws-update bij paid. */
-    _finishMollieVerification({ paymentId, ctx, status, payment }) {
-        const v = this._mollieVerify;
-        if (v) {
-            if (v.pollTimer)  clearTimeout(v.pollTimer);
-            if (v.roundTimer) clearTimeout(v.roundTimer);
-        }
-        this._closeMollieVerifyOverlay();
-
+        // ── 1. SUCCES (status = paid) ──────────────────────────────────
         if (status === 'paid') {
-            console.log('[Mollie verify] PAID via API ✓', paymentId);
-            // Idempotency check
+            console.log('[Mollie] PAID:', paymentId, 'signature valid:', sigOk);
+
+            // Signature warning maar niet blokkerend — Mollie Tap heeft 'paid' al
+            // gerapporteerd, en de gebruiker ziet ook zelf de success-melding in de
+            // Tap app. Voor de admin loggen we het en zetten een toast achteraan.
+            if (!sigOk) {
+                console.warn('[Mollie] paid met ongeldige signature — toch verwerken');
+            }
+
+            // Toon SUCCES card (v130 design via showPaymentSuccess)
+            this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
+
+            // Idempotency-check: schrijf maar één keer naar Robaws per paymentId
             const dedupKey = 'qe_mollie_processed_' + paymentId;
-            const alreadyProcessed = (() => {
-                try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; }
-            })();
-            this.showPaymentSuccess((ctx && ctx.amount) || 0, (ctx && ctx.invoiceLogicId) || '');
-            if (!alreadyProcessed && ctx && ctx.invoiceId) {
+            const already = (() => { try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; } })();
+            if (!already && ctx.invoiceId) {
                 this._registerMolliePaymentInRobaws({
                     invoiceId:      ctx.invoiceId,
                     invoiceLogicId: ctx.invoiceLogicId,
                     amount:         ctx.amount,
                     paymentId:      paymentId,
-                    referenceId:    payment ? payment.metadata && payment.metadata.referenceId : null,
+                    referenceId:    result && result.referenceId,
                     dedupKey:       dedupKey,
                 });
+            }
+            if (!sigOk) {
+                setTimeout(() => this.toast(
+                    '⚠️ Signature mismatch op deze betaling — controleer in Mollie dashboard'
+                ), 2500);
             }
             return;
         }
 
-        // Niet-paid: toon foutreden uit Mollie response
-        const detail = payment && payment.details
-            ? (payment.details.failureMessage || payment.details.failureReason || '')
-            : '';
-        const msg = status === 'canceled' ? 'Klant heeft geannuleerd'
-                  : status === 'expired'  ? 'Betaling is verlopen'
-                  : status === 'failed'   ? ('Betaling geweigerd' + (detail ? ': ' + detail : ''))
-                  : 'Status: ' + status;
-        this.showPaymentFailed(msg);
+        // ── 2. MISLUKT (status = failed) ───────────────────────────────
+        if (status === 'failed') {
+            const reason = result.failureMessage || 'Betaling geweigerd';
+            const code   = result.failureSupportCode ? ' (' + result.failureSupportCode + ')' : '';
+            console.log('[Mollie] FAILED:', reason, code);
+            this.showPaymentFailed('Betaling mislukt: ' + reason + code);
+            return;
+        }
+
+        // ── 3. GEANNULEERD (geen status, user heeft Tap-app gesloten) ─
+        if (canceled || !status) {
+            console.log('[Mollie] CANCELED of geen status — gebruiker heeft Tap afgesloten');
+            this.showPaymentFailed(
+                'Betaling geannuleerd. De klant heeft de Mollie Tap-app afgesloten zonder te betalen.'
+            );
+            return;
+        }
+
+        // ── 4. ONBEKENDE STATUS (theoretisch onbereikbaar, maar veilig) ─
+        console.warn('[Mollie] onbekende status:', status, '— raw:', result);
+        this.showPaymentFailed(
+            'Onverwachte status van Mollie Tap: "' + status + '". Controleer in Mollie dashboard.'
+        );
     },
+
+    // =====================================================================
+    // v151: VERIFIER-OVERLAY VOLLEDIG VERWIJDERD
+    // We vertrouwen 100% op de intent return van Mollie Tap (zie
+    // onMollieTapResult hierboven). Geen Mollie API check meer.
+    // =====================================================================
 
     // v146: localStorage key voor de retry-queue van mislukte Robaws-updates.
     _MOLLIE_RETRY_KEY: 'qe_mollie_retry_queue',
