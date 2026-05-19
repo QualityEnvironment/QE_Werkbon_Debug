@@ -3529,6 +3529,103 @@ const RobawsAPI = {
         return await this.post(`work-orders/${workOrderId}/commute-entries`, body);
     },
 
+    // =============================================
+    // v137: KLANT ZOEKEN + AANMAKEN (technieker ad-hoc werkbon flow)
+    // =============================================
+
+    /**
+     * Live klantzoek voor de "+ Nieuwe werkbon" modal. Returns array van
+     * {id, name, email, tel, address, rawAddress}. Robaws-API doorzoekt op
+     * naam-, email- en btw-substrings.
+     */
+    async searchClients(query, limit = 15) {
+        const q = String(query || '').trim();
+        if (!q) return [];
+        const params = new URLSearchParams({ q, limit: String(limit) });
+        const res = await this.get('clients?' + params.toString());
+        const items = (res.data && res.data.items) || [];
+        return items.map(c => ({
+            id: c.id,
+            name: c.name || '',
+            email: c.email || '',
+            tel: c.tel || '',
+            address: c.address ? this.formatAddress(c.address) : '',
+            rawAddress: c.address || null,
+        }));
+    },
+
+    /**
+     * Maak een nieuwe klant aan in Robaws. Minimaal naam + adres-velden.
+     * Returns het volledige client-object van Robaws.
+     */
+    async createClient({ name, addressLine1, postalCode, city, country, email, tel }) {
+        if (!name || !String(name).trim()) throw new Error('Naam is verplicht');
+        const body = {
+            name: String(name).trim(),
+            address: {
+                addressLine1: addressLine1 || null,
+                postalCode:   postalCode || null,
+                city:         city || null,
+                country:      country || 'België',
+            },
+        };
+        if (email) body.email = String(email).trim();
+        if (tel)   body.tel   = String(tel).trim();
+        const res = await this.post('clients', body);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('Klant aanmaken faalde (HTTP ' + res.code + ')');
+        }
+        return res.data;
+    },
+
+    /**
+     * Maak een nieuwe sales-order (opdracht) aan voor een klant.
+     * Returns het volledige sales-order object.
+     */
+    async createSalesOrder({ clientId, title, assignedUserId, salesAgentUserId, address }) {
+        if (!clientId) throw new Error('clientId is verplicht');
+        const body = {
+            clientId: String(clientId),
+            title:    String(title || '').trim(),
+        };
+        if (assignedUserId)   body.assignedUserId   = String(assignedUserId);
+        if (salesAgentUserId) body.salesAgentUserId = String(salesAgentUserId);
+        if (address)          body.address          = address;
+        const res = await this.post('sales-orders', body);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('Order aanmaken faalde (HTTP ' + res.code + ')');
+        }
+        return res.data;
+    },
+
+    /**
+     * Maak een nieuw planning-item (dagplanning) aan voor een werknemer.
+     * startDate/endDate moeten ISO-strings met UTC offset zijn.
+     */
+    async createPlanningItem({
+        salesOrderId, clientId, employeeIds, startDate, endDate,
+        summary, description, address, hourTypeId, planningTypeId,
+    }) {
+        const body = {};
+        if (summary)        body.summary        = String(summary);
+        if (description)    body.description    = String(description);
+        if (salesOrderId)   body.salesOrderId   = String(salesOrderId);
+        if (clientId)       body.clientId       = String(clientId);
+        if (Array.isArray(employeeIds) && employeeIds.length) {
+            body.employeeIds = employeeIds.map(String);
+        }
+        if (startDate)      body.startDate      = startDate;
+        if (endDate)        body.endDate        = endDate;
+        if (address)        body.address        = address;
+        if (hourTypeId != null)     body.hourTypeId     = String(hourTypeId);
+        if (planningTypeId != null) body.planningTypeId = String(planningTypeId);
+        const res = await this.post('planning-items', body);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('Dagplanning aanmaken faalde (HTTP ' + res.code + ')');
+        }
+        return res.data;
+    },
+
     /**
      * Haal Tijdsregistratie-werkbonnen op voor de huidige user, voor een
      * bepaalde maand (YYYY-MM). Filter op assignedUserId zodat techniekers

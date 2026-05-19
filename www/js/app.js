@@ -1393,6 +1393,18 @@ const app = {
         if (screenId === 'screenUitgevoerd') this.loadUitgevoerd();
         if (screenId === 'screenDagoverzicht') this.loadDagoverzicht();
         if (screenId === 'screenClock') this.onNavigateToClock();
+
+        // v137: toon FAB enkel op planning-tab + niet voor monteurs
+        this._updateNewWoFabVisibility();
+    },
+
+    /** v137: bepaalt of de + Nieuwe-werkbon FAB zichtbaar moet zijn. */
+    _updateNewWoFabVisibility() {
+        const fab = document.getElementById('newWoFab');
+        if (!fab) return;
+        const onPlanning = this.currentScreen === 'screenPlanning';
+        const allowed    = this.currentUser && this._activeRole() !== 'monteur';
+        fab.style.display = (onPlanning && allowed) ? 'flex' : 'none';
     },
 
     goBack() {
@@ -8243,6 +8255,252 @@ const app = {
             terugEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
             heenEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') terugEl.focus(); });
         });
+    },
+
+    // =====================================================================
+    // v137: NIEUWE WERKBON (ad-hoc, voor techniekers wanneer klant belt)
+    // =====================================================================
+
+    /** State voor de "+ Nieuwe werkbon" modal. */
+    _newWo: null,
+
+    openNewWorkOrderModal() {
+        if (!this.currentUser || this._activeRole() === 'monteur') {
+            this.toast('Niet beschikbaar voor monteurs');
+            return;
+        }
+        this._newWo = {
+            selectedClient: null,
+            useNewClient: false,
+            searchTimer: null,
+        };
+        const m = document.getElementById('newWoModal');
+        if (!m) return;
+        document.getElementById('newWoClientStep').style.display = '';
+        document.getElementById('newWoSelectedStep').style.display = 'none';
+        document.getElementById('newWoNewClientFields').style.display = 'none';
+        document.getElementById('newWoClientSearch').value = '';
+        document.getElementById('newWoClientResults').style.display = 'none';
+        document.getElementById('newWoClientResults').innerHTML = '';
+        document.getElementById('newWoNewClientPrompt').style.display = 'none';
+        document.getElementById('newWoNewClientName').value = '';
+        document.getElementById('newWoNewClientStreet').value = '';
+        document.getElementById('newWoNewClientZip').value = '';
+        document.getElementById('newWoNewClientCity').value = '';
+        document.getElementById('newWoNewClientTel').value = '';
+        document.getElementById('newWoReason').value = '';
+        document.getElementById('newWoStatus').textContent = '';
+        document.getElementById('newWoStatus').className = 'qe-newwo-status';
+        document.getElementById('newWoSubmitBtn').disabled = true;
+
+        const sIn = document.getElementById('newWoClientSearch');
+        sIn.oninput = () => this._newWoOnSearchInput();
+        document.getElementById('newWoReason').oninput = () => this._newWoUpdateSubmitState();
+        ['newWoNewClientName', 'newWoNewClientStreet', 'newWoNewClientZip', 'newWoNewClientCity'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.oninput = () => this._newWoUpdateSubmitState();
+        });
+
+        m.style.display = 'flex';
+        // eslint-disable-next-line no-unused-expressions
+        m.offsetWidth;
+        m.classList.add('qe-show');
+        setTimeout(() => sIn.focus(), 200);
+    },
+
+    closeNewWorkOrderModal() {
+        const m = document.getElementById('newWoModal');
+        if (!m) return;
+        m.classList.remove('qe-show');
+        setTimeout(() => { m.style.display = 'none'; }, 220);
+        if (this._newWo && this._newWo.searchTimer) clearTimeout(this._newWo.searchTimer);
+        this._newWo = null;
+    },
+
+    _newWoOnSearchInput() {
+        if (!this._newWo) return;
+        if (this._newWo.searchTimer) clearTimeout(this._newWo.searchTimer);
+        const q = document.getElementById('newWoClientSearch').value.trim();
+        const resultsEl = document.getElementById('newWoClientResults');
+        const promptEl  = document.getElementById('newWoNewClientPrompt');
+        if (q.length < 2) {
+            resultsEl.style.display = 'none';
+            resultsEl.innerHTML = '';
+            promptEl.style.display = 'none';
+            return;
+        }
+        this._newWo.searchTimer = setTimeout(async () => {
+            resultsEl.innerHTML = '<div style="padding:10px;font-size:13px;color:#90a4ae;text-align:center">Zoeken…</div>';
+            resultsEl.style.display = 'block';
+            promptEl.style.display = 'none';
+            try {
+                const matches = await RobawsAPI.searchClients(q, 15);
+                this._newWoRenderResults(matches);
+            } catch (e) {
+                console.warn('[App] klant-zoek faalde:', e && e.message);
+                resultsEl.innerHTML = '<div style="padding:10px;font-size:13px;color:#c62828;text-align:center">Zoeken mislukt — probeer opnieuw</div>';
+                promptEl.style.display = 'block';
+            }
+        }, 300);
+    },
+
+    _newWoRenderResults(matches) {
+        const resultsEl = document.getElementById('newWoClientResults');
+        const promptEl  = document.getElementById('newWoNewClientPrompt');
+        if (!matches || matches.length === 0) {
+            resultsEl.innerHTML = '<div style="padding:10px;font-size:13px;color:#90a4ae;text-align:center">Geen klanten gevonden</div>';
+            resultsEl.style.display = 'block';
+            promptEl.style.display = 'block';
+            return;
+        }
+        resultsEl.innerHTML = matches.map((c, i) => `
+            <div class="qe-newwo-result" data-idx="${i}">
+                <div class="name">${this._escapeHtml(c.name)}</div>
+                ${c.address ? `<div class="addr">${this._escapeHtml(c.address)}</div>` : ''}
+            </div>
+        `).join('');
+        Array.from(resultsEl.querySelectorAll('.qe-newwo-result')).forEach((el, i) => {
+            el.addEventListener('click', () => this._newWoSelectClient(matches[i]));
+        });
+        resultsEl.style.display = 'block';
+        promptEl.style.display = 'block';
+    },
+
+    _newWoSelectClient(client) {
+        if (!this._newWo) return;
+        this._newWo.selectedClient = client;
+        this._newWo.useNewClient = false;
+        document.getElementById('newWoClientStep').style.display = 'none';
+        document.getElementById('newWoNewClientFields').style.display = 'none';
+        document.getElementById('newWoSelectedStep').style.display = '';
+        const pill = document.getElementById('newWoSelectedClient');
+        pill.innerHTML = '🏢 ' + this._escapeHtml(client.name)
+            + (client.address ? ' <span style="opacity:0.65;font-weight:400;font-size:12px">— ' + this._escapeHtml(client.address) + '</span>' : '')
+            + ' <span class="x" title="Wissen" onclick="app._newWoClearSelection()">✕</span>';
+        this._newWoUpdateSubmitState();
+        setTimeout(() => document.getElementById('newWoReason').focus(), 50);
+    },
+
+    _newWoClearSelection() {
+        if (!this._newWo) return;
+        this._newWo.selectedClient = null;
+        this._newWo.useNewClient = false;
+        document.getElementById('newWoClientStep').style.display = '';
+        document.getElementById('newWoSelectedStep').style.display = 'none';
+        document.getElementById('newWoNewClientFields').style.display = 'none';
+        document.getElementById('newWoClientSearch').value = '';
+        document.getElementById('newWoClientResults').style.display = 'none';
+        document.getElementById('newWoClientResults').innerHTML = '';
+        document.getElementById('newWoNewClientPrompt').style.display = 'none';
+        this._newWoUpdateSubmitState();
+        setTimeout(() => document.getElementById('newWoClientSearch').focus(), 50);
+    },
+
+    newWoSwitchToNewClient() {
+        if (!this._newWo) return;
+        this._newWo.useNewClient = true;
+        this._newWo.selectedClient = null;
+        document.getElementById('newWoClientStep').style.display = 'none';
+        document.getElementById('newWoSelectedStep').style.display = '';
+        document.getElementById('newWoNewClientFields').style.display = '';
+        const pill = document.getElementById('newWoSelectedClient');
+        pill.innerHTML = '＋ Nieuwe klant <span class="x" title="Wissen" onclick="app._newWoClearSelection()">✕</span>';
+        const q = document.getElementById('newWoClientSearch').value.trim();
+        if (q) document.getElementById('newWoNewClientName').value = q;
+        this._newWoUpdateSubmitState();
+        setTimeout(() => document.getElementById('newWoNewClientName').focus(), 50);
+    },
+
+    _newWoUpdateSubmitState() {
+        if (!this._newWo) return;
+        const btn = document.getElementById('newWoSubmitBtn');
+        const reason = document.getElementById('newWoReason').value.trim();
+        let ok = reason.length >= 3;
+        if (this._newWo.selectedClient) {
+            // OK
+        } else if (this._newWo.useNewClient) {
+            const n = document.getElementById('newWoNewClientName').value.trim();
+            const s = document.getElementById('newWoNewClientStreet').value.trim();
+            const z = document.getElementById('newWoNewClientZip').value.trim();
+            const c = document.getElementById('newWoNewClientCity').value.trim();
+            ok = ok && n.length >= 2 && s.length >= 2 && z.length >= 3 && c.length >= 2;
+        } else {
+            ok = false;
+        }
+        btn.disabled = !ok;
+    },
+
+    async submitNewWorkOrder() {
+        if (!this._newWo) return;
+        const statusEl = document.getElementById('newWoStatus');
+        const btn = document.getElementById('newWoSubmitBtn');
+        statusEl.className = 'qe-newwo-status';
+        statusEl.textContent = '';
+
+        const reason = document.getElementById('newWoReason').value.trim();
+        if (!reason) { statusEl.textContent = 'Vul een reden in'; return; }
+
+        btn.disabled = true;
+        const setStep = (txt) => { statusEl.textContent = txt; };
+
+        try {
+            let client = this._newWo.selectedClient;
+            let addressForOrder = null;
+            if (this._newWo.useNewClient) {
+                setStep('Klant aanmaken…');
+                const name   = document.getElementById('newWoNewClientName').value.trim();
+                const street = document.getElementById('newWoNewClientStreet').value.trim();
+                const zip    = document.getElementById('newWoNewClientZip').value.trim();
+                const city   = document.getElementById('newWoNewClientCity').value.trim();
+                const tel    = document.getElementById('newWoNewClientTel').value.trim();
+                const created = await RobawsAPI.createClient({
+                    name, addressLine1: street, postalCode: zip, city, country: 'België', tel,
+                });
+                client = { id: created.id, name: created.name, rawAddress: created.address };
+                addressForOrder = created.address || { addressLine1: street, postalCode: zip, city, country: 'België' };
+            } else if (client && client.rawAddress) {
+                addressForOrder = client.rawAddress;
+            }
+
+            if (!client || !client.id) throw new Error('Geen klant geselecteerd');
+
+            setStep('Order aanmaken…');
+            const order = await RobawsAPI.createSalesOrder({
+                clientId: client.id,
+                title: reason,
+                assignedUserId: this.currentUser.robawsUserId,
+                salesAgentUserId: this.currentUser.robawsUserId,
+                address: addressForOrder,
+            });
+            if (!order || !order.id) throw new Error('Order kreeg geen ID terug');
+
+            setStep('Dagplanning aanmaken…');
+            const now = new Date();
+            const end = new Date(now.getTime() + 60 * 60 * 1000);
+            const fmt = (d) => d.toISOString();
+            await RobawsAPI.createPlanningItem({
+                salesOrderId: order.id,
+                clientId: client.id,
+                employeeIds: [String(this.currentUser.robawsEmployeeId)],
+                startDate: fmt(now),
+                endDate:   fmt(end),
+                summary: reason,
+                description: reason,
+                address: addressForOrder,
+            });
+
+            statusEl.className = 'qe-newwo-status ok';
+            statusEl.textContent = '✓ Werkbon aangemaakt!';
+            setTimeout(() => {
+                this.closeNewWorkOrderModal();
+                this.toast('Werkbon aangemaakt: ' + reason);
+                try { this.loadPlanning(); } catch(_) {}
+            }, 600);
+        } catch (e) {
+            console.warn('[App] nieuwe werkbon maken faalde:', e);
+            statusEl.textContent = '✗ ' + (e && e.message || 'onbekende fout');
+            btn.disabled = false;
+        }
     },
 
     /** v128: zorg dat de scan-overlay CSS-keyframes 1x geïnjecteerd zijn. */
