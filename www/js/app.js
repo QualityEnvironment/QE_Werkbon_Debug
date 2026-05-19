@@ -6133,7 +6133,10 @@ const app = {
         }
         const inv = invoiceResult.invoice;
         const amountCents = Math.round(parseFloat(inv.totalInclVat) * 100);
-        const description = 'Factuur ' + (inv.logicId || inv.id) + ' — QE Werkbon';
+        // v143: description = ENKEL factuur-logicId (bv "F20252853") zodat
+        // de Mollie ↔ Robaws auto-koppeling de factuur automatisch op
+        // "betaald" zet (Robaws matcht op factuurnummer in description).
+        const description = inv.logicId || inv.id || 'QE Werkbon';
         const workOrderId = this.currentWO ? this.currentWO.id : null;
 
         // Context bewaren voor de result-handler (intent kan onze app kill'en)
@@ -6176,9 +6179,11 @@ const app = {
 
     /** Wordt aangeroepen vanuit MainActivity.onActivityResult na een Mollie Tap betaling.
      *  Resultaat-object met velden: { canceled, status, paymentId, referenceId,
-     *  failureMessage, failureSupportCode, signatureValid, resultCode }. */
+     *  failureMessage, failureSupportCode, signatureValid, resultCode }.
+     *  v143: app zet NIET zelf de factuur op betaald — Mollie webhook → Robaws doet dat.
+     *        Signature mismatch is een warning ipv hard fail. */
     onMollieTapResult(result) {
-        console.log('[Mollie result]', result);
+        console.log('[Mollie result]', JSON.stringify(result));
         if (this._mollieHandled) return;
         this._mollieHandled = true;
 
@@ -6189,29 +6194,38 @@ const app = {
             || {};
         try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
 
-        // Signature-validatie waarschuwing (paid status met ongeldige signature = verdacht)
+        // Verwijder uit pending-payments — Mollie heeft de definitieve status,
+        // wij hoeven hem niet meer zelf bij te houden.
+        if (this._removePendingPayment && ctx.invoiceId) {
+            this._removePendingPayment(ctx.invoiceId);
+        }
+
+        // Signature-mismatch met paid status: log warning maar toon WEL success.
+        // Mollie's webhook regelt de definitieve factuur-koppeling, dus zelfs
+        // bij een signature edge case is de payment in Mollie bewezen geldig.
         if (result && result.status === 'paid' && result.signatureValid === false) {
-            console.warn('[Mollie] paid status met ONGELDIGE signature — niet vertrouwen');
-            this.showPaymentFailed('Betaling ongeldig (signature mismatch) — controleer in Mollie dashboard');
-            return;
+            console.warn('[Mollie] paid maar signature ongeldig — toch tonen als gelukt (webhook is bron van waarheid)');
         }
 
         if (result && result.status === 'paid') {
             console.log('[Mollie] betaling gelukt:', result.paymentId);
-            // Markeer factuur als betaald in Robaws (best-effort)
-            if (ctx.invoiceId) {
-                fetch('api/payment.php?action=mark-paid', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ invoiceId: ctx.invoiceId }),
-                }).catch(() => {});
-                if (this._removePendingPayment) this._removePendingPayment(ctx.invoiceId);
-            }
+            // GEEN mark-paid hier — Mollie's webhook stuurt het naar Robaws.
+            // App is ALLEEN een trigger, geen state-bron voor betalingen.
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
             return;
         }
 
-        // Niet-paid → toon foutreden
+        // Status ontbreekt helemaal? Dat is "interrupted" — niet noodzakelijk fout.
+        if (!result || !result.status) {
+            console.warn('[Mollie] geen status in result — flow afgebroken?');
+            this.showPaymentFailed(
+                'Betaling onderbroken. Controleer in Mollie dashboard — als de betaling toch slaagde, ' +
+                'past Mollie de factuur automatisch aan via webhook.'
+            );
+            return;
+        }
+
+        // Expliciet failed/canceled/expired → toon foutreden
         const msg = MollieAPI.statusToMessage(result);
         console.warn('[Mollie] betaling niet voltooid:', msg);
         this.showPaymentFailed(msg);
