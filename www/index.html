@@ -217,15 +217,12 @@
             <div id="urcodeInfo" style="font-size:12px;color:var(--qe-grey);margin-top:4px"></div>
         </div>
 
-        <!-- Onderhoud checkbox -->
-        <div class="card mb-16" id="onderhoudSection" style="display:flex;align-items:center;gap:12px;padding:12px 16px">
-            <span style="font-size:16px">🔧</span>
-            <label for="onderhoudCheckbox" style="font-size:14px;font-weight:500;flex:1;cursor:pointer">Onderhoud</label>
-            <div style="display:flex;align-items:center;gap:6px">
-                <input type="checkbox" id="onderhoudCheckbox" onchange="app.toggleOnderhoud(this.checked)"
-                       style="width:20px;height:20px;cursor:pointer;accent-color:var(--qe-purple)">
-                <span style="font-size:12px;color:var(--qe-grey)" id="onderhoudLabel">Werkuren worden gefactureerd</span>
-            </div>
+        <!-- v138: Onderhoud-vinkje verwijderd (zie task #2). Section blijft als
+             hidden stub om bestaande JS-referenties (toggleOnderhoud, restoreOnderhoud)
+             zonder errors te laten draaien. -->
+        <div class="card mb-16" id="onderhoudSection" style="display:none">
+            <input type="checkbox" id="onderhoudCheckbox" style="display:none">
+            <span id="onderhoudLabel" style="display:none"></span>
         </div>
 
         <!-- Timer -->

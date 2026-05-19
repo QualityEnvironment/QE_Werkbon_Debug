@@ -1344,13 +1344,16 @@ const RobawsAPI = {
     // PLANNING
     // =============================================
     async getPlanning(employeeId, date, userId = null) {
-        // v112: ook gisteren toestaan zodat de date-strip met 3 chips
-        // (gisteren/vandaag/morgen) werkt. Eerder viel gisteren door de
-        // whitelist en kreeg de gebruiker vandaag-planning te zien.
+        // v138: GEEN whitelist meer — elke datum wordt geaccepteerd en strikt
+        // gefilterd. Voorheen werd elke datum buiten {gisteren, vandaag, morgen}
+        // gereset naar today wat ervoor zorgde dat morgen-chip soms vandaag-
+        // items toonde (race condition bij middernacht-overgang).
+        // Cutoff is de eerste van vandaag-1d zodat we minimaal gisteren laden
+        // maar ook verder terug indien `date` ouder is.
+        const today    = this._localDateStr();
         const yesterday = this._localDateStr(null, -1);
-        const today = this._localDateStr();
-        const tomorrow = this._localDateStr(null, 1);
-        if (date !== yesterday && date !== today && date !== tomorrow) date = today;
+        const cutoff   = (date && date < yesterday) ? date : yesterday;
+        console.log('[getPlanning] gevraagd voor date=' + date + ' (today=' + today + ', cutoff=' + cutoff + ')');
 
         // Haal planning items op met paginatie
         let allItems = [];
@@ -1368,21 +1371,20 @@ const RobawsAPI = {
 
             allItems = allItems.concat(items);
 
-            // Stop als we voorbij de oudste mogelijke datum zijn.
-            // v112: vergelijken met `yesterday` (was `today`) — anders worden
-            // gisteren-items vroegtijdig afgekapt.
+            // Stop als we voorbij de cutoff (= oudste relevante datum) zijn
             const lastDate = (items[items.length - 1].startDate || '').split('T')[0];
-            if (lastDate < yesterday) break;
+            if (lastDate < cutoff) break;
 
             totalPages = result.data.totalPages || 1;
             page++;
         } while (page < totalPages);
 
-        // Filter op datum
+        // Strikt filter op datum — exact equal match
         let filtered = allItems.filter(item => {
             const itemDate = (item.startDate || '').split('T')[0];
             return itemDate === date;
         });
+        console.log('[getPlanning] ' + filtered.length + ' items na filter op ' + date + ' (uit ' + allItems.length + ' geladen)');
 
         // Sorteer op startDate (vroegste eerst)
         filtered.sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
@@ -3115,10 +3117,65 @@ const RobawsAPI = {
     },
 
     /** v83: hourTypeId waarden voor uursoort in Robaws time-entries.
-     *  Zie GET /work-orders/{id}/time-entries response — werkuren=1, overuren=2. */
+     *  Zie GET /work-orders/{id}/time-entries response — werkuren=1, overuren=2.
+     *  v138: weekend-versies worden runtime opgehaald via _loadWeekendHourTypeIds. */
     HOUR_TYPE_IDS: {
         werkuren: 1,
         overuren: 2,
+        werkurenZaterdag: null,
+        werkurenZondag:   null,
+        overurenZaterdag: null,
+        overurenZondag:   null,
+    },
+
+    /** v138: probeer Robaws's hour-types endpoint en cache namen → IDs. */
+    _weekendHourTypesLoaded: false,
+    async _loadWeekendHourTypeIds() {
+        if (this._weekendHourTypesLoaded) return;
+        this._weekendHourTypesLoaded = true;   // markeer direct om re-tries te vermijden
+        try {
+            const res = await this.get('hour-types?limit=50');
+            if (res.code !== 200) {
+                console.warn('[RobawsAPI] hour-types endpoint gaf', res.code);
+                return;
+            }
+            const items = (res.data && res.data.items) || res.data || [];
+            const byName = {};
+            for (const ht of items) {
+                const n = (ht.name || '').toLowerCase().trim();
+                if (n && ht.id != null) byName[n] = ht.id;
+            }
+            if (byName['werkuren zaterdag']) this.HOUR_TYPE_IDS.werkurenZaterdag = byName['werkuren zaterdag'];
+            if (byName['werkuren zondag'])   this.HOUR_TYPE_IDS.werkurenZondag   = byName['werkuren zondag'];
+            if (byName['overuren zaterdag']) this.HOUR_TYPE_IDS.overurenZaterdag = byName['overuren zaterdag'];
+            if (byName['overuren zondag'])   this.HOUR_TYPE_IDS.overurenZondag   = byName['overuren zondag'];
+            console.log('[RobawsAPI] weekend hourTypes:', this.HOUR_TYPE_IDS);
+        } catch(e) {
+            console.warn('[RobawsAPI] hour-types lookup faalde:', e && e.message);
+        }
+    },
+
+    /** v138: voor een gegeven hourTypeId en datum (YYYY-MM-DD), geef de juiste
+     *  weekend-variant terug als de datum een zaterdag of zondag is.
+     *  Werkt enkel als de weekend-IDs gevonden zijn — anders blijft origineel. */
+    async getWeekendAdjustedHourTypeId(hourTypeId, dateStr) {
+        if (!hourTypeId || !dateStr) return hourTypeId;
+        await this._loadWeekendHourTypeIds();
+        const day = new Date(String(dateStr) + 'T12:00:00').getDay();
+        if (day !== 0 && day !== 6) return hourTypeId;
+        const base = String(hourTypeId);
+        const isWerk = base === String(this.HOUR_TYPE_IDS.werkuren);
+        const isOver = base === String(this.HOUR_TYPE_IDS.overuren);
+        if (!isWerk && !isOver) return hourTypeId;
+        const target = isWerk
+            ? (day === 6 ? this.HOUR_TYPE_IDS.werkurenZaterdag : this.HOUR_TYPE_IDS.werkurenZondag)
+            : (day === 6 ? this.HOUR_TYPE_IDS.overurenZaterdag : this.HOUR_TYPE_IDS.overurenZondag);
+        if (target) {
+            console.log('[RobawsAPI] weekend-adjust hourTypeId ' + hourTypeId + ' → ' + target + ' (day=' + day + ')');
+            return target;
+        }
+        console.warn('[RobawsAPI] geen weekend hourTypeId gevonden — gebruik default ' + hourTypeId);
+        return hourTypeId;
     },
 
     /** v83/v95: mobilityTypeId waarden voor commute-entries in Robaws.
@@ -3344,9 +3401,13 @@ const RobawsAPI = {
         const {
             workOrderId, employeeId, startTime, endTime, breakMinutes, articleId,
             // v83 nieuwe parameters:
-            hourTypeId,        // 1 = werkuren, 2 = overuren (HOUR_TYPE_IDS)
-            hoursOverride,     // expliciete uren (voor compensatie-entries zonder tijden)
+            hourTypeId: rawHourTypeId,  // 1 = werkuren, 2 = overuren (HOUR_TYPE_IDS)
+            hoursOverride,              // expliciete uren (voor compensatie-entries zonder tijden)
+            date,                       // v138: optioneel — datum voor weekend-adjust (default = today)
         } = opts;
+        // v138: op zaterdag/zondag → werkuren/overuren-zaterdag/zondag variant
+        const dateForAdjust = date || this._localDateStr();
+        const hourTypeId = await this.getWeekendAdjustedHourTypeId(rawHourTypeId, dateForAdjust);
         const te = {
             employeeId: String(employeeId),
             articleId: String(articleId),
@@ -3533,18 +3594,62 @@ const RobawsAPI = {
     // v137: KLANT ZOEKEN + AANMAKEN (technieker ad-hoc werkbon flow)
     // =============================================
 
+    // Caches alle Robaws clients voor 10 min zodat klant-search instant is.
+    _allClientsCache: null,        // {at: timestamp, items: [...]}
+    _allClientsCacheMs: 10 * 60 * 1000,
+
+    /** Haal (en cache) alle Robaws-klanten paginerend op. */
+    async _fetchAllClientsCached() {
+        const now = Date.now();
+        if (this._allClientsCache && (now - this._allClientsCache.at) < this._allClientsCacheMs) {
+            return this._allClientsCache.items;
+        }
+        const all = [];
+        let page = 0;
+        const MAX_PAGES = 20;      // ~2000 clients ruim genoeg voor QE
+        do {
+            const res = await this.get(`clients?limit=100&page=${page}`);
+            const items = (res.data && res.data.items) || [];
+            if (items.length === 0) break;
+            all.push(...items);
+            page++;
+            if (page >= (res.data.totalPages || 1)) break;
+        } while (page < MAX_PAGES);
+        this._allClientsCache = { at: now, items: all };
+        console.log('[RobawsAPI] _fetchAllClientsCached:', all.length, 'klanten geladen');
+        return all;
+    },
+
     /**
-     * Live klantzoek voor de "+ Nieuwe werkbon" modal. Returns array van
-     * {id, name, email, tel, address, rawAddress}. Robaws-API doorzoekt op
-     * naam-, email- en btw-substrings.
+     * Live klantzoek voor de "+ Nieuwe werkbon" modal. Robaws's `?q=`-filter
+     * werkt niet betrouwbaar voor clients → we doen client-side substring match
+     * op naam, email en telefoon. Cache met 10 min TTL maakt het snel.
      */
     async searchClients(query, limit = 15) {
-        const q = String(query || '').trim();
-        if (!q) return [];
-        const params = new URLSearchParams({ q, limit: String(limit) });
-        const res = await this.get('clients?' + params.toString());
-        const items = (res.data && res.data.items) || [];
-        return items.map(c => ({
+        const q = String(query || '').trim().toLowerCase();
+        if (!q || q.length < 2) return [];
+        const all = await this._fetchAllClientsCached();
+        const matches = [];
+        for (const c of all) {
+            if (matches.length >= limit) break;
+            const name  = (c.name  || '').toLowerCase();
+            const email = (c.email || '').toLowerCase();
+            const tel   = (c.tel   || '').toLowerCase();
+            const addr  = c.address ? this.formatAddress(c.address).toLowerCase() : '';
+            if (name.includes(q) || email.includes(q) || tel.includes(q) || addr.includes(q)) {
+                matches.push(c);
+            }
+        }
+        // Sorteer: name-startsWith zaken eerst, dan rest
+        matches.sort((a, b) => {
+            const an = (a.name || '').toLowerCase();
+            const bn = (b.name || '').toLowerCase();
+            const aStarts = an.startsWith(q) ? 0 : 1;
+            const bStarts = bn.startsWith(q) ? 0 : 1;
+            if (aStarts !== bStarts) return aStarts - bStarts;
+            return an.localeCompare(bn);
+        });
+        return matches.map(c => ({
             id: c.id,
             name: c.name || '',
             email: c.email || '',

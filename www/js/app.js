@@ -2772,34 +2772,21 @@ const app = {
     },
 
     // ========================================
-    // ONDERHOUD — werkuren niet factureren
+    // v138: ONDERHOUD-vinkje verwijderd — alle data.onderhoud blijft false.
+    // Functies bestaan nog als no-ops voor backwards-compat met bestaande oproepen.
     // ========================================
     toggleOnderhoud(checked) {
-        if (!this.currentWO) return;
-        const data = this.woData[this.currentWO.id];
-        data.onderhoud = checked;
-        const label = document.getElementById('onderhoudLabel');
-        if (label) {
-            label.textContent = checked
-                ? 'Werkuren worden NIET gefactureerd'
-                : 'Werkuren worden gefactureerd';
-            label.style.color = checked ? 'var(--qe-purple)' : 'var(--qe-grey)';
-            label.style.fontWeight = checked ? '600' : '400';
+        // No-op — feature verwijderd in v138.
+        if (this.currentWO && this.woData[this.currentWO.id]) {
+            this.woData[this.currentWO.id].onderhoud = false;
         }
-        this._saveWoData();
     },
 
     _restoreOnderhoud() {
-        if (!this.currentWO) return;
-        const section = document.getElementById('onderhoudSection');
-        // Monteurs mogen geen onderhoud aanvinken
-        const isMonteur = this.currentUser && this.currentUser.role === 'monteur';
-        if (section) section.style.display = isMonteur ? 'none' : 'flex';
-        if (isMonteur) return;
-        const data = this.woData[this.currentWO.id];
-        const cb = document.getElementById('onderhoudCheckbox');
-        if (cb) cb.checked = !!data.onderhoud;
-        this.toggleOnderhoud(!!data.onderhoud);
+        // No-op — section is hidden in HTML. Force onderhoud = false.
+        if (this.currentWO && this.woData[this.currentWO.id]) {
+            this.woData[this.currentWO.id].onderhoud = false;
+        }
     },
 
     // ========================================
@@ -4083,11 +4070,19 @@ const app = {
         const client = this.currentWO.client || {};
         const warnings = [];
 
-        // Kritiek
-        if (!data.hours || data.hours.filter(h => h.type === 'klant').length === 0) {
-            warnings.push({ level: 'error', msg: 'Geen werkuren geregistreerd' });
+        // v138: uren-verplichting alleen voor monteurs. Techniekers/bureel mogen
+        // zonder uren versturen (bv. korte oproep zonder factureerbare tijd).
+        const isMonteur = this.isMonteur();
+        const noHours = !data.hours || data.hours.filter(h => h.type === 'klant').length === 0;
+        if (noHours) {
+            if (isMonteur) {
+                warnings.push({ level: 'error', msg: 'Geen werkuren geregistreerd' });
+            } else {
+                warnings.push({ level: 'info', msg: 'Geen werkuren — werkbon wordt zonder uren verstuurd' });
+            }
         }
-        if (!this.selectedUurcode) {
+        // Uurcode-check alleen relevant als er WEL werkuren zijn
+        if (!noHours && !this.selectedUurcode) {
             warnings.push({ level: 'error', msg: 'Geen uurcode geselecteerd' });
         }
 
