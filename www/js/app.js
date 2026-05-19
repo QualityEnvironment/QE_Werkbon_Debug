@@ -5439,7 +5439,8 @@ const app = {
                 '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
                 '<div style="font-size:18px;color:#1A237E;font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
                 '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
-                mkBtnHtml('Viva wallet',   '💳', 'Viva Wallet (terminal)') +
+                mkBtnHtml('Mollie Tap',    '💳', 'Bancontact / kaart (Mollie Tap)') +
+                mkBtnHtml('Viva wallet',   '💳', 'Viva Wallet (legacy)') +
                 mkBtnHtml('Cash',          '💵', 'Cash') +
                 mkBtnHtml('Overschrijving','🏦', 'Overschrijving ter plaatse') +
                 mkBtnHtml('Via factuur',   '📋', 'Via factuur') +
@@ -5483,7 +5484,12 @@ const app = {
 
         if (sameMethod) {
             // Zelfde methode → gewoon het oude betaalscherm openen (als er één is)
-            if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
+            if (newMethod === 'Mollie Tap' && ctx.invoiceResult) {
+                // v141: retry de Mollie Tap betaling
+                this.payWithMollieTap(ctx.invoiceResult).catch(e => {
+                    this.toast('Mollie retry faalde: ' + (e && e.message || e));
+                });
+            } else if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
                 this.showOverschrijvingScreen(ctx.invoiceResult);
@@ -5529,7 +5535,12 @@ const app = {
             this.toast('Betaalmethode → ' + newMethod);
 
             // Open nieuw betaalscherm waar relevant — anders terug naar Uitgevoerd
-            if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
+            if (newMethod === 'Mollie Tap' && ctx.invoiceResult) {
+                // v141: start direct de Mollie Tap betaling
+                this.payWithMollieTap(ctx.invoiceResult).catch(e => {
+                    this.toast('Mollie betaling kon niet starten: ' + (e && e.message || e));
+                });
+            } else if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
                 this.showOverschrijvingScreen(ctx.invoiceResult);
@@ -6141,29 +6152,36 @@ const app = {
             // Persist over app-restart (voor het geval Mollie Tap onze app kill't)
             try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
 
-            const checkoutUrl = payment._links && payment._links.checkout && payment._links.checkout.href;
-            if (!checkoutUrl) throw new Error('Mollie gaf geen checkout-URL terug');
+            // v141: voor POS-payments met terminalId geeft Mollie GEEN checkout-URL
+            // terug — de payment wordt direct naar de terminal-app gepushed
+            // (Mollie Tap toont notificatie + bedrag automatisch). Toch proberen
+            // we alle bekende link-varianten te launchen voor zekerheid.
+            const links = payment._links || {};
+            const possibleUrl =
+                (links.checkout && links.checkout.href)
+             || (links.deeplink && links.deeplink.href)
+             || (links.terminalDeepLink && links.terminalDeepLink.href)
+             || (links.mobileAppCheckout && links.mobileAppCheckout.href)
+             || null;
+            console.log('[Mollie] payment links:', Object.keys(links), 'launch URL:', possibleUrl || '(geen)');
 
             // Toon "wacht op betaling" overlay
             if (typeof this.showScanLoading === 'function') {
-                this.showScanLoading('Wacht op betaling via Mollie Tap…');
+                this.showScanLoading('Bedrag wordt op de terminal getoond — laat de klant betalen…');
             }
 
-            // Launch Mollie Tap-app via Java bridge
-            let launched = false;
-            try {
-                if (typeof QEBridge !== 'undefined' && QEBridge.openMollieTap) {
-                    launched = QEBridge.openMollieTap(checkoutUrl);
-                }
-            } catch(e) {
-                console.warn('[Mollie] bridge faalde:', e && e.message);
+            // Probeer de Tap-app te launchen als we een URL hebben
+            if (possibleUrl) {
+                try {
+                    if (typeof QEBridge !== 'undefined' && QEBridge.openMollieTap) {
+                        QEBridge.openMollieTap(possibleUrl);
+                    }
+                } catch(e) { console.warn('[Mollie] launch faalde:', e && e.message); }
             }
-            if (!launched) {
-                // Geen Tap app → val terug op browser intent (Android probeert URL te openen)
-                try { window.location.href = checkoutUrl; } catch(_) {}
-            }
+            // Zonder URL: vertrouwen op Mollie's push naar de terminal-app
+            // (klant ziet bedrag automatisch op het Mollie Tap-toestel)
 
-            // Achtergrond-poll als veiligheidsnet (in case redirect niet vuurt)
+            // Polling is altijd nodig (geen redirect bij POS-payments)
             this._mollieBackgroundPoll(payment.id);
         } catch (e) {
             if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
@@ -7339,7 +7357,8 @@ const app = {
                         localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
                     } catch(_) {}
 
-                    const methodIcon = method === 'Viva wallet' ? '💳'
+                    const methodIcon = method === 'Mollie Tap' ? '💳'
+                        : method === 'Viva wallet' ? '💳'
                         : method === 'Cash' ? '💵'
                         : method.startsWith('Overschrijving') ? '🏦'
                         : method === 'Via factuur' ? '📋'
@@ -7362,7 +7381,8 @@ const app = {
                         const cInv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
                         const amount = parseFloat(cInv.totalInclVat || 0).toFixed(2);
                         const method = ctx.paymentMethod || '?';
-                        const methodIcon = method === 'Viva wallet' ? '💳'
+                        const methodIcon = method === 'Mollie Tap' ? '💳'
+                            : method === 'Viva wallet' ? '💳'
                             : method === 'Cash' ? '💵'
                             : method.startsWith('Overschrijving') ? '🏦'
                             : '📋';
