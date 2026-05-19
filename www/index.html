@@ -571,10 +571,16 @@
     <div id="wbPaymentMethodSection" class="werkbon-summary mb-16">
         <div class="ws-header">Betaalmethode</div>
         <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px" id="paymentMethodBtns">
+            <!-- v139: Mollie Tap-to-Pay als primaire kaart-optie -->
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Mollie Tap"
+                onclick="app.selectPaymentMethod('Mollie Tap')"
+                style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
+                💳 Bancontact / kaart (Mollie Tap)
+            </button>
             <button class="btn btn-outline btn-full payment-method-btn" data-method="Viva wallet"
                 onclick="app.selectPaymentMethod('Viva wallet')"
                 style="padding:14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start">
-                💳 Viva Wallet (terminal)
+                💳 Viva Wallet (legacy terminal)
             </button>
             <button class="btn btn-outline btn-full payment-method-btn" data-method="Cash"
                 onclick="app.selectPaymentMethod('Cash')"
@@ -1122,6 +1128,7 @@
 <!-- API modules (moeten VOOR app.js geladen worden) -->
 <script src="js/robaws-api.js"></script>
 <script src="js/viva-api.js"></script>
+<script src="js/mollie-api.js"></script>
 <script src="js/api-bridge.js"></script>
 <!-- Onderhoud data (zone/gemeente mapping + artikelcatalogus) -->
 <script src="js/onderhoud-data.js"></script>
