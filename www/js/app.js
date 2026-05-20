@@ -6148,6 +6148,10 @@ const app = {
         };
         try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
         this._mollieHandled = false;
+        // v154: auto-return tracking — reset bij elke nieuwe launch
+        this._mollieAutoReturnAttempted = false;
+        this._mollieManualFallbackShown = false;
+        this._mollieLaunchedAt = Date.now();
 
         // Bouw payload
         const payload = MollieAPI.buildPaymentRequest({
@@ -6192,6 +6196,14 @@ const app = {
         console.log('[Mollie intent result]', JSON.stringify(result));
         if (this._mollieHandled) return;
         this._mollieHandled = true;
+
+        // v154: opruim de manuele fallback-knoppen (als die er stonden) — die
+        // zitten in de scan-loading card en worden hieronder met hideScanLoading
+        // verborgen, maar voor de zekerheid expliciet verwijderen.
+        try {
+            const stray = document.querySelectorAll('.mollie-manual-fallback');
+            stray.forEach(n => n.remove());
+        } catch(_) {}
 
         if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
 
@@ -6266,6 +6278,144 @@ const app = {
         console.warn('[Mollie] onbekende status:', status, '— raw:', result);
         this.showPaymentFailed(
             'Onverwachte status van Mollie Tap: "' + status + '". Controleer in Mollie dashboard.'
+        );
+    },
+
+    // =====================================================================
+    // v154: AUTO-RETURN naar Mollie Tap wanneer onze app voorgrond komt
+    // zonder dat de intent-result is binnengekomen. Mollie Tap finish()'t
+    // soms niet correct → onze WebView blijft hangen op de spinner. Door
+    // Tap automatisch terug naar voren te brengen (FLAG_REORDER_TO_FRONT)
+    // krijgt Tap een nieuwe kans z'n setResult+finish() uit te voeren.
+    //
+    // Flow:
+    //   1. payWithMollieTap zet _mollieAutoReturnAttempted=false
+    //   2. Java onResume → app.onAppResumed()
+    //   3. Wacht 1.5s (geef intent result alsnog kans)
+    //   4. Nog niets? → bringMollieTapToFront() + flag op true
+    //   5. Wacht 3s extra
+    //   6. Nog steeds niets? → Manuele Bevestig/Annuleer knoppen in spinner
+    // =====================================================================
+    onAppResumed() {
+        // Geen actieve Mollie betaling → niets te doen
+        if (!this._mollieContext) return;
+        if (this._mollieHandled) return;
+
+        // Onmiddellijk na launch (< 2s) genegeerd — we krijgen 'n onResume bij
+        // onze eigen launch waarna Tap pas naar voren komt
+        const sinceLaunch = Date.now() - (this._mollieLaunchedAt || 0);
+        if (sinceLaunch < 2000) {
+            console.log('[Mollie] onAppResumed te vroeg (' + sinceLaunch + 'ms na launch) — skip');
+            return;
+        }
+
+        if (this._mollieAutoReturnAttempted) {
+            // Al 1× geprobeerd → toon manuele fallback knoppen na 3s
+            this._scheduleMollieManualFallback();
+            return;
+        }
+
+        console.log('[Mollie] onAppResumed zonder result — wacht 1.5s, dan auto-return naar Tap');
+        // Wacht 1.5s — geef intent result alsnog een kans
+        setTimeout(() => {
+            if (this._mollieHandled) return;
+            this._mollieAutoReturnAttempted = true;
+            try {
+                if (typeof QEBridge !== 'undefined' && QEBridge.bringMollieTapToFront) {
+                    const ok = QEBridge.bringMollieTapToFront();
+                    console.log('[Mollie] bringMollieTapToFront →', ok);
+                }
+            } catch (e) {
+                console.warn('[Mollie] bringMollieTapToFront fout:', e && e.message);
+            }
+            // Plan de manuele fallback na 3s
+            this._scheduleMollieManualFallback();
+        }, 1500);
+    },
+
+    /** Plan de manuele bevestig/annuleer knoppen wanneer auto-return geen
+     *  resultaat oplevert binnen 3 seconden. Wordt 1× geplaatst per flow. */
+    _scheduleMollieManualFallback() {
+        if (this._mollieManualFallbackShown) return;
+        this._mollieManualFallbackShown = true;
+        setTimeout(() => {
+            if (this._mollieHandled) return;
+            this._showMollieManualFallback();
+        }, 3000);
+    },
+
+    /** Toon manuele Bevestig/Annuleer knoppen in de scan-loading overlay,
+     *  voor het geval Mollie Tap nooit een result intent terugstuurt. */
+    _showMollieManualFallback() {
+        if (this._mollieHandled) return;
+        console.log('[Mollie] manuele fallback knoppen tonen');
+
+        const overlay = document.getElementById('scanLoading');
+        const card = overlay && overlay.querySelector('.qe-scan-card');
+        if (card) {
+            // Update bestaande titel/melding zodat 't duidelijk is dat er iets mis is
+            const title = card.querySelector('.qe-scan-title');
+            if (title) { title.textContent = 'Geen antwoord van Mollie Tap'; title.classList.remove('loading'); }
+            const msg = card.querySelector('.qe-scan-msg');
+            if (msg) msg.textContent = 'Was de betaling gelukt?';
+            const sub = card.querySelector('.qe-scan-sub');
+            if (sub) sub.textContent = 'Bevestig hieronder of annuleer';
+            const iconWrap = card.querySelector('.qe-scan-icon-wrap');
+            if (iconWrap) iconWrap.classList.remove('loading');
+
+            // Zoek bestaand fallback-blok om dubbele toevoeging te vermijden
+            let block = card.querySelector('.mollie-manual-fallback');
+            if (!block) {
+                block = document.createElement('div');
+                block.className = 'mollie-manual-fallback';
+                block.style.cssText = 'margin-top:18px;display:flex;gap:10px;justify-content:center;width:100%';
+                block.innerHTML =
+                    '<button id="mollieManualOk" type="button" style="flex:1;padding:12px;background:#10b981;color:#fff;border:none;border-radius:10px;font-weight:600;font-size:15px;cursor:pointer">✓ Ja, gelukt</button>'
+                    + '<button id="mollieManualFail" type="button" style="flex:1;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:10px;font-weight:600;font-size:15px;cursor:pointer">✕ Nee, annuleren</button>';
+                card.appendChild(block);
+                const okBtn = block.querySelector('#mollieManualOk');
+                const failBtn = block.querySelector('#mollieManualFail');
+                if (okBtn) okBtn.addEventListener('click', () => this._handleMollieManualConfirm());
+                if (failBtn) failBtn.addEventListener('click', () => this._handleMollieManualCancel());
+            }
+            return;
+        }
+        // Geen overlay gevonden → native fallback
+        if (confirm('Mollie Tap geeft geen antwoord.\nWas de betaling gelukt?')) {
+            this._handleMollieManualConfirm();
+        } else {
+            this._handleMollieManualCancel();
+        }
+    },
+
+    /** Manuele bevestiging: behandel alsof status='paid' met enkel referenceId
+     *  (we hebben geen paymentId omdat Mollie Tap nooit antwoordde). */
+    _handleMollieManualConfirm() {
+        if (this._mollieHandled) return;
+        console.log('[Mollie] MANUELE BEVESTIGING — geen paymentId, alleen referenceId');
+        // Bouw een synthetisch result dat onMollieTapResult begrijpt
+        const refId = 'manual_' + Date.now();
+        this.onMollieTapResult({
+            status: 'paid',
+            paymentId: refId,        // gebruikt voor dedup en Robaws-referentie
+            referenceId: refId,
+            signatureValid: true,
+            _manual: true,
+        });
+    },
+
+    /** Manuele annulering: toon failed-card met duidelijke uitleg. */
+    _handleMollieManualCancel() {
+        if (this._mollieHandled) return;
+        console.log('[Mollie] MANUELE ANNULERING');
+        this._mollieHandled = true;
+        if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
+        try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
+        if (this._removePendingPayment && this._mollieContext && this._mollieContext.invoiceId) {
+            this._removePendingPayment(this._mollieContext.invoiceId);
+        }
+        this.showPaymentFailed(
+            'Geen antwoord van Mollie Tap. Controleer in Mollie dashboard of de betaling toch is doorgekomen.'
         );
     },
 
