@@ -6214,79 +6214,82 @@ const app = {
         this._startMolliePolling();
     },
 
-    /** v155: poll de Cloudflare Worker tot de webhook binnen is. Stopt automatisch
-     *  als _mollieHandled true wordt (intent result kwam eerder binnen, of een
-     *  ander pad heeft de betaling al afgerond). */
+    /** v159: ULTRA-PERSISTENT POLLING.
+     *  Gebruikt setInterval (niet recursief setTimeout) zodat zelfs als
+     *  Android throttling toeslaat tijdens de Tap-betaling, de polling op
+     *  onze "1 seconde"-cadans hervat zodra de WebView weer mag draaien.
+     *  Geen max-duration meer — stopt alleen bij _mollieHandled of expliciete
+     *  _stopMolliePolling(). De manuele "Annuleer"-knop blijft als noodrem. */
     _startMolliePolling() {
         // Stop een eventueel lopende polling
-        if (this._molliePollTimer) {
-            clearTimeout(this._molliePollTimer);
-            this._molliePollTimer = null;
-        }
+        this._stopMolliePolling();
         const ctx = this._mollieContext;
         if (!ctx || !ctx.referenceId) {
             console.warn('[Mollie poll] geen context/referenceId — skip polling');
             return;
         }
-        console.log('[Mollie poll] start polling voor', ctx.referenceId);
+        console.log('[Mollie poll] START continue polling (1s) voor', ctx.referenceId);
+        this._molliePollStartedAt = Date.now();
+        this._molliePollTickCount = 0;
+        // setInterval — Android pause't dit in background; bij resume blijft
+        // het op z'n 1s-ritme tikken. Veel betrouwbaarder dan recursief
+        // setTimeout dat moeten worden bijgehouden.
+        this._molliePollTimer = setInterval(() => this._molliePollTick(), 1000);
+        // Eerste tick onmiddellijk (niet wachten op interval)
+        this._molliePollTick();
+    },
 
-        const startedAt = Date.now();
-        const MAX_DURATION_MS = 60_000;   // v157: 60s — Tap-betalingen kunnen 30+s duren
-        const INTERVAL_MS     = 2_000;    // elke 2 s
-        const INITIAL_DELAY   = 3_000;    // eerste poll na 3 s (geef Tap tijd)
-
-        const tick = async () => {
-            if (this._mollieHandled) {
-                console.log('[Mollie poll] al afgehandeld — stop');
-                return;
-            }
-            if (Date.now() - startedAt > MAX_DURATION_MS) {
-                console.log('[Mollie poll] timeout (30s) — stop polling');
-                return;
-            }
-
-            let data = null;
-            try {
-                data = await MollieAPI.fetchPaymentStatus({
-                    referenceId: ctx.referenceId,
-                    description: ctx.description,
-                });
-            } catch (e) {
-                console.warn('[Mollie poll] fetch fout:', e && e.message);
-            }
-
-            if (this._mollieHandled) return;
-
-            if (data && data.found && (data.status === 'paid' || data.status === 'failed')) {
-                console.log('[Mollie poll] webhook-status binnen:', data.status, 'robawsMarked:', data.robawsMarked);
-                // Bouw een synthetic result dat onMollieTapResult begrijpt
-                this.onMollieTapResult({
-                    status:             data.status,
-                    paymentId:          data.paymentId || ('webhook_' + Date.now()),
-                    referenceId:        data.referenceId || ctx.referenceId,
-                    failureMessage:     data.failureMessage || null,
-                    failureSupportCode: data.failureSupportCode || null,
-                    signatureValid:     true,    // webhook is server-side al geverifieerd
-                    robawsMarked:       data.robawsMarked === true,
-                    robawsError:        data.robawsError || null,
-                    _source:            'webhook-poll',
-                });
-                return;
-            }
-
-            // Nog pending → plan volgende tick
-            this._molliePollTimer = setTimeout(tick, INTERVAL_MS);
-        };
-
-        // Eerste tick na initial delay
-        this._molliePollTimer = setTimeout(tick, INITIAL_DELAY);
+    async _molliePollTick() {
+        const ctx = this._mollieContext;
+        if (!ctx || !ctx.referenceId) {
+            this._stopMolliePolling();
+            return;
+        }
+        if (this._mollieHandled) {
+            this._stopMolliePolling();
+            return;
+        }
+        this._molliePollTickCount = (this._molliePollTickCount || 0) + 1;
+        const elapsed = ((Date.now() - this._molliePollStartedAt) / 1000).toFixed(1);
+        // Heartbeat-log elke 5 ticks zodat we kunnen zien of polling daadwerkelijk draait
+        if (this._molliePollTickCount % 5 === 1) {
+            console.log('[Mollie poll] tick #' + this._molliePollTickCount + ' (' + elapsed + 's)');
+        }
+        let data = null;
+        try {
+            data = await MollieAPI.fetchPaymentStatus({
+                referenceId: ctx.referenceId,
+                description: ctx.description,
+            });
+        } catch (e) {
+            console.warn('[Mollie poll] fetch fout:', e && e.message);
+        }
+        if (this._mollieHandled) {
+            this._stopMolliePolling();
+            return;
+        }
+        if (data && data.found && (data.status === 'paid' || data.status === 'failed')) {
+            console.log('[Mollie poll] webhook-status binnen na tick #' + this._molliePollTickCount + ':', data.status, 'robawsMarked:', data.robawsMarked);
+            this.onMollieTapResult({
+                status:             data.status,
+                paymentId:          data.paymentId || ('webhook_' + Date.now()),
+                referenceId:        data.referenceId || ctx.referenceId,
+                failureMessage:     data.failureMessage || null,
+                failureSupportCode: data.failureSupportCode || null,
+                signatureValid:     true,
+                robawsMarked:       data.robawsMarked === true,
+                robawsError:        data.robawsError || null,
+                _source:            'webhook-poll',
+            });
+        }
     },
 
     /** Stop polling — aangeroepen wanneer een ander pad de betaling afhandelt. */
     _stopMolliePolling() {
         if (this._molliePollTimer) {
-            clearTimeout(this._molliePollTimer);
+            clearInterval(this._molliePollTimer);
             this._molliePollTimer = null;
+            console.log('[Mollie poll] STOP polling');
         }
     },
 
@@ -6450,17 +6453,29 @@ const app = {
         this._mollieLastResumeAt = now;
         this._mollieResumeInFlight = true;
 
-        // v157/v158: AGGRESSIVE IMMEDIATE POLL bij elke resume-trigger
-        // (Java onResume, visibilitychange, focus). Polling-timers worden in
-        // Android background geschorst, dus we kunnen niet wachten op een tick.
-        console.log('[Mollie] onAppResumed → immediate Worker poll');
-        this._pollMollieStatusNow().then(found => {
+        // v159: bij resume triggeren we direct een snelle burst van polls
+        // (0, 0.5s, 1.5s, 3s) zodat we de KV-write 100% zeker oppikken zelfs
+        // als de WebView net wakker is. De continue setInterval-poll loopt
+        // verder als de burst niets vindt.
+        console.log('[Mollie] onAppResumed → burst poll');
+        const burst = async () => {
+            for (const delay of [0, 500, 1500, 3000]) {
+                if (delay) await new Promise(r => setTimeout(r, delay));
+                if (this._mollieHandled) return true;
+                const found = await this._pollMollieStatusNow();
+                if (found) return true;
+            }
+            return false;
+        };
+        burst().then(found => {
             this._mollieResumeInFlight = false;
             if (found || this._mollieHandled) return;
-            // Status nog niet binnen → herstart polling timer + plan fallback
-            console.log('[Mollie] geen status na immediate poll — herstart polling + fallback flow');
-            this._startMolliePolling();   // reset 60s window vanaf nu
-
+            console.log('[Mollie] burst klaar, geen status — continue polling loopt door');
+            // Als de continue polling om wat voor reden ook gestopt was,
+            // herstart 'm hier voor de zekerheid.
+            if (!this._molliePollTimer) {
+                this._startMolliePolling();
+            }
             if (this._mollieAutoReturnAttempted) {
                 this._scheduleMollieManualFallback();
                 return;
