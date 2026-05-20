@@ -62,10 +62,17 @@ const MollieAPI = {
         const referenceId = invoiceId
             ? ('inv_' + invoiceId + '_' + Date.now())
             : ('qe_' + (workOrderId || 'unknown') + '_' + Date.now());
+        const appId = this.getAppId();
+        // v163: redirectUrl gebruikt onze eigen deep-link scheme zodat Mollie's
+        // post-payment "redirect" specifiek onze app aanroept (geen
+        // disambiguation-dialog meer, geen duplicate task).
+        const isDebug = appId.endsWith('.debug');
+        const redirectScheme = isDebug ? 'qewerkbondebug' : 'qewerkbon';
         const payload = {
             amount: { currency: 'EUR', value },
-            appId: this.getAppId(),
+            appId: appId,
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
+            redirectUrl: redirectScheme + '://mollie-payment-complete',
             referenceId: referenceId.slice(0, 255),
             secretId: this.getPosId(),
             // v144: webhook URL meegeven zodat Mollie de Robaws-connector pingt
