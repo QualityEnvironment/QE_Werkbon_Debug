@@ -6187,6 +6187,7 @@ const app = {
         // v154: auto-return tracking — reset bij elke nieuwe launch
         this._mollieAutoReturnAttempted = false;
         this._mollieManualFallbackShown = false;
+        this._mollieBounceAttempted = false;   // v161
         this._mollieLaunchedAt = Date.now();
 
         if (typeof this.showScanLoading === 'function') {
@@ -6476,30 +6477,31 @@ const app = {
         burst().then(found => {
             this._mollieResumeInFlight = false;
             if (found || this._mollieHandled) return;
-            console.log('[Mollie] burst klaar, geen status — continue polling loopt door');
-            // Als de continue polling om wat voor reden ook gestopt was,
-            // herstart 'm hier voor de zekerheid.
+            console.log('[Mollie] burst klaar, geen status — start ontdooi-bounce');
+            // v161: Als continue polling om wat voor reden gestopt was, herstart 'm.
             if (!this._molliePollTimer) {
                 this._startMolliePolling();
             }
-            if (this._mollieAutoReturnAttempted) {
-                this._scheduleMollieManualFallback();
-                return;
-            }
-            // Eerste keer: probeer Tap terug naar voren te brengen
-            setTimeout(() => {
-                if (this._mollieHandled) return;
-                this._mollieAutoReturnAttempted = true;
-                try {
-                    if (typeof QEBridge !== 'undefined' && QEBridge.bringMollieTapToFront) {
-                        const ok = QEBridge.bringMollieTapToFront();
-                        console.log('[Mollie] bringMollieTapToFront →', ok);
+            // v161: WAKE-UP BOUNCE — 1× per Mollie-flow.
+            // De user heeft bewezen dat manueel minimize+heropen de bevroren
+            // WebView ontdooit. We simuleren dat programmatisch: korte flits
+            // naar home, dan automatisch terug. Triggert volledige lifecycle.
+            if (!this._mollieBounceAttempted) {
+                this._mollieBounceAttempted = true;
+                setTimeout(() => {
+                    if (this._mollieHandled) return;
+                    try {
+                        if (typeof QEBridge !== 'undefined' && QEBridge.bounceTaskToWakeUp) {
+                            console.log('[Mollie] → bounceTaskToWakeUp');
+                            QEBridge.bounceTaskToWakeUp();
+                        }
+                    } catch (e) {
+                        console.warn('[Mollie] bounce fout:', e && e.message);
                     }
-                } catch (e) {
-                    console.warn('[Mollie] bringMollieTapToFront fout:', e && e.message);
-                }
-                this._scheduleMollieManualFallback();
-            }, 1500);
+                }, 1000);  // 1s zodat een laat-arriverende status nog vóór de bounce binnen kan komen
+            }
+            // Manuele fallback alleen na lange wachttijd zodat alles z'n kans krijgt.
+            this._scheduleMollieManualFallback();
         }).catch(() => { this._mollieResumeInFlight = false; });
     },
 
