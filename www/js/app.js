@@ -6234,7 +6234,7 @@ const app = {
             if (this._mollieHandled) return;
 
             if (data && data.found && (data.status === 'paid' || data.status === 'failed')) {
-                console.log('[Mollie poll] webhook-status binnen:', data.status);
+                console.log('[Mollie poll] webhook-status binnen:', data.status, 'robawsMarked:', data.robawsMarked);
                 // Bouw een synthetic result dat onMollieTapResult begrijpt
                 this.onMollieTapResult({
                     status:             data.status,
@@ -6243,6 +6243,8 @@ const app = {
                     failureMessage:     data.failureMessage || null,
                     failureSupportCode: data.failureSupportCode || null,
                     signatureValid:     true,    // webhook is server-side al geverifieerd
+                    robawsMarked:       data.robawsMarked === true,
+                    robawsError:        data.robawsError || null,
                     _source:            'webhook-poll',
                 });
                 return;
@@ -6321,14 +6323,20 @@ const app = {
             // Toon SUCCES card (v130 design via showPaymentSuccess)
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
 
-            // v155: als het result via de Worker-poll kwam, heeft de Worker
-            // de factuur al op betaald gezet in Robaws. Skip de duplicate call.
-            const fromWebhook = result && result._source === 'webhook-poll';
+            // v155: als het result via de Worker-poll kwam EN de Worker heeft
+            // de factuur al gemarkeerd, kunnen we de app's Robaws-call skippen.
+            // Anders (intent result, OF Worker faalde op Robaws): app doet het zelf.
+            const fromWebhook    = result && result._source === 'webhook-poll';
+            const workerMarked   = !!(result && result.robawsMarked);
+            const skipAppRobaws  = fromWebhook && workerMarked;
 
             // Idempotency-check: schrijf maar één keer naar Robaws per paymentId
             const dedupKey = 'qe_mollie_processed_' + paymentId;
             const already = (() => { try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; } })();
-            if (!already && ctx.invoiceId && !fromWebhook) {
+            if (!already && ctx.invoiceId && !skipAppRobaws) {
+                if (fromWebhook && !workerMarked) {
+                    console.log('[Mollie] Worker heeft Robaws niet kunnen markeren — app doet het alsnog', result.robawsError);
+                }
                 this._registerMolliePaymentInRobaws({
                     invoiceId:      ctx.invoiceId,
                     invoiceLogicId: ctx.invoiceLogicId,
@@ -6337,7 +6345,7 @@ const app = {
                     referenceId:    result && result.referenceId,
                     dedupKey:       dedupKey,
                 });
-            } else if (fromWebhook) {
+            } else if (skipAppRobaws) {
                 console.log('[Mollie] success via Worker-poll — Robaws-update al door Worker gedaan');
                 try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
                 setTimeout(() => this.toast('✓ Factuur ' + (ctx.invoiceLogicId || '') + ' op betaald'), 1200);
