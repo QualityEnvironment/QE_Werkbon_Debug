@@ -6139,21 +6139,7 @@ const app = {
         const description = inv.logicId || inv.id || 'QE Werkbon';
         const workOrderId = this.currentWO ? this.currentWO.id : null;
 
-        // Context bewaren voor de result-handler (intent kan onze app kill'en)
-        this._mollieContext = {
-            invoiceId: inv.id,
-            amount: parseFloat(inv.totalInclVat),
-            invoiceLogicId: inv.logicId || '',
-            ogm: inv.paymentInstruction || '',
-        };
-        try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
-        this._mollieHandled = false;
-        // v154: auto-return tracking — reset bij elke nieuwe launch
-        this._mollieAutoReturnAttempted = false;
-        this._mollieManualFallbackShown = false;
-        this._mollieLaunchedAt = Date.now();
-
-        // Bouw payload
+        // Bouw payload (vóór context-bewaren zodat we de referenceId mee kunnen pakken)
         const payload = MollieAPI.buildPaymentRequest({
             amountCents,
             description,
@@ -6161,6 +6147,23 @@ const app = {
             invoiceId: inv.id,
         });
         console.log('[Mollie] payload:', payload);
+
+        // Context bewaren voor de result-handler (intent kan onze app kill'en)
+        this._mollieContext = {
+            invoiceId: inv.id,
+            amount: parseFloat(inv.totalInclVat),
+            invoiceLogicId: inv.logicId || '',
+            ogm: inv.paymentInstruction || '',
+            // v155: bewaar referenceId + description voor Worker-polling
+            referenceId: payload.referenceId,
+            description: payload.description,
+        };
+        try { localStorage.setItem('qe_mollie_pending', JSON.stringify(this._mollieContext)); } catch(_) {}
+        this._mollieHandled = false;
+        // v154: auto-return tracking — reset bij elke nieuwe launch
+        this._mollieAutoReturnAttempted = false;
+        this._mollieManualFallbackShown = false;
+        this._mollieLaunchedAt = Date.now();
 
         if (typeof this.showScanLoading === 'function') {
             this.showScanLoading('Mollie Tap openen…');
@@ -6177,8 +6180,88 @@ const app = {
             if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
             this.showPaymentFailed('Mollie Tap app niet gevonden of niet geïnstalleerd');
             setTimeout(() => this.showPaymentScreen(invoiceResult), 5000);
+            return;
         }
-        // Geen polling/return URL handling — alles loopt via onMollieTapResult().
+
+        // v155: start Worker-polling — vangt het scenario op waarin Mollie Tap
+        // de intent NIET terugstuurt (gedocumenteerd: "intent might not return
+        // if the payment process is interrupted"). Mollie pingt onze Worker met
+        // de webhook, Worker bewaart status in KV, app polled die KV.
+        this._startMolliePolling();
+    },
+
+    /** v155: poll de Cloudflare Worker tot de webhook binnen is. Stopt automatisch
+     *  als _mollieHandled true wordt (intent result kwam eerder binnen, of een
+     *  ander pad heeft de betaling al afgerond). */
+    _startMolliePolling() {
+        // Stop een eventueel lopende polling
+        if (this._molliePollTimer) {
+            clearTimeout(this._molliePollTimer);
+            this._molliePollTimer = null;
+        }
+        const ctx = this._mollieContext;
+        if (!ctx || !ctx.referenceId) {
+            console.warn('[Mollie poll] geen context/referenceId — skip polling');
+            return;
+        }
+        console.log('[Mollie poll] start polling voor', ctx.referenceId);
+
+        const startedAt = Date.now();
+        const MAX_DURATION_MS = 30_000;   // 30 s totaal
+        const INTERVAL_MS     = 2_000;    // elke 2 s
+        const INITIAL_DELAY   = 3_000;    // eerste poll na 3 s (geef Tap tijd)
+
+        const tick = async () => {
+            if (this._mollieHandled) {
+                console.log('[Mollie poll] al afgehandeld — stop');
+                return;
+            }
+            if (Date.now() - startedAt > MAX_DURATION_MS) {
+                console.log('[Mollie poll] timeout (30s) — stop polling');
+                return;
+            }
+
+            let data = null;
+            try {
+                data = await MollieAPI.fetchPaymentStatus({
+                    referenceId: ctx.referenceId,
+                    description: ctx.description,
+                });
+            } catch (e) {
+                console.warn('[Mollie poll] fetch fout:', e && e.message);
+            }
+
+            if (this._mollieHandled) return;
+
+            if (data && data.found && (data.status === 'paid' || data.status === 'failed')) {
+                console.log('[Mollie poll] webhook-status binnen:', data.status);
+                // Bouw een synthetic result dat onMollieTapResult begrijpt
+                this.onMollieTapResult({
+                    status:             data.status,
+                    paymentId:          data.paymentId || ('webhook_' + Date.now()),
+                    referenceId:        data.referenceId || ctx.referenceId,
+                    failureMessage:     data.failureMessage || null,
+                    failureSupportCode: data.failureSupportCode || null,
+                    signatureValid:     true,    // webhook is server-side al geverifieerd
+                    _source:            'webhook-poll',
+                });
+                return;
+            }
+
+            // Nog pending → plan volgende tick
+            this._molliePollTimer = setTimeout(tick, INTERVAL_MS);
+        };
+
+        // Eerste tick na initial delay
+        this._molliePollTimer = setTimeout(tick, INITIAL_DELAY);
+    },
+
+    /** Stop polling — aangeroepen wanneer een ander pad de betaling afhandelt. */
+    _stopMolliePolling() {
+        if (this._molliePollTimer) {
+            clearTimeout(this._molliePollTimer);
+            this._molliePollTimer = null;
+        }
     },
 
     /** v151: simpele, eerlijke intent-based detection.
@@ -6196,6 +6279,9 @@ const app = {
         console.log('[Mollie intent result]', JSON.stringify(result));
         if (this._mollieHandled) return;
         this._mollieHandled = true;
+
+        // v155: stop Worker-polling — andere paden hebben de betaling al af
+        if (typeof this._stopMolliePolling === 'function') this._stopMolliePolling();
 
         // v154: opruim de manuele fallback-knoppen (als die er stonden) — die
         // zitten in de scan-loading card en worden hieronder met hideScanLoading
@@ -6235,10 +6321,14 @@ const app = {
             // Toon SUCCES card (v130 design via showPaymentSuccess)
             this.showPaymentSuccess(ctx.amount || 0, ctx.invoiceLogicId || '');
 
+            // v155: als het result via de Worker-poll kwam, heeft de Worker
+            // de factuur al op betaald gezet in Robaws. Skip de duplicate call.
+            const fromWebhook = result && result._source === 'webhook-poll';
+
             // Idempotency-check: schrijf maar één keer naar Robaws per paymentId
             const dedupKey = 'qe_mollie_processed_' + paymentId;
             const already = (() => { try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; } })();
-            if (!already && ctx.invoiceId) {
+            if (!already && ctx.invoiceId && !fromWebhook) {
                 this._registerMolliePaymentInRobaws({
                     invoiceId:      ctx.invoiceId,
                     invoiceLogicId: ctx.invoiceLogicId,
@@ -6247,6 +6337,10 @@ const app = {
                     referenceId:    result && result.referenceId,
                     dedupKey:       dedupKey,
                 });
+            } else if (fromWebhook) {
+                console.log('[Mollie] success via Worker-poll — Robaws-update al door Worker gedaan');
+                try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
+                setTimeout(() => this.toast('✓ Factuur ' + (ctx.invoiceLogicId || '') + ' op betaald'), 1200);
             }
             if (!sigOk) {
                 setTimeout(() => this.toast(

@@ -25,11 +25,14 @@ const MollieAPI = {
     APP_ID_DEBUG:   'be.qe.werkbon.debug',
     APP_ID_RELEASE: 'be.qe.werkbon',
 
-    // v151: API_KEY niet meer nodig — we vertrouwen direct op de intent
-    // return van Mollie Tap. Geen REST API checks meer.
-    // WEBHOOK_URL behouden voor het geval Mollie's eigen webhook-route ooit
-    // werkt voor onze Tap payments (eForge geeft momenteel 500).
-    WEBHOOK_URL: 'https://payments.eforge.be/mollie/robaws_prod:r_eb7cbxhcpkf59kc6/webhook',
+    // v155: WEBHOOK_URL = onze eigen Cloudflare Worker (qe-mollie-webhook).
+    // Mollie stuurt elke status-wijziging POST → Worker. Worker bewaart status
+    // in KV en zet de factuur op betaald in Robaws. App polled de Worker via
+    // STATUS_URL met de unieke referenceId om de intent-onbetrouwbaarheid op
+    // te vangen (officieel Mollie-gedocumenteerd: "intent might not return").
+    //
+    WEBHOOK_URL: 'https://qe-mollie-webhook.levi-957.workers.dev',
+    STATUS_URL:  'https://qe-mollie-webhook.levi-957.workers.dev/status',
 
     /** Lees POS-ID via de Java bridge (Java weet of we debug of release zijn). */
     getPosId() {
@@ -80,6 +83,27 @@ const MollieAPI = {
             }
         } catch(_) {}
         return false;
+    },
+
+    /** v155: Vraag de status van een Tap-to-Pay betaling op aan onze Worker.
+     *  Worker indexeert zowel op referenceId (uniek per launch) als description
+     *  (factuur-logicId). Geeft `{status:'pending',found:false}` als de webhook
+     *  nog niet binnen is. */
+    async fetchPaymentStatus({ referenceId, description }) {
+        if (!this.STATUS_URL) return null;
+        const params = [];
+        if (referenceId) params.push('referenceId=' + encodeURIComponent(referenceId));
+        if (description) params.push('description=' + encodeURIComponent(description));
+        if (params.length === 0) return null;
+        const url = this.STATUS_URL + '?' + params.join('&');
+        try {
+            const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+            if (!res.ok) return null;
+            return await res.json();
+        } catch (e) {
+            console.warn('[Mollie] status-lookup fout:', e && e.message);
+            return null;
+        }
     },
 
     /** Map de Mollie Tap intent return naar een UI-bericht. */
