@@ -6311,6 +6311,12 @@ const app = {
 
         // v155: stop Worker-polling — andere paden hebben de betaling al af
         if (typeof this._stopMolliePolling === 'function') this._stopMolliePolling();
+        // v160: stop ook de Java-side polling timer
+        try {
+            if (typeof QEBridge !== 'undefined' && QEBridge.stopMolliePolling) {
+                QEBridge.stopMolliePolling();
+            }
+        } catch(_) {}
 
         // v154: opruim de manuele fallback-knoppen (als die er stonden) — die
         // zitten in de scan-loading card en worden hieronder met hideScanLoading
