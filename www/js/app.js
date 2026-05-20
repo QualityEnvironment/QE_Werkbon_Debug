@@ -328,12 +328,36 @@ const app = {
 
         // Timer herstellen als app weer zichtbaar wordt (na achtergrond)
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && this.timer.running) {
-                // Herstart interval (was gestopt door OS) — elapsed wordt
-                // correct berekend via Date.now() - startTime
-                clearInterval(this.timer.interval);
-                this.timer.interval = setInterval(() => this.updateTimerDisplay(), 1000);
-                this.updateTimerDisplay();
+            if (!document.hidden) {
+                // Timer herstart
+                if (this.timer.running) {
+                    clearInterval(this.timer.interval);
+                    this.timer.interval = setInterval(() => this.updateTimerDisplay(), 1000);
+                    this.updateTimerDisplay();
+                }
+                // v158: Mollie polling — direct Worker check bij visibility return.
+                // Onafhankelijk van Java's onResume (die soms niet fire't bij
+                // Tap-return). Page Visibility API is de meest betrouwbare
+                // signaal voor "WebView is weer zichtbaar".
+                if (typeof this.onAppResumed === 'function') {
+                    try { this.onAppResumed(); } catch(_) {}
+                }
+            }
+        });
+
+        // v158: Focus event als extra trigger — sommige Android-WebView versies
+        // fire'n alleen focus en geen visibilitychange bij activity-resume.
+        window.addEventListener('focus', () => {
+            if (typeof this.onAppResumed === 'function') {
+                try { this.onAppResumed(); } catch(_) {}
+            }
+        });
+
+        // v158: pageshow vangt het geval op waarbij de pagina uit de bfcache
+        // gehaald wordt (gebeurt bij sommige back-navigation paden).
+        window.addEventListener('pageshow', (e) => {
+            if (e.persisted && typeof this.onAppResumed === 'function') {
+                try { this.onAppResumed(); } catch(_) {}
             }
         });
     },
@@ -6411,18 +6435,31 @@ const app = {
             return;
         }
 
-        // v157: AGGRESSIVE IMMEDIATE POLL
-        // Android schorst JS-timers wanneer de WebView in background staat
-        // (= terwijl Tap-app actief is). Onze normale polling-timer kan
-        // daardoor "verlopen" zonder ticks. Bij elke resume doen we daarom
-        // direct een fresh Worker-call. Als de webhook al binnen was, krijgen
-        // we het result instant.
+        // v158: debounce — Java onResume + visibilitychange + focus kunnen
+        // alle drie in dezelfde 100-500ms firen. We willen maar 1 immediate
+        // poll per "echte" resume.
+        if (this._mollieResumeInFlight) {
+            console.log('[Mollie] onAppResumed al in-flight — skip duplicate');
+            return;
+        }
+        const now = Date.now();
+        if (this._mollieLastResumeAt && (now - this._mollieLastResumeAt) < 500) {
+            console.log('[Mollie] onAppResumed binnen 500ms na vorige — skip duplicate');
+            return;
+        }
+        this._mollieLastResumeAt = now;
+        this._mollieResumeInFlight = true;
+
+        // v157/v158: AGGRESSIVE IMMEDIATE POLL bij elke resume-trigger
+        // (Java onResume, visibilitychange, focus). Polling-timers worden in
+        // Android background geschorst, dus we kunnen niet wachten op een tick.
         console.log('[Mollie] onAppResumed → immediate Worker poll');
         this._pollMollieStatusNow().then(found => {
+            this._mollieResumeInFlight = false;
             if (found || this._mollieHandled) return;
             // Status nog niet binnen → herstart polling timer + plan fallback
             console.log('[Mollie] geen status na immediate poll — herstart polling + fallback flow');
-            this._startMolliePolling();   // reset 30s window vanaf nu
+            this._startMolliePolling();   // reset 60s window vanaf nu
 
             if (this._mollieAutoReturnAttempted) {
                 this._scheduleMollieManualFallback();
@@ -6442,7 +6479,7 @@ const app = {
                 }
                 this._scheduleMollieManualFallback();
             }, 1500);
-        });
+        }).catch(() => { this._mollieResumeInFlight = false; });
     },
 
     /** v157: éénmalige Worker-status-check, los van de polling-loop. Wordt
