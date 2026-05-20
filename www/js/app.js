@@ -6207,7 +6207,7 @@ const app = {
         console.log('[Mollie poll] start polling voor', ctx.referenceId);
 
         const startedAt = Date.now();
-        const MAX_DURATION_MS = 30_000;   // 30 s totaal
+        const MAX_DURATION_MS = 60_000;   // v157: 60s — Tap-betalingen kunnen 30+s duren
         const INTERVAL_MS     = 2_000;    // elke 2 s
         const INITIAL_DELAY   = 3_000;    // eerste poll na 3 s (geef Tap tijd)
 
@@ -6411,28 +6411,73 @@ const app = {
             return;
         }
 
-        if (this._mollieAutoReturnAttempted) {
-            // Al 1× geprobeerd → toon manuele fallback knoppen na 3s
-            this._scheduleMollieManualFallback();
-            return;
-        }
+        // v157: AGGRESSIVE IMMEDIATE POLL
+        // Android schorst JS-timers wanneer de WebView in background staat
+        // (= terwijl Tap-app actief is). Onze normale polling-timer kan
+        // daardoor "verlopen" zonder ticks. Bij elke resume doen we daarom
+        // direct een fresh Worker-call. Als de webhook al binnen was, krijgen
+        // we het result instant.
+        console.log('[Mollie] onAppResumed → immediate Worker poll');
+        this._pollMollieStatusNow().then(found => {
+            if (found || this._mollieHandled) return;
+            // Status nog niet binnen → herstart polling timer + plan fallback
+            console.log('[Mollie] geen status na immediate poll — herstart polling + fallback flow');
+            this._startMolliePolling();   // reset 30s window vanaf nu
 
-        console.log('[Mollie] onAppResumed zonder result — wacht 1.5s, dan auto-return naar Tap');
-        // Wacht 1.5s — geef intent result alsnog een kans
-        setTimeout(() => {
-            if (this._mollieHandled) return;
-            this._mollieAutoReturnAttempted = true;
-            try {
-                if (typeof QEBridge !== 'undefined' && QEBridge.bringMollieTapToFront) {
-                    const ok = QEBridge.bringMollieTapToFront();
-                    console.log('[Mollie] bringMollieTapToFront →', ok);
-                }
-            } catch (e) {
-                console.warn('[Mollie] bringMollieTapToFront fout:', e && e.message);
+            if (this._mollieAutoReturnAttempted) {
+                this._scheduleMollieManualFallback();
+                return;
             }
-            // Plan de manuele fallback na 3s
-            this._scheduleMollieManualFallback();
-        }, 1500);
+            // Eerste keer: probeer Tap terug naar voren te brengen
+            setTimeout(() => {
+                if (this._mollieHandled) return;
+                this._mollieAutoReturnAttempted = true;
+                try {
+                    if (typeof QEBridge !== 'undefined' && QEBridge.bringMollieTapToFront) {
+                        const ok = QEBridge.bringMollieTapToFront();
+                        console.log('[Mollie] bringMollieTapToFront →', ok);
+                    }
+                } catch (e) {
+                    console.warn('[Mollie] bringMollieTapToFront fout:', e && e.message);
+                }
+                this._scheduleMollieManualFallback();
+            }, 1500);
+        });
+    },
+
+    /** v157: éénmalige Worker-status-check, los van de polling-loop. Wordt
+     *  gebruikt vanuit onAppResumed zodat we niet hoeven te wachten op de
+     *  volgende timer-tick. Returnt true als status binnen was en
+     *  onMollieTapResult is gefired. */
+    async _pollMollieStatusNow() {
+        const ctx = this._mollieContext;
+        if (!ctx || !ctx.referenceId) return false;
+        if (this._mollieHandled) return false;
+        try {
+            const data = await MollieAPI.fetchPaymentStatus({
+                referenceId: ctx.referenceId,
+                description: ctx.description,
+            });
+            if (this._mollieHandled) return false;
+            if (data && data.found && (data.status === 'paid' || data.status === 'failed')) {
+                console.log('[Mollie immediate poll] status binnen:', data.status, 'robawsMarked:', data.robawsMarked);
+                this.onMollieTapResult({
+                    status:             data.status,
+                    paymentId:          data.paymentId || ('webhook_' + Date.now()),
+                    referenceId:        data.referenceId || ctx.referenceId,
+                    failureMessage:     data.failureMessage || null,
+                    failureSupportCode: data.failureSupportCode || null,
+                    signatureValid:     true,
+                    robawsMarked:       data.robawsMarked === true,
+                    robawsError:        data.robawsError || null,
+                    _source:            'webhook-poll',
+                });
+                return true;
+            }
+        } catch (e) {
+            console.warn('[Mollie immediate poll] fout:', e && e.message);
+        }
+        return false;
     },
 
     /** Plan de manuele bevestig/annuleer knoppen wanneer auto-return geen
