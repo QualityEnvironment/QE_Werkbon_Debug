@@ -21,6 +21,33 @@ const app = {
      * en daardoor rond middernacht de verkeerde dag teruggaf.
      * Delegeert naar RobawsAPI._localDateStr (laden vóór app.js).
      */
+    // v166: Centrale styling voor het "Tijd"-veld (extraFields.Tijd). Gebruikt
+    // in zowel het uren-overzicht als het aanpassings-scherm. Eén plek om kleuren,
+    // iconen en labels te beheren — voorkomt drift wanneer er nieuwe types
+    // worden toegevoegd in Robaws.
+    _TIJD_STYLES: {
+        'Op tijd':              { color: '#2e7d32', bg: '#f1f8e9', icon: '',   label: 'Werkuren' },
+        'Te laat':              { color: '#e65100', bg: '#fff3e0', icon: '⚠️', label: 'Te laat' },
+        'Ziek':                 { color: '#b71c1c', bg: '#ffebee', icon: '🤒', label: 'Ziek' },
+        'Verlof':               { color: '#1565c0', bg: '#e3f2fd', icon: '🏖️', label: 'Verlof' },
+        'Betaalde feestdag':    { color: '#b8860b', bg: '#fff8e1', icon: '🎉', label: 'Betaalde feestdag' },
+        'Inhaal rustdag':       { color: '#00695c', bg: '#e0f2f1', icon: '🛌', label: 'Inhaal rustdag' },
+        'Sociaal verlof':       { color: '#6a1b9a', bg: '#f3e5f5', icon: '🤝', label: 'Sociaal verlof' },
+    },
+
+    _getTijdStyle(tijd) {
+        return this._TIJD_STYLES[tijd] || this._TIJD_STYLES['Op tijd'];
+    },
+
+    /** v166: true voor types die als afwezigheid tellen (Ziek + 4 verloftypes).
+     *  Bij deze types wordt 8u forfaitair geboekt en krijgt de uren-kaart
+     *  een afzonderlijke kleur (override op werkuren/overuren styling). */
+    _isAbsenceTijd(tijd) {
+        return tijd === 'Ziek' || tijd === 'Verlof'
+            || tijd === 'Betaalde feestdag' || tijd === 'Inhaal rustdag'
+            || tijd === 'Sociaal verlof';
+    },
+
     _localDateStr(d, offsetDays) {
         if (typeof RobawsAPI !== 'undefined' && RobawsAPI._localDateStr) {
             return RobawsAPI._localDateStr(d, offsetDays);
@@ -7569,12 +7596,10 @@ const app = {
 
                     for (const wo of wos) {
                         const tijd = getField(wo, 'Tijd') || 'Op tijd';
-                        const tijdColor = (tijd === 'Te laat') ? '#e65100'
-                            : (tijd === 'Ziek') ? '#b71c1c'
-                            : '#2e7d32';
-                        const tijdIcon = (tijd === 'Te laat') ? '⚠️'
-                            : (tijd === 'Ziek') ? '🤒'
-                            : '';
+                        const tijdStyle = this._getTijdStyle(tijd);
+                        const tijdColor = tijdStyle.color;
+                        const tijdIcon  = tijdStyle.icon;
+                        const isAbsence = this._isAbsenceTijd(tijd);
                         const teList = (teByWoId[wo.id] || []).slice().sort((a, b) => {
                             // Sort: entries met startTime eerst (chronologisch), dan no-time entries
                             const aMin = a.startTime ? (a.startTime.hour * 60 + a.startTime.minute) : 9999;
@@ -7613,8 +7638,15 @@ const app = {
                             const timeBlockTxt = (sStr && eStr) ? (sStr + ' → ' + eStr) : null;
 
                             // v87: Styling per type — compensatie duidelijker als "overuren aftrek"
+                            // v166: bij afwezigheidstype (Ziek / Verlof / Feestdag / Inhaal / Sociaal verlof)
+                            // wordt de werkuren-styling overruled door de afwezigheids-kleur
                             let icon, bg, fg, label;
-                            if (isCompensatie) {
+                            if (isAbsence) {
+                                icon = tijdStyle.icon || '📅';
+                                bg = tijdStyle.bg;
+                                fg = tijdStyle.color;
+                                label = tijdStyle.label;
+                            } else if (isCompensatie) {
                                 // Negatieve overuren — wordt afgetrokken van overuren-bank
                                 // omdat L&L gebruikt is om de 8u-baseline te vullen.
                                 icon = '➖'; bg = '#ffebee'; fg = '#c62828';
@@ -7693,12 +7725,10 @@ const app = {
                 ? new Date(dateOnly + 'T12:00:00').toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' })
                 : '';
 
-            let typeIcon;
-            switch (tijd) {
-                case 'Te laat': typeIcon = '⚠️'; break;
-                case 'Ziek':    typeIcon = '🤒'; break;
-                default:        typeIcon = '✅'; break;
-            }
+            // v166: helper gebruikt ipv hardcoded switch — dekt ook Verlof,
+            // Betaalde feestdag, Inhaal rustdag, Sociaal verlof.
+            const _tijdStyle = this._getTijdStyle(tijd);
+            const typeIcon = _tijdStyle.icon || '✅';
 
             // Haal time-entries op voor totaal-uren weergave
             let totalHours = 0;
