@@ -1785,18 +1785,21 @@ const app = {
             }
 
             // Probeer ook Robaws werkbonnen te tellen (via sales-orders of work-orders)
-            for (const cid of clientIds) {
-                try {
-                    const res = await fetch(`api/werkbon-queue.php?action=countByClient&clientId=${cid}`);
-                    const data = await res.json();
-                    if (data.count !== undefined) {
-                        this._clientHistoryCache[cid] = data.count;
-                    } else {
-                        this._clientHistoryCache[cid] = localCounts[cid] || 0;
-                    }
-                } catch(e) {
-                    this._clientHistoryCache[cid] = localCounts[cid] || 0;
-                }
+            // v173: parallelliseren met Promise.all i.p.v. sequentiële await-loop.
+            // Voorheen: N klanten × ~300ms = 1.5-3 sec achtergrond-blokkade.
+            // Nu: alle tellingen tegelijk = ~500ms voor de hele batch.
+            const countResults = await Promise.all(
+                clientIds.map(cid =>
+                    fetch(`api/werkbon-queue.php?action=countByClient&clientId=${cid}`)
+                        .then(r => r.json())
+                        .then(data => ({ cid, count: data.count }))
+                        .catch(() => ({ cid, count: undefined }))
+                )
+            );
+            for (const { cid, count } of countResults) {
+                this._clientHistoryCache[cid] = (count !== undefined)
+                    ? count
+                    : (localCounts[cid] || 0);
             }
 
             // Re-render werkorder kaarten met badges
@@ -7504,9 +7507,12 @@ const app = {
 
         try {
             // v168: directe Robaws calls ipv PHP backend.
-            // Parallel 3 calls: work-order (met timeEntries inline), line-items, en daarna client
+            // Parallel 2 calls: work-order (met timeEntries + client inline) + line-items.
+            // v173: include=client toegevoegd zodat de fallback clients/{id} call
+            // (zie regel ~7522) vrijwel altijd kan worden overgeslagen.
+            // Robaws spec bevestigt: "client only present if requested via include".
             const [woRes, lineRes] = await Promise.all([
-                RobawsAPI.get(`work-orders/${workOrderId}?include=timeEntries`),
+                RobawsAPI.get(`work-orders/${workOrderId}?include=timeEntries,client`),
                 RobawsAPI.get(`work-orders/${workOrderId}/line-items?limit=100`),
             ]);
 
@@ -7517,16 +7523,25 @@ const app = {
 
             const woRaw = woRes.data;
 
-            // Client-naam ophalen indien beschikbaar
-            let clientName = (woRaw.client && woRaw.client.name) || '';
-            if (!clientName && woRaw.clientId) {
+            // Strip "- id" suffix (zie ROBAWS_API_HANDLEIDING §3.3).
+            // Robaws levert client.name als "Naam - 12345" terug — overal stripppen.
+            const stripClientSuffix = (raw, id) => {
+                if (!raw || !id) return raw || '';
+                const suffix = ` - ${id}`;
+                return raw.endsWith(suffix) ? raw.slice(0, -suffix.length) : raw;
+            };
+
+            // v173: client komt nu inline mee via ?include=client (zie call hierboven),
+            // dus de fallback clients/{id} call is in ~99% gevallen niet meer nodig.
+            let clientName = '';
+            if (woRaw.client && woRaw.client.name) {
+                clientName = stripClientSuffix(woRaw.client.name, woRaw.client.id);
+            } else if (woRaw.clientId) {
+                // Fallback: alleen als include=client onverwacht niets opleverde.
                 try {
                     const cRes = await RobawsAPI.get(`clients/${woRaw.clientId}`);
                     if (cRes.code === 200 && cRes.data) {
-                        // Strip "- id" suffix (zie ROBAWS_API_HANDLEIDING §3.3)
-                        const raw = cRes.data.name || '';
-                        const suffix = ` - ${cRes.data.id}`;
-                        clientName = raw.endsWith(suffix) ? raw.slice(0, -suffix.length) : raw;
+                        clientName = stripClientSuffix(cRes.data.name, cRes.data.id);
                     }
                 } catch(_) {}
             }
@@ -7688,18 +7703,23 @@ const app = {
             // v68: gepresteerde uren = (entry_eind − entry_start) − pauze.
             // entry_start = max(Ingeklokt, startuur werknemer) afgerond op 5min als te laat.
             // entry_eind = Uitgeklokt afgerond op 5min. Pauze = werknemer-veld.
-            // Geen per-werkbon time-entries fetch (zou rate-limit triggeren).
             // v76: fetch time-entries per werkbon (max 31 dagen × ~1 werkbon = haalbaar
             // binnen rate-limit). Resultaat cached in teByWoId. Toont L&L cycli + uren.
+            // v173: parallelliseren met Promise.all i.p.v. sequentiële await-loop.
+            // Voorheen: 30 werkbonnen × ~250ms = 7-8 sec blokkerend. Nu: ~500ms parallel.
             const teByWoId = {};
-            for (const wo of workOrders) {
-                try {
-                    const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
-                    if (teRes.code === 200 && teRes.data && teRes.data.items) {
-                        teByWoId[wo.id] = teRes.data.items;
-                    }
-                } catch(_) { /* skip */ }
-            }
+            const teResults = await Promise.all(
+                workOrders.map(wo =>
+                    RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`)
+                        .catch(() => null)
+                )
+            );
+            workOrders.forEach((wo, idx) => {
+                const teRes = teResults[idx];
+                if (teRes && teRes.code === 200 && teRes.data && teRes.data.items) {
+                    teByWoId[wo.id] = teRes.data.items;
+                }
+            });
             const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
             // v74: kwartier-afronding (in=up, uit=down)
             // v94+: TOLERANTIE van 4 minuten — moet identiek zijn aan clock.js zodat
