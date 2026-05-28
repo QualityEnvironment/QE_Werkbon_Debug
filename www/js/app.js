@@ -4684,6 +4684,70 @@ const app = {
         canvas.addEventListener('mouseleave', end);
     },
 
+    /** v170: Vul het email-veld in met de facturatie-email van de klant.
+     *  Cascade: invoiceEmail / billingEmail → extraFields.Facturatie / Facturatie email
+     *           → email. User kan na het invullen nog manueel aanpassen. */
+    async fillKlantEmail() {
+        const inputEl = document.getElementById('wbSignatureEmail');
+        const btnEl = document.getElementById('btnFillKlantEmail');
+        if (!inputEl) return;
+
+        const clientId = this.currentWO && this.currentWO.clientId;
+        if (!clientId) {
+            this.toast('Geen klant gekoppeld aan deze werkbon');
+            return;
+        }
+
+        // Loading state
+        const origBtn = btnEl ? btnEl.textContent : '';
+        if (btnEl) { btnEl.textContent = '⏳'; btnEl.disabled = true; }
+
+        try {
+            const res = await RobawsAPI.get(`clients/${clientId}`);
+            if (res.code !== 200 || !res.data) {
+                this.toast('Klant niet gevonden');
+                return;
+            }
+            const c = res.data;
+
+            // Cascade: zoek dedicated billing-email eerst, dan algemene email.
+            // Robaws kan billing-email in verschillende velden zetten — we
+            // proberen alle bekende paden.
+            const candidates = [
+                c.invoiceEmail,
+                c.billingEmail,
+                c.billing && c.billing.email,
+                c.invoiceContact && c.invoiceContact.email,
+                c.extraFields && c.extraFields['Facturatie email']
+                    && c.extraFields['Facturatie email'].stringValue,
+                c.extraFields && c.extraFields['facturatieEmail']
+                    && c.extraFields['facturatieEmail'].stringValue,
+                c.extraFields && c.extraFields['Facturatie e-mail']
+                    && c.extraFields['Facturatie e-mail'].stringValue,
+                c.email,                          // fallback laatste optie
+            ];
+
+            const found = candidates.find(v => {
+                if (!v || typeof v !== 'string') return false;
+                const t = v.trim();
+                return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
+            });
+
+            if (!found) {
+                this.toast('Geen email gevonden bij deze klant');
+                return;
+            }
+
+            inputEl.value = found.trim();
+            this.toast('📋 Email ingevuld: ' + inputEl.value);
+        } catch (e) {
+            console.warn('[fillKlantEmail] fout:', e && e.message);
+            this.toast('Kon email niet ophalen');
+        } finally {
+            if (btnEl) { btnEl.textContent = origBtn || '📋'; btnEl.disabled = false; }
+        }
+    },
+
     clearSignature() {
         const canvas = document.getElementById('signatureCanvas');
         if (!canvas || !this.signatureCtx) return;
@@ -5041,6 +5105,52 @@ const app = {
             // (zonder articleId — Felicity corrigeert later naar het echte artikel).
             const customArticlesForInvoice = (data.materials || []).filter(m => m.isCustom);
             const invoiceId = (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.id) || null;
+
+            // v170: Transactiekost 1.5% voor card payments toevoegen aan factuur.
+            // Math: gross = net / (1 - 0.015), fee = gross - net. Zo ontvangt QE
+            // netto exact het originele factuurbedrag nadat Mollie z'n 1.5%
+            // afhoudt. Robaws verwacht `price` excl. BTW → we delen door
+            // (1 + btw-rate). VatTariffId-map: 1=21%, 2=12%, 3=0%, 4=6%.
+            let transactionFeeAdded = false;
+            const CARD_PAYMENT_METHODS = ['Mollie Tap', 'Viva wallet'];
+            if (invoiceId && CARD_PAYMENT_METHODS.includes(paymentMethod)) {
+                const originalTotal = parseFloat(invoiceResult.invoice.totalInclVat || 0);
+                if (originalTotal > 0) {
+                    const FEE_RATE = 0.015;
+                    const grossTotal = originalTotal / (1 - FEE_RATE);
+                    const feeInclVat = grossTotal - originalTotal;
+
+                    const vatTariffId = String(this.currentWO.vatTariffId || '4');
+                    const vatRateMap = { '1': 0.21, '2': 0.12, '3': 0.00, '4': 0.06 };
+                    const vatRate = vatRateMap[vatTariffId] || 0;
+                    const feeExclVat = feeInclVat / (1 + vatRate);
+                    const roundedFeeExclVat = Math.round(feeExclVat * 100) / 100;
+
+                    try {
+                        const li = {
+                            type: 'LINE',
+                            description: `Transactiekosten ${paymentMethod} (1,5%)`,
+                            quantity: 1,
+                            price: roundedFeeExclVat,
+                            vatTariffId,
+                        };
+                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
+                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
+                        if (r.code === 200 || r.code === 201) {
+                            console.log('[transactiekosten] +€' + feeInclVat.toFixed(4) +
+                                ' (incl BTW) = €' + roundedFeeExclVat.toFixed(2) +
+                                ' excl × ' + (vatRate * 100).toFixed(0) + '% toegevoegd aan factuur',
+                                invoiceId, '(' + paymentMethod + ')');
+                            transactionFeeAdded = true;
+                        } else {
+                            console.warn('[transactiekosten] POST faalde:', r.code, r.data);
+                        }
+                    } catch (e) {
+                        console.warn('[transactiekosten] exception:', e && e.message);
+                    }
+                }
+            }
+
             if (customArticlesForInvoice.length > 0 && invoiceId) {
                 const vatTariffId = this.currentWO.vatTariffId || '4';
                 for (const m of customArticlesForInvoice) {
@@ -5064,15 +5174,16 @@ const app = {
                     }
                 }
 
-                // v109: nu er line-items zijn bijgekomen klopt het oude `totalInclVat`
-                // uit `invoiceResult` niet meer met de werkelijke factuur in Robaws.
-                // Refetch de factuur zodat het betaalscherm het juiste bedrag toont
-                // (anders mist de eenmalige-artikel-prijs uit de Viva/Overschrijving
-                // betaling). De factuur in Robaws zelf is wel correct.
+            }
+
+            // v109/v170: factuur ververst na elk type bijkomende line-items.
+            // Triggers wanneer: custom articles toegevoegd, OF transactiekost toegevoegd.
+            // De factuur in Robaws is altijd correct; deze refetch is om
+            // het lokale invoiceResult-object in sync te brengen voor het betaalscherm.
+            if (invoiceId && (customArticlesForInvoice.length > 0 || transactionFeeAdded)) {
                 try {
                     const refreshed = await RobawsAPI.get(`sales-invoices/${invoiceId}`);
                     if (refreshed.code === 200 && refreshed.data) {
-                        // Merge bijgewerkte bedragen-velden over het bestaande invoice-object
                         const fresh = refreshed.data;
                         const merged = { ...invoiceResult.invoice };
                         for (const k of ['totalInclVat', 'totalExclVat', 'totalVat',
@@ -5081,11 +5192,12 @@ const app = {
                             if (fresh[k] !== undefined) merged[k] = fresh[k];
                         }
                         invoiceResult.invoice = merged;
-                        console.log('[App] Factuur ververst na eenmalige artikels — nieuw totaal:',
-                            merged.totalInclVat);
+                        const reason = transactionFeeAdded
+                            ? (customArticlesForInvoice.length > 0 ? 'eenmalige artikels + transactiekost' : 'transactiekost')
+                            : 'eenmalige artikels';
+                        console.log(`[App] Factuur ververst na ${reason} — nieuw totaal:`, merged.totalInclVat);
                     } else {
-                        console.warn('[App] Refetch factuur na eenmalige artikels gaf code',
-                            refreshed.code);
+                        console.warn('[App] Refetch factuur gaf code', refreshed.code);
                     }
                 } catch (e) {
                     console.warn('[App] Refetch factuur faalde:', e && e.message);
