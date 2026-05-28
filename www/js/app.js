@@ -7262,49 +7262,104 @@ const app = {
         this.navigate('screenInstHistory');
 
         try {
-            const res = await fetch(`api/installation-history.php?installationId=${installationId}`);
-            const data = await res.json();
-            const orders = data.items || [];
-
-            if (orders.length === 0) {
+            // v168: directe Robaws API ipv PHP-backend.
+            // 1) Resolve klant-ID via installatie (kan al gecached zijn)
+            let assignedClientId = inst && inst.assignedClientId;
+            if (!assignedClientId) {
+                const instRes = await RobawsAPI.get(`installations/${installationId}`);
+                if (instRes.code === 200 && instRes.data) {
+                    assignedClientId = instRes.data.assignedClientId;
+                }
+            }
+            if (!assignedClientId) {
                 list.innerHTML = `
                     <div class="empty-state">
-                        <div class="empty-icon">📋</div>
-                        <h3>Geen historiek</h3>
-                        <p>Geen orders gevonden voor deze installatie</p>
+                        <div class="empty-icon">⚠️</div>
+                        <h3>Klant niet gevonden</h3>
+                        <p>Deze installatie heeft geen gekoppelde klant.</p>
                     </div>`;
                 return;
             }
 
+            // 2) Paginate work-orders voor deze klant (sort=date:desc, include=timeEntries
+            //    om N+1 calls te vermijden — zie ROBAWS_API_HANDLEIDING §2.16).
+            //    Filter client-side op installationIds.
+            const installationIdStr = String(installationId);
+            const matchingOrders = [];
+            const seenIds = new Set();   // dedup voor §2.17 paginated-werkbon-sort issue
+            let offset = 0;
+            const MAX_PAGES = 30;        // veiligheid voor klanten met heel veel werkbons
+            for (let page = 0; page < MAX_PAGES; page++) {
+                const r = await RobawsAPI.get(
+                    `work-orders?clientId=${assignedClientId}&limit=100&offset=${offset}&sort=date:desc&include=timeEntries`
+                );
+                if (r.code !== 200 || !r.data || !r.data.items) break;
+                const items = r.data.items;
+                if (items.length === 0) break;
+                for (const wo of items) {
+                    if (seenIds.has(wo.id)) continue;
+                    seenIds.add(wo.id);
+                    const ids = (wo.installationIds || []).map(String);
+                    if (ids.includes(installationIdStr)) {
+                        matchingOrders.push(wo);
+                    }
+                }
+                if (items.length < 100) break;
+                offset += 100;
+            }
+
+            if (matchingOrders.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📋</div>
+                        <h3>Geen historiek</h3>
+                        <p>Geen werkbons gevonden voor deze installatie.</p>
+                    </div>`;
+                return;
+            }
+
+            // 3) Sorteer nogmaals (Robaws' date:desc is niet altijd consistent over pagina's, §2.17)
+            matchingOrders.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+            // 4) Render
             const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
             const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-            list.innerHTML = orders.map(order => {
-                const d = order.date ? new Date(order.date + 'T12:00:00') : null;
+            list.innerHTML = matchingOrders.map(wo => {
+                const d = wo.date ? new Date(wo.date + 'T12:00:00') : null;
                 const dateLabel = d ? `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}` : 'Onbekend';
-                const statusClass = order.status === 'COMPLETED' ? 'type-onderhoud' : (order.status === 'IN_PROGRESS' ? 'type-plaatsing' : 'type-diversen');
-                const statusLabel = order.status === 'COMPLETED' ? 'Afgerond' : (order.status === 'IN_PROGRESS' ? 'In uitvoering' : (order.status || 'Onbekend'));
+
+                // Status-label naar Robaws's eigen vocabularium
+                // Zie ROBAWS_API_HANDLEIDING §6.4 voor mogelijke waarden
+                const status = wo.status || 'Onbekend';
+                let statusClass = 'type-diversen';
+                if (/betaald/i.test(status)) statusClass = 'type-onderhoud';
+                else if (/peppol|verzonden|gecontroleerd/i.test(status)) statusClass = 'type-plaatsing';
+
+                // Time-entries via ?include (geen N+1)
+                const timeCount = (wo.timeEntries || []).length;
+                const summary = wo.title || (wo.extraFields && wo.extraFields.Reden && wo.extraFields.Reden.stringValue) || '';
 
                 return `
-                    <div class="card card-clickable" onclick="app.openOrderDetail(${order.id})" style="margin:0 16px 8px;cursor:pointer">
+                    <div class="card card-clickable" onclick="app.openOrderDetail('${wo.id}')" style="margin:0 16px 8px;cursor:pointer">
                         <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px">
                             <div>
-                                <div style="font-size:15px;font-weight:500">${this.escapeHtml(order.logicId || `#${order.id}`)}</div>
+                                <div style="font-size:15px;font-weight:500">${this.escapeHtml(wo.logicId || `#${wo.id}`)}</div>
                                 <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">📅 ${dateLabel}</div>
                             </div>
-                            <span class="wo-type ${statusClass}" style="font-size:11px">${statusLabel}</span>
+                            <span class="wo-type ${statusClass}" style="font-size:11px">${this.escapeHtml(status)}</span>
                         </div>
-                        ${order.summary ? `<div style="font-size:13px;color:var(--qe-grey);margin-top:4px">${this.escapeHtml(order.summary)}</div>` : ''}
-                        ${order.hourEntries > 0 || order.materialEntries > 0 ? `
-                        <div style="font-size:12px;color:var(--qe-grey);margin-top:6px;display:flex;gap:12px">
-                            ${order.hourEntries > 0 ? `<span>🕐 ${order.hourEntries} uren</span>` : ''}
-                            ${order.materialEntries > 0 ? `<span>🔧 ${order.materialEntries} materialen</span>` : ''}
+                        ${summary ? `<div style="font-size:13px;color:var(--qe-grey);margin-top:4px">${this.escapeHtml(summary)}</div>` : ''}
+                        ${timeCount > 0 ? `
+                        <div style="font-size:12px;color:var(--qe-grey);margin-top:6px">
+                            <span>🕐 ${timeCount} ${timeCount === 1 ? 'tijdsregistratie' : 'tijdsregistraties'}</span>
                         </div>` : ''}
                     </div>`;
             }).join('');
 
         } catch (err) {
-            list.innerHTML = '<p class="text-grey text-sm text-center" style="padding:16px">Kon historiek niet laden</p>';
+            console.warn('[InstHistory] fout:', err);
+            list.innerHTML = `<p class="text-grey text-sm text-center" style="padding:16px">Kon historiek niet laden: ${this.escapeHtml(err.message || '')}</p>`;
         }
     },
 
@@ -7315,15 +7370,54 @@ const app = {
         this.navigate('screenOrderDetail');
 
         try {
-            const res = await fetch(`api/installation-history.php?action=detail&workOrderId=${workOrderId}`);
-            const data = await res.json();
+            // v168: directe Robaws calls ipv PHP backend.
+            // Parallel 3 calls: work-order (met timeEntries inline), line-items, en daarna client
+            const [woRes, lineRes] = await Promise.all([
+                RobawsAPI.get(`work-orders/${workOrderId}?include=timeEntries`),
+                RobawsAPI.get(`work-orders/${workOrderId}/line-items?limit=100`),
+            ]);
 
-            if (data.error) {
-                content.innerHTML = `<p class="text-grey text-sm text-center" style="padding:16px">${this.escapeHtml(data.error)}</p>`;
+            if (woRes.code !== 200 || !woRes.data) {
+                content.innerHTML = `<p class="text-grey text-sm text-center" style="padding:16px">Werkbon niet gevonden</p>`;
                 return;
             }
 
-            const wo = data;
+            const woRaw = woRes.data;
+
+            // Client-naam ophalen indien beschikbaar
+            let clientName = (woRaw.client && woRaw.client.name) || '';
+            if (!clientName && woRaw.clientId) {
+                try {
+                    const cRes = await RobawsAPI.get(`clients/${woRaw.clientId}`);
+                    if (cRes.code === 200 && cRes.data) {
+                        // Strip "- id" suffix (zie ROBAWS_API_HANDLEIDING §3.3)
+                        const raw = cRes.data.name || '';
+                        const suffix = ` - ${cRes.data.id}`;
+                        clientName = raw.endsWith(suffix) ? raw.slice(0, -suffix.length) : raw;
+                    }
+                } catch(_) {}
+            }
+
+            // Mappen naar dezelfde shape als de oude PHP-response
+            const wo = {
+                id:         woRaw.id,
+                logicId:    woRaw.logicId,
+                date:       woRaw.date,
+                status:     woRaw.status,
+                clientName: clientName,
+                summary:    woRaw.title || '',
+                notes:      woRaw.remark || '',
+                hours:      (woRaw.timeEntries || []).map(te => ({
+                    hourTypeName: (te.hourType && te.hourType.name) || te.hourTypeId || 'Uren',
+                    employeeName: (te.employee && te.employee.name) || null,
+                    amount:       te.hours || te.billableHours || 0,
+                })),
+                materials:  ((lineRes.code === 200 && lineRes.data && lineRes.data.items) || []).map(li => ({
+                    articleName: (li.article && li.article.name) || li.description || 'Artikel',
+                    amount:      li.quantity || 0,
+                })),
+            };
+
             const d = wo.date ? new Date(wo.date + 'T12:00:00') : null;
             const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
             const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
