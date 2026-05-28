@@ -1504,6 +1504,66 @@ const app = {
         this._updateNewWoFabVisibility();
     },
 
+    /**
+     * v176: refresh ALLEEN het huidige scherm i.p.v. de hele app.
+     * Wordt aangeroepen vanuit de native SwipeRefreshLayout (zie MainActivity.java).
+     * Stopt de native spinner via QEBridge.refreshDone() in een finally-block,
+     * zodat de spinner ook stopt als de refresh-loader gooit.
+     */
+    async refreshCurrentScreen() {
+        const screen = this.currentScreen;
+        console.log('[Refresh] Refresh huidig scherm:', screen);
+        try {
+            switch (screen) {
+                case 'screenPlanning':
+                    await this.loadPlanning();
+                    break;
+                case 'screenDagoverzicht':
+                    await this.loadDagoverzicht();
+                    break;
+                case 'screenUitgevoerd':
+                    await this.loadUitgevoerd();
+                    break;
+                case 'screenClock':
+                    if (typeof this.onNavigateToClock === 'function') {
+                        await this.onNavigateToClock();
+                    }
+                    break;
+                case 'screenDetail':
+                    // Werkbon-detail: herlaad als we de WO nog hebben
+                    if (this.currentWO && this.currentWO.id) {
+                        await this.openWorkorder(this.currentWO.id);
+                    }
+                    break;
+                case 'screenOrderDetail':
+                    if (this._lastOrderDetailId) {
+                        await this.openOrderDetail(this._lastOrderDetailId);
+                    }
+                    break;
+                case 'screenInstHistory':
+                    if (this._lastInstHistoryId) {
+                        await this.openInstallationHistory(this._lastInstHistoryId);
+                    }
+                    break;
+                case 'screenProfile':
+                    // Profiel heeft geen dynamische data — niets te refreshen
+                    break;
+                default:
+                    // Geen specifieke loader voor dit scherm: stilletjes niets doen.
+                    console.log('[Refresh] Geen refresh-handler voor', screen);
+            }
+        } catch (e) {
+            console.error('[Refresh] Refresh van', screen, 'mislukt:', e);
+        } finally {
+            // Stop het native SwipeRefresh-spinner ongeacht succes/fout.
+            try {
+                if (window.QEBridge && typeof QEBridge.refreshDone === 'function') {
+                    QEBridge.refreshDone();
+                }
+            } catch (_) { /* native bridge mogelijk niet beschikbaar — geen probleem */ }
+        }
+    },
+
     /** v137: bepaalt of de + Nieuwe-werkbon FAB zichtbaar moet zijn. */
     _updateNewWoFabVisibility() {
         const fab = document.getElementById('newWoFab');
@@ -7373,6 +7433,8 @@ const app = {
     // INSTALLATIE HISTORIEK
     // ========================================
     async openInstallationHistory(installationId) {
+        // v176: bewaar ID zodat refreshCurrentScreen() deze opnieuw kan laden.
+        this._lastInstHistoryId = installationId;
         // Zoek installatie-info uit geladen data
         const inst = (this._loadedInstallations || []).find(i => String(i.id) === String(installationId));
         const instName = inst ? (inst.name || inst.brand || 'Installatie') : 'Installatie';
@@ -7502,6 +7564,8 @@ const app = {
     async openOrderDetail(workOrderId) {
         const content = document.getElementById('orderDetailContent');
         content.innerHTML = '<div class="spinner"></div>';
+        // v176: bewaar ID zodat refreshCurrentScreen() deze opnieuw kan laden.
+        this._lastOrderDetailId = workOrderId;
 
         this.navigate('screenOrderDetail');
 
