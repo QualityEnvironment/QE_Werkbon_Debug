@@ -1059,11 +1059,14 @@ const app = {
     },
 
     // ========================================
-    // v116: UITKLOK-CHECK — openstaande werkbons
+    // v116/v167: UITKLOK-CHECK — openstaande werkbons
     // ========================================
     // Wordt aangeroepen door clock.js vóór `_clockOut`. Gedrag:
     //  - Geen openstaande werkbons → laat uitklokken door (return true).
-    //  - Technieker / bureel + ≥1 openstaande → blokkeer (return false).
+    //  - Bureel + ≥1 openstaande → blokkeer (return false).
+    //  - Technieker + ≥1 openstaande → vraag bevestiging:
+    //        Ja → laat uitklokken door (return true). Werkbon blijft open.
+    //        Nee → blokkeer (return false). (v167)
     //  - Monteur + >1 openstaande → blokkeer (return false).
     //  - Monteur + 1 openstaande → vraag overname:
     //        Ja → werknemer-aanvink-modal → vul uren in op die werkbon
@@ -1106,14 +1109,22 @@ const app = {
         // Vanaf hier komen er modals — spinner verbergen zodat die zichtbaar zijn
         hideLoad();
 
-        // Technieker / bureel: altijd blokkeren bij open
-        if (!isMonteur) {
+        // Bureel: altijd blokkeren bij open (geen werkbon-overname mogelijk)
+        const activeRole = this._activeRole();
+        if (activeRole === 'bureel') {
             await this._showMessageModal(
                 'Openstaande werkbon',
                 `Je hebt nog ${openItems.length} openstaande ${openItems.length === 1 ? 'werkbon' : 'werkbons'}. ` +
                 'Werk die eerst af voor je uitklokt.'
             );
             return false;
+        }
+
+        // v167: Technieker mag dag eindigen met open werkbons — via bevestigingsdialog.
+        // De werkbons blijven open zoals ze zijn; de technieker kan ze morgen verder afmaken.
+        if (activeRole === 'technieker') {
+            const accepted = await this._showTechniekerEndDayConfirm(openItems);
+            return accepted;   // true = dag beëindigen, false = blijf ingeklokt
         }
 
         // Monteur + >1 open → blokkeren
@@ -1270,6 +1281,50 @@ const app = {
             window._klokOvResp = (val) => {
                 this.closeModal();
                 delete window._klokOvResp;
+                resolve(val);
+            };
+        });
+    },
+
+    /** v167: Bevestigingsdialog voor techniekers die uit willen klokken met
+     *  openstaande werkbons. Anders dan monteurs (die overname doen) mogen
+     *  techniekers de werkbons gewoon open laten staan voor de volgende dag.
+     *  Returns: true = dag beëindigen, false = blijf ingeklokt. */
+    async _showTechniekerEndDayConfirm(openItems) {
+        return new Promise(resolve => {
+            const count = openItems.length;
+            const woordvorm = count === 1 ? 'werkbon' : 'werkbons';
+            const lijst = openItems.slice(0, 5).map(wo => {
+                const clientName = (wo.client && wo.client.name) || wo.summary || 'Werkbon';
+                return `<div style="font-size:13px;padding:4px 0;color:#374151">• ${this.escapeHtml(clientName)}</div>`;
+            }).join('');
+            const meer = count > 5 ? `<div style="font-size:12px;color:var(--qe-grey);padding-top:4px">… en ${count - 5} meer</div>` : '';
+
+            document.getElementById('modalContent').innerHTML = `
+                <h3>🚪 Dag beëindigen?</h3>
+                <p style="font-size:14px;color:var(--qe-grey);margin:8px 0 14px">
+                    Je hebt nog ${count} openstaande ${woordvorm}:
+                </p>
+                <div style="background:#fff8e1;border-radius:10px;padding:14px;margin-bottom:14px;border-left:4px solid #f59e0b">
+                    ${lijst}
+                    ${meer}
+                </div>
+                <p style="font-size:14px;line-height:1.45;margin-bottom:14px">
+                    Deze blijven open staan en kan je morgen afwerken. Wil je toch al uitklokken?
+                </p>
+                <button onclick="window._techEndResp(true)" class="btn btn-primary btn-full"
+                    style="padding:14px;font-size:15px;margin-bottom:8px">
+                    ✓ Ja, beëindig dag
+                </button>
+                <button onclick="window._techEndResp(false)" class="btn btn-outline btn-full"
+                    style="padding:12px;font-size:14px">
+                    Nee, blijf ingeklokt
+                </button>
+            `;
+            this.openModal();
+            window._techEndResp = (val) => {
+                this.closeModal();
+                delete window._techEndResp;
                 resolve(val);
             };
         });
