@@ -4424,6 +4424,9 @@ const app = {
         if (sigSection) sigSection.style.display = 'none';
         const sigName = document.getElementById('wbSignatureName');
         if (sigName) sigName.value = '';
+        // v169: reset email-veld
+        const sigEmail = document.getElementById('wbSignatureEmail');
+        if (sigEmail) sigEmail.value = '';
 
         // Reset betaalmethode
         this._selectedPaymentMethod = null;
@@ -5101,6 +5104,24 @@ const app = {
             }
 
             this._markWOSubmitted(data);
+
+            // v169: Werkbon PDF mailen naar klant indien email-veld ingevuld
+            // bij de handtekening. Fire-and-forget — blokkeert de betaalflow niet.
+            // Robaws-template: zie RobawsAPI.EMAIL_TEMPLATE_WERKBON (default "Werkbon naar klant")
+            const klantEmail = document.getElementById('wbSignatureEmail')?.value?.trim() || '';
+            if (klantEmail && workOrderId) {
+                RobawsAPI.sendWorkOrderByEmail(workOrderId, klantEmail).then(r => {
+                    if (r.ok) {
+                        console.log('[werkbon-email] verstuurd naar', klantEmail, '(id ' + r.emailId + ')');
+                        this.toast('📧 Werkbon gemaild naar ' + klantEmail);
+                    } else {
+                        console.warn('[werkbon-email] faalde:', r.error);
+                        this.toast('⚠️ Mail niet verstuurd: ' + (r.error || 'onbekend'));
+                    }
+                }).catch(e => {
+                    console.warn('[werkbon-email] exception:', e && e.message);
+                });
+            }
 
             // v88: Sla "laatste betaling" context op zodat Olivier op de Uitgevoerd-tab
             // de methode kan switchen als de Viva-terminal faalt.

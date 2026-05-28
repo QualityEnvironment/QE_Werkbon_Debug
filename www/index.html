@@ -559,6 +559,14 @@
                 <input type="text" id="wbSignatureName" placeholder="Naam ondertekenaar"
                     style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
             </div>
+            <!-- v169: optioneel email-veld om de werkbon PDF naar de klant te mailen -->
+            <div style="margin-bottom:8px">
+                <input type="email" id="wbSignatureEmail" placeholder="E-mail klant (optioneel — werkbon doorsturen)"
+                    style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+                <div style="font-size:11px;color:var(--qe-grey);margin-top:4px;padding-left:2px">
+                    Vul in om de klant de werkbon PDF te mailen. Laat leeg om over te slaan.
+                </div>
+            </div>
             <div style="position:relative;border:2px dashed #ccc;border-radius:10px;background:#fafafa;overflow:hidden">
                 <canvas id="signatureCanvas" width="340" height="160" style="width:100%;touch-action:none;cursor:crosshair"></canvas>
                 <button onclick="app.clearSignature()" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.5);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">Wis</button>

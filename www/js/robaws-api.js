@@ -3123,6 +3123,74 @@ const RobawsAPI = {
      * @param {string} [opts.reference]       - bv. Mollie tr_xxxx voor traceability
      * @returns {Promise<{success, code, data, error?}>}
      */
+    /**
+     * v169: Stuur een werkbon-PDF per email via Robaws.
+     *
+     * Officieel endpoint (uit Robaws Public API docs):
+     *   POST /api/v2/{resourceTypeBasePath}/{resourceId}/emails
+     *
+     * Voor werkbons:
+     *   POST /api/v2/work-orders/{id}/emails
+     *
+     * Body:
+     *   - templateName / templateId  → kies welk template Robaws moet gebruiken
+     *   - recipients.to              → bestemmings-adressen
+     *   - send: true                 → echt versturen (vs. opslaan als draft)
+     *   - sendAsUserId (optioneel)   → namens een specifieke gebruiker
+     *
+     * Response 201 → { id: "..." } (id van de email)
+     *
+     * @param {string|number} workOrderId
+     * @param {string} email - bestemmings-adres (single email)
+     * @param {Object} [opts]
+     * @param {string} [opts.templateName] - bv. "Werkbon naar klant" (default uit constante)
+     * @param {string} [opts.templateId]   - alternatief voor templateName
+     * @param {string} [opts.subject]      - override template-onderwerp
+     * @param {Object} [opts.templateContext] - dict voor vervangingscodes
+     * @param {string} [opts.sendAsUserId] - namens deze user (default: API-user)
+     * @returns {Promise<{ok: boolean, emailId?: string, error?: string}>}
+     */
+    async sendWorkOrderByEmail(workOrderId, email, opts = {}) {
+        if (!workOrderId || !email) return { ok: false, error: 'workOrderId en email verplicht' };
+        const trimmed = String(email).trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+            return { ok: false, error: 'Ongeldig email-adres' };
+        }
+
+        // Default template-naam (configurabel in Robaws Instellingen → e-mailtemplates)
+        const templateName = opts.templateName || this.EMAIL_TEMPLATE_WERKBON || 'Werkbon naar klant';
+        const body = {
+            recipients: { to: [trimmed] },
+            send: true,
+        };
+        if (opts.templateId) body.templateId = opts.templateId;
+        else body.templateName = templateName;
+        if (opts.subject) body.subject = opts.subject;
+        if (opts.templateContext) body.templateContext = opts.templateContext;
+        if (opts.sendAsUserId) body.sendAsUserId = String(opts.sendAsUserId);
+
+        try {
+            const r = await this.post(`work-orders/${workOrderId}/emails`, body);
+            if (r.code === 200 || r.code === 201 || r.code === 204) {
+                const emailId = (r.data && r.data.id) || null;
+                console.log('[sendWorkOrderByEmail] ✓ verstuurd via template "' + templateName + '" → id', emailId);
+                return { ok: true, emailId };
+            }
+            const errMsg = `HTTP ${r.code}: ${JSON.stringify(r.data).slice(0, 300)}`;
+            console.warn('[sendWorkOrderByEmail] faalde:', errMsg);
+            return { ok: false, error: errMsg };
+        } catch (e) {
+            const errMsg = (e && e.message) || String(e);
+            console.warn('[sendWorkOrderByEmail] gooi-fout:', errMsg);
+            return { ok: false, error: errMsg };
+        }
+    },
+
+    /** v169: configurabele template-naam voor werkbon-mails.
+     *  Moet exact matchen met de naam in Robaws Instellingen → e-mailtemplates.
+     *  Bij wijziging in Robaws ook hier aanpassen. */
+    EMAIL_TEMPLATE_WERKBON: 'Werkbon naar klant',
+
     async registerInvoicePayment({ invoiceId, amount, date, paymentMethod, reference }) {
         if (!invoiceId) return { success: false, error: 'invoiceId verplicht' };
         if (!amount || amount <= 0) return { success: false, error: 'amount > 0 verplicht' };
