@@ -1393,8 +1393,13 @@ const RobawsAPI = {
         const planningIdsMetWerkbon = await this._getPlanningIdsWithWorkOrders(userId);
 
         // Verrijk elk item met klantgegevens + BTW + ordernummer
-        const enriched = [];
-        for (const item of filtered) {
+        // v183: BTW-tarieven 1x als gecachede map (geen vat-tariffs/{id} per klant).
+        const vatMap = await this.getVatTariffMap();
+        // v183: parallelliseer de enrichment OVER de items (Promise.all) i.p.v. een
+        // sequentiele for...of. Binnen een item blijven de calls serieel, dus de
+        // gelijktijdige concurrency = aantal items (typisch 3-8) -> veilig qua
+        // rate-limit. Promise.all behoudt de volgorde.
+        const enriched = await Promise.all(filtered.map(async (item) => {
             const hasWerkbon = planningIdsMetWerkbon.has(String(item.id));
 
             // Haal het volledige planning-item op voor de complete description (HTML)
@@ -1448,15 +1453,11 @@ const RobawsAPI = {
                             vatTariffName: null,
                         };
 
-                        // BTW tarief ophalen
-                        if (c.vatTariffId) {
-                            try {
-                                const vatResult = await this.get(`vat-tariffs/${c.vatTariffId}`);
-                                if (vatResult.code === 200) {
-                                    entry.client.vatPercentage = vatResult.data.percentage ?? null;
-                                    entry.client.vatTariffName = vatResult.data.name ?? null;
-                                }
-                            } catch (e) { /* BTW niet gevonden, niet erg */ }
+                        // v183: BTW-tarief uit de 1x gecachede map (geen call per klant).
+                        const vt = c.vatTariffId ? vatMap[String(c.vatTariffId)] : null;
+                        if (vt) {
+                            entry.client.vatPercentage = vt.percentage ?? null;
+                            entry.client.vatTariffName = vt.name ?? null;
                         }
                     }
                 } catch (e) { /* Klant niet gevonden */ }
@@ -1523,8 +1524,8 @@ const RobawsAPI = {
                 } catch (e) { /* Order niet gevonden */ }
             }
 
-            enriched.push(entry);
-        }
+            return entry;
+        }));
 
         return { items: enriched, date, employeeId };
     },
@@ -1597,25 +1598,29 @@ const RobawsAPI = {
         const timeOperationIds = roleResult.data.timeOperationIds || [];
         console.log('[RobawsAPI] timeOperationIds:', timeOperationIds.length, 'items');
 
-        // Stap 3: Haal elk artikel op
+        // Stap 3: Haal elk artikel PARALLEL op (v183: was sequentieel per artikel).
+        // Promise.all behoudt de volgorde; gefaalde/lege resultaten filteren we eruit.
+        const artResults = await Promise.all(
+            timeOperationIds.map(articleId =>
+                this.get(`articles/${articleId}`).catch(e => {
+                    console.warn('[RobawsAPI] Artikel', articleId, 'fout:', e && e.message);
+                    return null;
+                })
+            )
+        );
         const uurcodes = [];
-        for (const articleId of timeOperationIds) {
-            try {
-                const artResult = await this.get(`articles/${articleId}`);
-                if (artResult.code === 200) {
-                    const art = artResult.data;
-                    const name = art.name || `Uurcode ${articleId}`;
-                    uurcodes.push({
-                        id: art.id,
-                        name: name,
-                        unitPrice: art.unitPrice ?? null,
-                        salePrice: art.salePrice ?? null,
-                        costPrice: art.costPrice ?? null,
-                        isVerplaatsing: name.toLowerCase().includes('verplaatsing'),
-                    });
-                }
-            } catch (e) {
-                console.warn('[RobawsAPI] Artikel', articleId, 'fout:', e.message);
+        for (const artResult of artResults) {
+            if (artResult && artResult.code === 200 && artResult.data) {
+                const art = artResult.data;
+                const name = art.name || `Uurcode ${art.id}`;
+                uurcodes.push({
+                    id: art.id,
+                    name: name,
+                    unitPrice: art.unitPrice ?? null,
+                    salePrice: art.salePrice ?? null,
+                    costPrice: art.costPrice ?? null,
+                    isVerplaatsing: name.toLowerCase().includes('verplaatsing'),
+                });
             }
         }
 
@@ -3308,6 +3313,29 @@ const RobawsAPI = {
             console.warn('[RobawsAPI] getHourTypeNameMap faalde:', e && e.message);
         }
         this._hourTypeNameCache = map;
+        return map;
+    },
+
+    // v183: BTW-tarieven 1x ophalen als map {id: {percentage, name}} (gecached),
+    // zodat getPlanning niet per klant een vat-tariffs/{id}-call hoeft te doen.
+    _vatTariffMapCache: null,
+    async getVatTariffMap() {
+        if (this._vatTariffMapCache) return this._vatTariffMapCache;
+        const map = {};
+        try {
+            const res = await this.get('vat-tariffs?limit=50');
+            if (res.code === 200) {
+                const items = (res.data && res.data.items) || res.data || [];
+                for (const t of items) {
+                    if (t && t.id != null) {
+                        map[String(t.id)] = { percentage: t.percentage ?? null, name: t.name ?? null };
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[RobawsAPI] getVatTariffMap faalde:', e && e.message);
+        }
+        this._vatTariffMapCache = map;
         return map;
     },
 
