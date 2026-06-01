@@ -1802,9 +1802,14 @@ const app = {
             : '';
 
         const tel = wo.client?.tel || wo.client?.phone || '';
+        // v181: regie (tijd & materiaal) zichtbaar maken in de planning-lijst
+        const isRegie = !!wo.timeAndMaterial;
+        const regieChip = isRegie
+            ? `<span class="wo-type" style="margin-left:6px;background:#fff3e0;color:#e65100;border:1px solid #ffcc80">⚙️ Regie</span>`
+            : '';
 
         return `
-            <div class="card card-clickable" onclick="app.openWorkorder('${wo.id}')">
+            <div class="card card-clickable" onclick="app.openWorkorder('${wo.id}')"${isRegie ? ' style="background:#fff8f0;border-left:3px solid var(--qe-orange)"' : ''}>
                 <div class="wo-card">
                     <div class="wo-time">
                         <div class="t-hour">${timeStr}</div>
@@ -1813,7 +1818,7 @@ const app = {
                         <h3>${this.escapeHtml(clientName)}</h3>
                         ${wo.summary ? `<div style="font-size:13px;color:var(--qe-darkblue);font-weight:500;margin:2px 0">${this.escapeHtml(wo.summary)}</div>` : ''}
                         ${address ? `<div class="wo-address">📍 ${this.escapeHtml(address)}</div>` : ''}
-                        <span class="wo-type ${type}">${typeLabel}</span>
+                        <span class="wo-type ${type}">${typeLabel}</span>${regieChip}
                         ${orderNr ? `<span style="margin-left:6px;font-size:11px;color:var(--qe-purple);font-weight:500">${this.escapeHtml(orderNr)}</span>` : ''}
                         ${histBadge}
                         ${hasMaterials || hasHours ? '<span style="margin-left:6px;font-size:11px;color:var(--qe-green)">✓ In bewerking</span>' : ''}
@@ -1888,6 +1893,9 @@ const app = {
         const clientName = this.currentWO.client?.name || 'Onbekend';
         document.getElementById('detailTitle').textContent = summary || clientName;
         document.getElementById('detailSubtitle').textContent = summary ? clientName : '';
+        // v181: regie (tijd & materiaal) heel zichtbaar bovenaan tonen
+        const _regieBanner = document.getElementById('detailRegieBanner');
+        if (_regieBanner) _regieBanner.style.display = this.currentWO.timeAndMaterial ? 'block' : 'none';
 
         // Fill client info — gebruik dagplanning data waar beschikbaar
         const client = this.currentWO.client || {};
@@ -2019,12 +2027,18 @@ const app = {
         // Planning documenten/bestanden tonen
         this._renderPlanDocuments();
 
-        // Load installations — alleen die van de dagplanning
+        // v181: ENKEL installaties die aan de dagplanning gelinkt zijn — geen
+        // fallback meer naar alle klant-installaties. Geen gelinkte installaties?
+        // Dan tonen we ook niets (lege staat).
         const installationIds = this.currentWO.installationIds || [];
         if (installationIds.length > 0) {
             this.loadInstallations(null, installationIds);
-        } else if (client.id) {
-            this.loadInstallations(client.id, []);
+        } else {
+            this._loadedInstallations = [];
+            const instEl = document.getElementById('installationInfo');
+            if (instEl) instEl.innerHTML = '<p class="text-grey text-sm">Geen installaties gekoppeld aan deze dagplanning</p>';
+            const docEl = document.getElementById('documentList');
+            if (docEl) docEl.innerHTML = '<p class="text-grey text-sm">Geen documenten beschikbaar</p>';
         }
 
         // Restore saved data
@@ -3290,7 +3304,14 @@ const app = {
                 if (result.code !== 200) throw new Error('Kon BTW tarieven niet ophalen');
                 this._vatTariffsCache = (result.data.items || []).filter(t => t.name);
             }
-            const tariffs = this._vatTariffsCache;
+            // v181: techniekers mogen enkel kiezen tussen 3 tarieven —
+            // 21% (id 1), 6% (id 4), Verlegd (id 2). Andere tarieven verbergen.
+            // (Levi bevestigde deze IDs; de oude hardcoded comment "2=12%"
+            //  elders klopt dus niet voor dit tarief — apart na te kijken.)
+            const ALLOWED_VAT_IDS = ['1', '4', '2'];
+            const tariffs = ALLOWED_VAT_IDS
+                .map(id => this._vatTariffsCache.find(t => String(t.id) === id))
+                .filter(Boolean);
             const currentVatId = this.currentWO.client.vatTariffId;
 
             document.getElementById('modalContent').innerHTML = `
@@ -4103,7 +4124,11 @@ const app = {
         }
 
         section.style.display = '';
-        list.innerHTML = docs.map(doc => {
+        // v181: knop om alle bestanden in 1 keer te downloaden (bij >1 bestand)
+        const bulkBtn = docs.length > 1
+            ? `<button class="btn btn-primary btn-sm btn-full" style="margin-bottom:8px" onclick="app.downloadAllPlanDocuments()">⬇️ Alle ${docs.length} bestanden downloaden</button>`
+            : '';
+        list.innerHTML = bulkBtn + docs.map(doc => {
             const icon = this._getFileIcon(doc.contentType);
             const sizeStr = doc.size > 0 ? this._formatFileSize(doc.size) : '';
             return `
@@ -4212,6 +4237,28 @@ const app = {
         } catch(e) {
             this.toast('Opslaan mislukt: ' + e.message, true);
         }
+    },
+
+    // v181: download ALLE dagplanning-bestanden in 1 keer (lus + native opslaan).
+    async downloadAllPlanDocuments() {
+        const docs = (this.currentWO && this.currentWO.documents) || [];
+        if (docs.length === 0) { this.toast('Geen bestanden'); return; }
+        let ok = 0, fail = 0;
+        this.toast(docs.length + ' bestanden downloaden…');
+        for (const doc of docs) {
+            try {
+                const result = await RobawsAPI.getDocumentUrl(doc.id);
+                await this._saveBlobNative(result.blob, doc.name || ('bestand_' + doc.id), result.contentType);
+                try { URL.revokeObjectURL(result.blobUrl); } catch(_) {}
+                ok++;
+            } catch (e) {
+                console.warn('[PlanDocs] download faalde voor', doc && doc.name, e && e.message);
+                fail++;
+            }
+        }
+        this.toast(fail === 0
+            ? ('✓ ' + ok + ' bestand(en) opgeslagen in Downloads')
+            : (ok + ' opgeslagen, ' + fail + ' mislukt'));
     },
 
     renderPhotos() {
