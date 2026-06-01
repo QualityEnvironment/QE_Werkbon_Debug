@@ -1878,6 +1878,56 @@ const app = {
     // ========================================
     // WERKORDER DETAIL
     // ========================================
+    // v185: detail-only data (eindklant, line-items, documenten) lazy laden bij
+    // het openen van een werkbon i.p.v. tijdens elke planning-lijst-load. Parallel,
+    // en met v184-cache (clients/{id}) instant bij heropenen. Mapping identiek aan
+    // de oude getPlanning-enrichment zodat clientInfo / _renderPlanLineItems /
+    // _renderPlanDocuments dezelfde shape krijgen. Idempotent: al-geladen data wordt
+    // overgeslagen.
+    async _loadWorkorderDetailData(wo) {
+        if (!wo) return;
+        const woIdAtStart = wo.id;
+        const needEndClient = wo.endClientId
+            && String(wo.endClientId) !== String(wo.clientId || '')
+            && !wo.endClient;
+        const [ecRes, liRes, docRes] = await Promise.all([
+            needEndClient ? RobawsAPI.get(`clients/${wo.endClientId}`).catch(() => null) : Promise.resolve(null),
+            wo.lineItems ? Promise.resolve(null) : RobawsAPI.get(`planning-items/${wo.id}/line-items`).catch(() => null),
+            wo.documents ? Promise.resolve(null) : RobawsAPI.get(`planning-items/${wo.id}/documents`).catch(() => null),
+        ]);
+        // Ondertussen een andere werkbon geopend? Resultaat niet toepassen.
+        if (!this.currentWO || String(this.currentWO.id) !== String(woIdAtStart)) return;
+
+        if (ecRes && ecRes.code === 200 && ecRes.data) {
+            const ec = ecRes.data;
+            wo.endClient = {
+                id: ec.id, name: ec.name || '', email: ec.email || '',
+                tel: ec.tel || '', address: RobawsAPI.formatAddress(ec.address),
+            };
+        }
+        if (liRes && liRes.code === 200 && liRes.data) {
+            const lineItems = liRes.data.items || liRes.data || [];
+            wo.lineItems = lineItems.map(li => ({
+                id: li.id,
+                description: li.description || '',
+                quantity: li.quantity || 1,
+                unitType: li.unitType || null,
+                type: li.type || 'LINE',
+                articleId: li.articleId || (li.article && li.article.id) || null,
+            }));
+        }
+        if (docRes && docRes.code === 200 && docRes.data) {
+            const docs = Array.isArray(docRes.data) ? docRes.data : (docRes.data.items || []);
+            wo.documents = docs.map(d => ({
+                id: d.id,
+                name: d.name || 'Bestand',
+                contentType: d.contentType || '',
+                size: d.size || 0,
+                url: d.url || d.previewUrl || null,
+            }));
+        }
+    },
+
     async openWorkorder(woId) {
         this.currentWO = this.workorders.find(w => String(w.id) === String(woId));
         if (!this.currentWO) return;
@@ -1896,6 +1946,11 @@ const app = {
         // v181: regie (tijd & materiaal) heel zichtbaar bovenaan tonen
         const _regieBanner = document.getElementById('detailRegieBanner');
         if (_regieBanner) _regieBanner.style.display = this.currentWO.timeAndMaterial ? 'block' : 'none';
+
+        // v185: detail-data (eindklant + line-items + documenten) lazy laden.
+        // Stond vroeger in getPlanning (= bij elke lijst-load, per item); nu enkel
+        // bij het openen van DEZE werkbon, parallel + met v184-cache bij heropenen.
+        await this._loadWorkorderDetailData(this.currentWO);
 
         // Fill client info — gebruik dagplanning data waar beschikbaar
         const client = this.currentWO.client || {};

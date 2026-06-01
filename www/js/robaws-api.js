@@ -1551,54 +1551,11 @@ const RobawsAPI = {
                 } catch (e) { /* Klant niet gevonden */ }
             }
 
-            // v102+: Eindklant (Bewoner) ophalen — als endClientId is ingevuld
-            // op het planning-item én anders dan clientId.
-            if (item.endClientId && String(item.endClientId) !== String(item.clientId || '')) {
-                try {
-                    const ecResult = await this.get(`clients/${item.endClientId}`);
-                    if (ecResult.code === 200 && ecResult.data) {
-                        const ec = ecResult.data;
-                        entry.endClient = {
-                            id: ec.id,
-                            name: ec.name || '',
-                            email: ec.email || '',
-                            tel: ec.tel || '',
-                            address: this.formatAddress(ec.address),
-                        };
-                    }
-                } catch (e) { /* Eindklant niet gevonden */ }
-            }
-
-            // Planning line-items ophalen (materialen/artikelen die meegegeven moeten worden)
-            try {
-                const liRes = await this.get(`planning-items/${item.id}/line-items`);
-                if (liRes.code === 200 && liRes.data) {
-                    const lineItems = liRes.data.items || liRes.data || [];
-                    entry.lineItems = lineItems.map(li => ({
-                        id: li.id,
-                        description: li.description || '',
-                        quantity: li.quantity || 1,
-                        unitType: li.unitType || null,
-                        type: li.type || 'LINE',
-                        articleId: li.articleId || (li.article && li.article.id) || null,
-                    }));
-                }
-            } catch(e) { console.warn('[RobawsAPI] Line-items ophalen mislukt:', e); }
-
-            // Planning documenten/bestanden ophalen
-            try {
-                const docRes = await this.get(`planning-items/${item.id}/documents`);
-                if (docRes.code === 200 && docRes.data) {
-                    const docs = Array.isArray(docRes.data) ? docRes.data : (docRes.data.items || []);
-                    entry.documents = docs.map(d => ({
-                        id: d.id,
-                        name: d.name || 'Bestand',
-                        contentType: d.contentType || '',
-                        size: d.size || 0,
-                        url: d.url || d.previewUrl || null,
-                    }));
-                }
-            } catch(e) { console.warn('[RobawsAPI] Documenten ophalen mislukt:', e); }
+            // v185: eindklant + line-items + documenten worden NIET meer hier
+            // (bij elke lijst-load, per item) opgehaald. Dat is detail-only data en
+            // wordt lazy geladen in app._loadWorkorderDetailData() bij het openen van
+            // een werkbon (parallel + v184-cache). De IDs (endClientId, id) zitten al
+            // in de entry zodat openWorkorder ze kan ophalen.
 
             // Ordernummer ophalen van sales order. (Regie NIET van de order —
             // v182: die komt ENKEL van de dagplanning, zie planRegie hierboven.)
