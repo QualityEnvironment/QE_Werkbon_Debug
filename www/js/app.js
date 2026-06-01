@@ -4571,7 +4571,7 @@ const app = {
         }
 
         // Bewaar vatTariffId op currentWO voor factuur-aanmaak
-        // Robaws vat-tariff IDs: 1=21%, 2=12%, 3=0%, 4=6%
+        // Robaws vat-tariff IDs: 1=21%, 2=Verlegd (0%), 3=0%, 4=6%   // v182: 2 = verlegd, niet 12%
         // BUG-fix: Robaws kan vatPercentage als string ("6") teruggeven.
         // De vorige === vergelijkingen faalden dan stilletjes en de
         // factuur kreeg de default 6% (vatTariffId='4'), waardoor
@@ -4581,8 +4581,8 @@ const app = {
             : Number(client.vatPercentage);
         if (vatPctNum === 6) this.currentWO.vatTariffId = '4';
         else if (vatPctNum === 21) this.currentWO.vatTariffId = '1';
-        else if (vatPctNum === 12) this.currentWO.vatTariffId = '2';
         else if (vatPctNum === 0) this.currentWO.vatTariffId = '3';
+        // v182: 12% -> id 2 mapping VERWIJDERD (id 2 = Verlegd/0%, niet 12%).
 
         this.navigate('screenWerkbon');
     },
@@ -5231,7 +5231,7 @@ const app = {
                     const feeInclVat = grossTotal - originalTotal;
 
                     const vatTariffId = String(this.currentWO.vatTariffId || '4');
-                    const vatRateMap = { '1': 0.21, '2': 0.12, '3': 0.00, '4': 0.06 };
+                    const vatRateMap = { '1': 0.21, '2': 0.00, '3': 0.00, '4': 0.06 };  // v182: id 2 = Verlegd (0%)
                     const vatRate = vatRateMap[vatTariffId] || 0;
                     const feeExclVat = feeInclVat / (1 + vatRate);
                     const roundedFeeExclVat = Math.round(feeExclVat * 100) / 100;

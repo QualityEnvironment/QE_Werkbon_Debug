@@ -1400,10 +1400,14 @@ const RobawsAPI = {
             // Haal het volledige planning-item op voor de complete description (HTML)
             // Het list-endpoint kapt de description af, het detail-endpoint geeft alles.
             let fullDescription = item.description || item.notes || '';
+            // v182: regie (timeAndMaterial) staat OP de dagplanning zelf. Primair
+            // van het list-item, daarna eventueel overschreven door het detail-item.
+            let planRegie = (item.timeAndMaterial === true);
             try {
                 const fullItem = await this.get(`planning-items/${item.id}`);
-                if (fullItem.code === 200 && fullItem.data && fullItem.data.description) {
-                    fullDescription = fullItem.data.description;
+                if (fullItem.code === 200 && fullItem.data) {
+                    if (fullItem.data.description) fullDescription = fullItem.data.description;
+                    if (typeof fullItem.data.timeAndMaterial === 'boolean') planRegie = fullItem.data.timeAndMaterial;
                 }
             } catch(e) { /* Fallback naar list-description */ }
 
@@ -1422,6 +1426,7 @@ const RobawsAPI = {
                 planningTypeId: item.planningTypeId || null,
                 hourTypeId: item.hourTypeId || null,
                 hasWerkbon: hasWerkbon,
+                timeAndMaterial: planRegie,   // v182: regie komt ENKEL van de dagplanning
                 client: null,
                 endClient: null,  // v102+: ook eindklant ophalen
             };
@@ -1506,15 +1511,14 @@ const RobawsAPI = {
                 }
             } catch(e) { console.warn('[RobawsAPI] Documenten ophalen mislukt:', e); }
 
-            // Ordernummer + regie-vinkje ophalen van sales order
+            // Ordernummer ophalen van sales order. (Regie NIET van de order —
+            // v182: die komt ENKEL van de dagplanning, zie planRegie hierboven.)
             if (item.salesOrderId) {
                 try {
                     const soResult = await this.get(`sales-orders/${item.salesOrderId}`);
                     if (soResult.code === 200) {
                         entry.orderLogicId = soResult.data.logicId || null;
                         entry.orderStatus = soResult.data.status || null;
-                        // Regie (timeAndMaterial) overnemen van de order
-                        entry.timeAndMaterial = soResult.data.timeAndMaterial ?? false;
                     }
                 } catch (e) { /* Order niet gevonden */ }
             }
@@ -2923,7 +2927,7 @@ const RobawsAPI = {
             // We ondersteunen nu zowel '1' als '5' als 21% (Robaws blijkt
             // historisch beide te gebruiken) en loggen een waarschuwing
             // i.p.v. stille foute berekening.
-            const vatRates = { '1': 0.21, '2': 0.12, '3': 0, '4': 0.06, '5': 0.21 };
+            const vatRates = { '1': 0.21, '2': 0, '3': 0, '4': 0.06, '5': 0.21 };  // v182: id 2 = Verlegd (0%), niet 12%
             for (const l of lines) {
                 const lineExcl = (Number(l.quantity) || 0) * (Number(l.price) || 0) * (1 - (Number(l.discount) || 0) / 100);
                 const tariffKey = String(l.vatTariffId);
