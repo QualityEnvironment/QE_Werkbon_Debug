@@ -1695,7 +1695,7 @@ const app = {
         }
 
         const list = document.getElementById('workorderList');
-        list.innerHTML = '<div class="spinner"></div>';
+        list.innerHTML = this._skelList(4);
 
         const dateStr = this._localDateStr(this.currentDate);
 
@@ -1728,7 +1728,7 @@ const app = {
                 const isToday = dateStr === this._localDateStr();
                 list.innerHTML = `
                     <div class="empty-state">
-                        <div class="empty-icon">📋</div>
+                        <div class="empty-icon">${this.icon('clipboard', { size: 44, stroke: 1.6 })}</div>
                         <h3>Geen werkorders</h3>
                         <p>Geen werkorders voor ${isToday ? 'vandaag' : 'morgen'}</p>
                     </div>
@@ -1763,13 +1763,70 @@ const app = {
             console.error('Planning laden mislukt:', err);
             list.innerHTML = `
                 <div class="empty-state">
-                    <div class="empty-icon">⚠️</div>
+                    <div class="empty-icon">${this.icon('alert', { size: 44, stroke: 1.6 })}</div>
                     <h3>Fout bij laden</h3>
                     <p style="font-size:12px;color:var(--qe-grey);word-break:break-all;margin-bottom:8px">${this.escapeHtml(err.message)}</p>
                     <button class="btn btn-primary btn-sm" onclick="app.loadPlanning()">Opnieuw proberen</button>
                 </div>
             `;
         }
+    },
+
+    // v187: inline lijn-icoon helper (vervangt emoji-iconen, geen externe webfont nodig)
+    icon(name, opts) {
+        opts = opts || {};
+        const s = opts.size || 18;
+        const sw = opts.stroke || 2;
+        const cls = opts.cls ? ` class="${opts.cls}"` : '';
+        const st = opts.style ? ` style="${opts.style}"` : '';
+        const P = {
+            'map-pin': '<path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2.3"/>',
+            'phone': '<path d="M5 4h3.5l1.5 4.5L8 10a11 11 0 0 0 5 5l1.6-2 4.4 1.5V19a2 2 0 0 1-2 2A16 16 0 0 1 4 6a2 2 0 0 1 1-2z"/>',
+            'mail': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+            'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+            'calendar': '<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M16 3v4M8 3v4M4 10h16"/>',
+            'clipboard': '<rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4h6v3H9z"/><path d="M9 12h6M9 16h4"/>',
+            'cash': '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v6M18 9v6"/>',
+            'percent': '<path d="M19 5 5 19"/><circle cx="7.5" cy="7.5" r="2"/><circle cx="16.5" cy="16.5" r="2"/>',
+            'user': '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
+            'navigation': '<path d="M3 11 21 3l-8 18-2-7-8-3z"/>',
+            'check': '<path d="M5 12l4 4 10-10"/>',
+            'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+            'alert': '<path d="M12 4 3 19h18z"/><path d="M12 10v4M12 17h.01"/>',
+            'package': '<path d="M12 3 21 7.5v9L12 21 3 16.5v-9z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/>',
+            'minus': '<path d="M5 12h14"/>'
+        };
+        return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
+    },
+
+    // v187: skeleton-lijst tijdens laden (vervangt de spinner -> rustiger overgang)
+    _skelList(n) {
+        let r = '';
+        for (let i = 0; i < (n || 4); i++) {
+            r += `<div class="qe-skel-row"><div class="qe-skel" style="width:42px;height:34px"></div><div style="flex:1"><div class="qe-skel" style="width:55%;height:12px;margin-bottom:8px"></div><div class="qe-skel" style="width:78%;height:10px"></div></div></div>`;
+        }
+        return `<div class="qe-skel-list">${r}</div>`;
+    },
+
+    // v187: tellende getallen (uren-overzicht)
+    _animateCountUps(root) {
+        try {
+            const els = (root || document).querySelectorAll('.qe-countup[data-count]');
+            els.forEach((el) => {
+                const target = parseFloat(el.getAttribute('data-count')) || 0;
+                const dec = parseInt(el.getAttribute('data-dec') || '0', 10);
+                if (!target) { el.textContent = target.toFixed(dec); return; }
+                const dur = 750; let t0 = null;
+                const step = (ts) => {
+                    if (!t0) t0 = ts;
+                    const p = Math.min((ts - t0) / dur, 1);
+                    const e = 1 - Math.pow(1 - p, 3);
+                    el.textContent = (target * e).toFixed(dec);
+                    if (p < 1) requestAnimationFrame(step); else el.textContent = target.toFixed(dec);
+                };
+                requestAnimationFrame(step);
+            });
+        } catch (e) { /* animatie mag de UI nooit breken */ }
     },
 
     renderWorkorderCard(wo) {
@@ -1805,11 +1862,11 @@ const app = {
         // v181: regie (tijd & materiaal) zichtbaar maken in de planning-lijst
         const isRegie = !!wo.timeAndMaterial;
         const regieChip = isRegie
-            ? `<span class="wo-type" style="margin-left:6px;background:#fff3e0;color:#e65100;border:1px solid #ffcc80">⚙️ Regie</span>`
+            ? `<span class="wo-regie-tag">${this.icon('cash', { size: 13 })} Regie</span>`
             : '';
 
         return `
-            <div class="card card-clickable" onclick="app.openWorkorder('${wo.id}')"${isRegie ? ' style="background:#fff8f0;border-left:3px solid var(--qe-orange)"' : ''}>
+            <div class="card card-clickable" onclick="app.openWorkorder('${wo.id}')">
                 <div class="wo-card">
                     <div class="wo-time">
                         <div class="t-hour">${timeStr}</div>
@@ -1817,15 +1874,15 @@ const app = {
                     <div class="wo-info">
                         <h3>${this.escapeHtml(clientName)}</h3>
                         ${wo.summary ? `<div style="font-size:13px;color:var(--qe-darkblue);font-weight:500;margin:2px 0">${this.escapeHtml(wo.summary)}</div>` : ''}
-                        ${address ? `<div class="wo-address">📍 ${this.escapeHtml(address)}</div>` : ''}
+                        ${address ? `<div class="wo-address">${this.icon('map-pin', { size: 14 })} ${this.escapeHtml(address)}</div>` : ''}
                         <span class="wo-type ${type}">${typeLabel}</span>${regieChip}
                         ${orderNr ? `<span style="margin-left:6px;font-size:11px;color:var(--qe-purple);font-weight:500">${this.escapeHtml(orderNr)}</span>` : ''}
                         ${histBadge}
-                        ${hasMaterials || hasHours ? '<span style="margin-left:6px;font-size:11px;color:var(--qe-green)">✓ In bewerking</span>' : ''}
+                        ${hasMaterials || hasHours ? `<span style="margin-left:6px;font-size:11px;color:var(--qe-green)">${this.icon('check', { size: 12, style: 'vertical-align:-2px' })} In bewerking</span>` : ''}
                     </div>
                     <div style="display:flex;flex-direction:column;gap:6px;align-items:center;flex-shrink:0">
-                        ${tel ? `<a href="tel:${this.escapeHtml(tel)}" class="wo-nav-btn" onclick="event.stopPropagation()" title="Bel klant" style="text-decoration:none">📞</a>` : ''}
-                        ${address ? `<button class="wo-nav-btn" onclick="event.stopPropagation(); app.navigateToAddress('${this.escapeHtml(address).replace(/'/g, "\\'")}')" title="Navigeer">🧭</button>` : ''}
+                        ${tel ? `<a href="tel:${this.escapeHtml(tel)}" class="wo-nav-btn" onclick="event.stopPropagation()" title="Bel klant" style="text-decoration:none">${this.icon('phone', { size: 17 })}</a>` : ''}
+                        ${address ? `<button class="wo-nav-btn" onclick="event.stopPropagation(); app.navigateToAddress('${this.escapeHtml(address).replace(/'/g, "\\'")}')" title="Navigeer">${this.icon('navigation', { size: 17 })}</button>` : ''}
                     </div>
                 </div>
             </div>
@@ -1974,24 +2031,24 @@ const app = {
             && String(endClient.id || '') !== String(client.id || '');
 
         const navLink = displayAddress
-            ? `<a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(displayAddress)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:var(--qe-purple);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap">🗺️ Navigeer</a>`
+            ? `<a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(displayAddress)}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:var(--qe-purple);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap">${this.icon('navigation', { size: 14, style: 'vertical-align:-2px' })} Navigeer</a>`
             : '';
 
         const partyRows = (party) => {
             if (!party) return '';
             return `
                 <div class="info-row">
-                    <span class="info-icon">📍</span>
+                    <span class="info-icon">${this.icon('map-pin')}</span>
                     <span class="info-label">Adres</span>
                     <span class="info-value">${this.escapeHtml(party.address || '-')}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-icon">📞</span>
+                    <span class="info-icon">${this.icon('phone')}</span>
                     <span class="info-label">Telefoon</span>
                     <span class="info-value">${party.tel ? `<a href="tel:${party.tel}">${this.escapeHtml(party.tel)}</a>` : '-'}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-icon">✉️</span>
+                    <span class="info-icon">${this.icon('mail')}</span>
                     <span class="info-label">Email</span>
                     <span class="info-value">${party.email ? `<a href="mailto:${party.email}">${this.escapeHtml(party.email)}</a>` : '-'}</span>
                 </div>`;
@@ -2009,19 +2066,19 @@ const app = {
             </div>` : ''}
 
             ${planTimeStr ? `<div class="info-row">
-                <span class="info-icon">🕐</span>
+                <span class="info-icon">${this.icon('clock')}</span>
                 <span class="info-label">Gepland</span>
                 <span class="info-value">${this.escapeHtml(planTimeStr)}</span>
             </div>` : ''}
             ${planDescription ? `<div class="info-row">
-                <span class="info-icon">📋</span>
+                <span class="info-icon">${this.icon('clipboard')}</span>
                 <span class="info-label">Omschrijving</span>
                 <span class="info-value">${planDescription.replace(/<[^>]*>/g, '') || '-'}</span>
             </div>` : ''}
 
             <!-- BTW altijd van klant + aanpas-knop direct eronder -->
             <div class="info-row btw-row" style="background:rgba(106,44,145,0.06);border-radius:8px;padding:8px 12px;margin:10px 0 6px">
-                <span class="info-icon">💰</span>
+                <span class="info-icon">${this.icon('percent')}</span>
                 <span class="info-label">BTW tarief</span>
                 <span class="info-value" id="clientVatDisplay" style="font-weight:600;color:var(--qe-purple)">${client.vatTariffName ? this.escapeHtml(client.vatTariffName) : (client.vatPercentage !== null && client.vatPercentage !== undefined ? client.vatPercentage + '%' : 'Niet ingesteld')}</span>
             </div>
@@ -2029,7 +2086,7 @@ const app = {
                 style="width:100%;margin:0 0 10px;padding:10px;border:2px solid var(--qe-purple);border-radius:10px;
                 background:transparent;color:var(--qe-purple);font-size:14px;font-weight:600;cursor:pointer;
                 display:flex;align-items:center;justify-content:center;gap:6px">
-                💰 BTW tarief aanpassen
+                ${this.icon('percent', { size: 15 })} BTW tarief aanpassen
             </button>` : ''}
 
             <!-- Klant (Eigenaar) -->
@@ -2037,7 +2094,7 @@ const app = {
                 Klant <span style="font-style:italic;text-transform:none;color:var(--qe-purple);letter-spacing:normal;font-weight:500">(Eigenaar)</span>
             </div>
             <div class="info-row">
-                <span class="info-icon">👤</span>
+                <span class="info-icon">${this.icon('user')}</span>
                 <span class="info-label">Naam</span>
                 <span class="info-value">${this.escapeHtml(client.name || 'Onbekend')}</span>
             </div>
@@ -2050,7 +2107,7 @@ const app = {
                     Eindklant <span style="font-style:italic;text-transform:none;color:var(--qe-orange);letter-spacing:normal;font-weight:500">(Bewoner)</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-icon">👤</span>
+                    <span class="info-icon">${this.icon('user')}</span>
                     <span class="info-label">Naam</span>
                     <span class="info-value">${this.escapeHtml(endClient.name || '-')}</span>
                 </div>
@@ -8013,27 +8070,27 @@ const app = {
 
             // Samenvatting kaart — v83: Totaal, Werkuren, Overuren, Werkdagen, Te laat
             html += `
-                <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
+                <div class="card" style="margin-bottom:16px;padding:20px;background:var(--qe-darkblue);color:#fff;border-radius:16px;border:none">
                     <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
                     <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px">
                         <div>
-                            <div style="font-size:20px;font-weight:700">${fmt2(totalHours)}</div>
+                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalHours}" data-dec="2">${fmt2(totalHours)}</span></div>
                             <div style="font-size:10px;opacity:0.8">Totaal</div>
                         </div>
                         <div>
-                            <div style="font-size:20px;font-weight:700">${fmt2(werkurenTotal)}</div>
+                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${werkurenTotal}" data-dec="2">${fmt2(werkurenTotal)}</span></div>
                             <div style="font-size:10px;opacity:0.8">Werkuren</div>
                         </div>
                         <div>
-                            <div style="font-size:20px;font-weight:700">${fmt2(overurenTotal)}</div>
+                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${overurenTotal}" data-dec="2">${fmt2(overurenTotal)}</span></div>
                             <div style="font-size:10px;opacity:0.8">Overuren</div>
                         </div>
                         <div>
-                            <div style="font-size:20px;font-weight:700">${totalDays}</div>
+                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalDays}" data-dec="0">${totalDays}</span></div>
                             <div style="font-size:10px;opacity:0.8">Werkdagen</div>
                         </div>
                         <div>
-                            <div style="font-size:20px;font-weight:700">${lateCount}</div>
+                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${lateCount}" data-dec="0">${lateCount}</span></div>
                             <div style="font-size:10px;opacity:0.8">Te laat</div>
                         </div>
                     </div>
@@ -8098,7 +8155,7 @@ const app = {
                             const ingeklokt = getField(wo, 'Ingeklokt') || '?';
                             html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:#f1f8e9;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
                                 <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px">⏱️</span>
+                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex">${this.icon('clock', { size: 18 })}</span>
                                     <div style="flex:1">
                                         <div style="font-size:14px;font-weight:500">${ingeklokt} → ...</div>
                                         <div style="font-size:11px;color:${tijdColor}">${tijdIcon} ${tijd} — nog ingeklokt</div>
@@ -8136,16 +8193,16 @@ const app = {
                             } else if (isCompensatie) {
                                 // Negatieve overuren — wordt afgetrokken van overuren-bank
                                 // omdat L&L gebruikt is om de 8u-baseline te vullen.
-                                icon = '➖'; bg = '#ffebee'; fg = '#c62828';
+                                icon = this.icon('minus', { size: 18 }); bg = '#ffebee'; fg = '#c62828';
                                 label = 'Overuren aftrek';
                             } else if (isLL) {
-                                icon = '📦'; bg = '#fff3e0'; fg = '#e65100';
+                                icon = this.icon('package', { size: 18 }); bg = '#fff3e0'; fg = '#e65100';
                                 label = 'Laden & lossen';
                             } else if (isOveruren) {
-                                icon = '⏰'; bg = '#fff8e1'; fg = '#ef6c00';
+                                icon = this.icon('clock', { size: 18 }); bg = '#fff8e1'; fg = '#ef6c00';
                                 label = htName || 'Overuren';   // v180: toon echte tag (bv "Overuren zaterdag")
                             } else {
-                                icon = '✅'; bg = '#f1f8e9'; fg = '#2e7d32';
+                                icon = this.icon('check-circle', { size: 18 }); bg = '#f1f8e9'; fg = '#2e7d32';
                                 label = htName || 'Werkuren';
                             }
                             const absHrs = Math.abs(hours).toFixed(2);
@@ -8160,7 +8217,7 @@ const app = {
                             html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${bg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
                                 <div style="display:flex;align-items:center;justify-content:space-between">
                                     <div style="display:flex;align-items:center;gap:10px;flex:1">
-                                        <span style="font-size:18px">${icon}</span>
+                                        <span style="font-size:18px;color:${fg};display:inline-flex;align-items:center">${icon}</span>
                                         <div>
                                             <div style="font-size:14px;font-weight:500">${headerLine}</div>
                                             <div style="font-size:11px;color:${fg}">${subLine}</div>
@@ -8182,6 +8239,7 @@ const app = {
             }
 
             container.innerHTML = html;
+            this._animateCountUps(container);
         } catch (e) {
             container.innerHTML = `<p class="text-grey text-sm text-center">Fout bij laden: ${e.message}</p>`;
         }

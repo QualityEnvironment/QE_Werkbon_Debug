@@ -1,0 +1,265 @@
+/* =========================================================
+   QE WERKBON — REDESIGN LAYER  (v187)
+   "Strakke lijst" — vlak, rustig, minder bubbels, lijn-iconen,
+   met zachte maar uitgesproken overgangen.
+   Geladen NA app.css zodat deze regels de basisstijl overschrijven.
+   Kleuren blijven binnen het merk: #F99D3E / #6A2C91 / #001E45.
+   ========================================================= */
+
+:root {
+    --qe-hairline: #ECEEF2;
+    --qe-hairline-soft: #F1F3F6;
+    --qe-ink: #0E2547;
+    --qe-muted: #6E7681;
+    --qe-hint: #9AA1AD;
+    /* Schaduwen veel zachter -> vlakkere, professionelere look */
+    --shadow-sm: 0 1px 2px rgba(0,30,69,0.05);
+    --shadow-md: 0 2px 8px rgba(0,30,69,0.07);
+    --shadow-lg: 0 10px 30px rgba(0,30,69,0.12);
+    --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+}
+body.dark-mode {
+    --qe-hairline: #28323F;
+    --qe-hairline-soft: #222B36;
+    --qe-hint: #6B7787;
+}
+
+body { background: #F7F8FA; }
+svg { vertical-align: middle; }
+.qe-ic { vertical-align: -3px; }
+
+/* ----- HEADER: vlak, geen schaduw ----- */
+.app-header {
+    box-shadow: none;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.app-header .header-title { font-weight: 500; letter-spacing: 0.1px; }
+
+/* ----- BOTTOM NAV: vlak, lijn-iconen, oranje indicator ----- */
+.bottom-nav {
+    box-shadow: none;
+    border-top: 1px solid var(--qe-hairline);
+}
+.nav-item svg { stroke-width: 1.8; transition: transform 0.25s var(--ease); }
+.nav-item { transition: color 0.25s var(--ease); }
+.nav-item.active { color: var(--qe-darkblue); }
+.nav-item.active svg { transform: translateY(-1px); }
+.nav-item.active::after {
+    background: var(--qe-orange);
+    width: 26px;
+    height: 3px;
+    border-radius: 0 0 3px 3px;
+    transition: opacity 0.25s var(--ease);
+}
+.nav-item:active { transform: scale(0.94); }
+
+/* ----- CARDS: vlak, hairline i.p.v. schaduw ----- */
+.card {
+    box-shadow: none;
+    border: 1px solid var(--qe-hairline);
+    border-left: 1px solid var(--qe-hairline);
+    border-radius: 14px;
+    transition: background 0.18s var(--ease), border-color 0.2s var(--ease), transform 0.14s var(--ease);
+}
+.card:active { box-shadow: none; }
+.card-clickable:active {
+    border-left-color: var(--qe-hairline);
+    background: var(--qe-hairline-soft);
+    transform: scale(0.994);
+}
+/* Login-kaart houdt een zachte lift (focuspunt op donkere achtergrond) */
+.login-card { box-shadow: var(--shadow-lg); border: none; }
+
+/* ----- PLANNING: vlakke lijst met hairlines i.p.v. losse kaartjes ----- */
+#workorderList {
+    background: var(--qe-white);
+    border: 1px solid var(--qe-hairline);
+    border-radius: 14px;
+    overflow: hidden;
+}
+#workorderList > .card {
+    box-shadow: none;
+    border: 0;
+    border-bottom: 1px solid var(--qe-hairline);
+    border-radius: 0;
+    margin: 0;
+    background: transparent;
+    padding: 14px 16px;
+    animation: qeRise 0.42s var(--ease) both;
+}
+#workorderList > .card:last-child { border-bottom: 0; }
+#workorderList > .card:nth-child(1){animation-delay:.03s}
+#workorderList > .card:nth-child(2){animation-delay:.09s}
+#workorderList > .card:nth-child(3){animation-delay:.15s}
+#workorderList > .card:nth-child(4){animation-delay:.21s}
+#workorderList > .card:nth-child(5){animation-delay:.27s}
+#workorderList > .card:nth-child(6){animation-delay:.33s}
+#workorderList > .card:nth-child(7){animation-delay:.39s}
+#workorderList > .card:nth-child(8){animation-delay:.45s}
+#workorderList > .card:nth-child(n+9){animation-delay:.5s}
+#workorderList > .card:active { background: var(--qe-hairline-soft); }
+#workorderList > .empty-state { animation: qeFade 0.4s var(--ease) both; }
+
+/* Tijd als nette kolom i.p.v. oranje blokje */
+.wo-time {
+    background: transparent;
+    color: var(--qe-darkblue);
+    border-radius: 0;
+    padding: 0;
+    min-width: 46px;
+    text-align: left;
+    align-self: flex-start;
+    margin-top: 1px;
+}
+.wo-time .t-hour { font-size: 15px; font-weight: 700; color: var(--qe-darkblue); }
+.wo-time .t-label { color: var(--qe-hint); }
+.wo-info h3 { font-weight: 700; letter-spacing: -0.2px; }
+.wo-info .wo-address { color: var(--qe-muted); }
+.wo-info .wo-address svg { color: var(--qe-hint); }
+
+/* Type-pill rustiger en vlakker */
+.wo-type {
+    background: var(--qe-hairline-soft) !important;
+    color: var(--qe-muted) !important;
+    font-weight: 500;
+    border: 0 !important;
+}
+.wo-type.onderhoud { background: #EAF3EA !important; color: #2E7D4F !important; }
+.wo-type.herstelling { background: var(--qe-orange-light) !important; color: var(--qe-orange-dark) !important; }
+.wo-type.installatie { background: var(--qe-purple-light) !important; color: var(--qe-purple) !important; }
+
+/* Regie als rustig oranje label i.p.v. getinte bubbel */
+.wo-regie-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--qe-orange-dark);
+}
+
+/* Bel/navigeer-knoppen vlak */
+.wo-nav-btn {
+    background: transparent;
+    border: 1px solid var(--qe-hairline);
+    color: var(--qe-muted);
+    width: 34px; height: 34px;
+    transition: background 0.18s var(--ease);
+}
+.wo-nav-btn:active { background: var(--qe-hairline-soft); }
+
+/* ----- SECTION HEADER badge rustiger ----- */
+.section-header .badge {
+    background: var(--qe-purple-light);
+    color: var(--qe-purple);
+    font-weight: 500;
+}
+
+/* ----- DATE STRIP: vlakke chips ----- */
+.date-chip {
+    box-shadow: none;
+    border: 1px solid var(--qe-hairline);
+    transition: all 0.2s var(--ease);
+}
+.date-chip.active { border-color: var(--qe-orange); background: var(--qe-orange-light); }
+.date-chip:active { transform: scale(0.96); }
+
+/* ----- TABS: vlakke underline i.p.v. oranje pill-doos ----- */
+.tabs {
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--qe-hairline);
+    gap: 0;
+}
+.tab-btn {
+    border-radius: 0;
+    color: var(--qe-muted);
+    position: relative;
+    padding: 12px 8px;
+}
+.tab-btn.active { background: transparent; color: var(--qe-darkblue); }
+.tab-btn.active::after {
+    content: '';
+    position: absolute;
+    left: 10px; right: 10px; bottom: -1px;
+    height: 2.5px;
+    background: var(--qe-darkblue);
+    border-radius: 3px 3px 0 0;
+    animation: qeTabIn 0.3s var(--ease);
+}
+
+/* ----- INFO ROWS ----- */
+.info-row .info-icon { color: var(--qe-hint); display: inline-flex; align-items: center; justify-content: center; }
+.info-row .info-icon svg { width: 17px; height: 17px; }
+.info-row .info-value { font-weight: 500; }
+
+/* ----- UREN / MATERIAAL LIST: vlak ----- */
+.hour-entry, .material-item {
+    box-shadow: none;
+    border: 1px solid var(--qe-hairline);
+}
+.he-type svg { width: 18px; height: 18px; }
+
+/* ----- BUTTONS: iets vlakker, zachte press ----- */
+.btn { box-shadow: none; border-radius: 12px; }
+.btn:active { transform: scale(0.97); }
+.btn-primary:active { background: var(--qe-orange-dark); }
+
+/* ----- EMPTY STATE met lijn-icoon ----- */
+.empty-state .empty-icon { font-size: 0; margin-bottom: 10px; line-height: 0; }
+.empty-state .empty-icon svg { width: 44px; height: 44px; color: #C7CDD6; stroke-width: 1.6; }
+
+/* ----- REGIE BANNER (detail): vlak, geen gradient ----- */
+#detailRegieBanner {
+    background: var(--qe-orange-light) !important;
+    color: var(--qe-orange-dark) !important;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.2px;
+    border-radius: 12px 12px 0 0;
+}
+#detailRegieBanner svg { width: 18px; height: 18px; }
+
+/* ----- TOAST: vlakke pill ----- */
+.toast { box-shadow: var(--shadow-lg); }
+
+/* =========================================================
+   ANIMATIES
+   ========================================================= */
+@keyframes qeScreenIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.screen { animation: qeScreenIn 0.34s var(--ease); }
+
+@keyframes qeRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes qeFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes qeTabIn { from { transform: scaleX(0.4); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Skeleton-loaders (vervangen de spinner tijdens laden) */
+@keyframes qeShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.qe-skel-list {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    overflow: hidden;
+}
+.qe-skel-row { display: flex; align-items: center; gap: 13px; padding: 16px; border-bottom: 1px solid var(--qe-hairline); }
+.qe-skel-row:last-child { border-bottom: 0; }
+.qe-skel {
+    background: linear-gradient(100deg, #ECEEF3 30%, #F6F7F9 50%, #ECEEF3 70%);
+    background-size: 200% 100%;
+    animation: qeShimmer 1.3s infinite;
+    border-radius: 6px;
+}
+body.dark-mode .qe-skel { background: linear-gradient(100deg, #222B36 30%, #2A3440 50%, #222B36 70%); background-size: 200% 100%; }
+
+/* Count-up getallen (uren-overzicht) — tabular zodat de breedte niet springt */
+.qe-countup { font-variant-numeric: tabular-nums; }
+
+/* Respecteer "reduce motion" */
+@media (prefers-reduced-motion: reduce) {
+    .screen, #workorderList > .card, .tab-btn.active::after { animation: none !important; }
+}
