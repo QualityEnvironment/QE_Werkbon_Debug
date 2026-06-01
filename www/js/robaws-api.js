@@ -65,8 +65,59 @@ const RobawsAPI = {
     },
 
     // === BASIS API CALLS ===
-    async get(endpoint) {
-        const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
+    // v184: cache + in-flight-dedup laag rond get().
+    //  - Enkel GET wordt gecached, nooit mutaties (post/put).
+    //  - Enkel top-level "resource/{id}" GETs (geen query, geen sub-resource)
+    //    krijgen een TTL-cache. Lijst/query-GETs (met ?) worden NIET gecached
+    //    maar wel ge-dedup't (gelijktijdige identieke calls -> 1 fetch).
+    //  - Elke cache-/dedup-hit geeft een DEEP CLONE terug, zodat code die een
+    //    record ophaalt-muteert-PUT (installatie/klant/werkbon) de cache niet
+    //    corrumpeert.
+    //  - put()/post() invalideren de betrokken resource/{id}-sleutel.
+    _getCache: {},        // key -> { at, value }
+    _getInflight: {},     // key -> Promise
+
+    /** TTL (ms) voor een endpoint, of 0 als niet cachebaar. */
+    _cacheTtlFor(key) {
+        if (key.includes('?')) return 0;                  // lijst/query -> niet cachen
+        const m = key.match(/^([a-z-]+)\/(\d+)$/);         // exact "resource/id"
+        if (!m) return 0;                                  // sub-resource e.d. -> niet cachen
+        const TTL = {
+            'clients':        15 * 60 * 1000,
+            'employees':      60 * 60 * 1000,
+            'employee-roles': 60 * 60 * 1000,
+            'articles':       60 * 60 * 1000,
+            'vat-tariffs':    60 * 60 * 1000,
+            'sales-orders':    5 * 60 * 1000,
+            'installations':   5 * 60 * 1000,
+            'planning-items':      60 * 1000,
+            'work-orders':         30 * 1000,
+        };
+        return TTL[m[1]] != null ? TTL[m[1]] : 60 * 1000;  // default 60s voor andere /{id}
+    },
+
+    _cloneResult(r) {
+        if (!r) return r;
+        try {
+            return { code: r.code, data: (r.data == null) ? r.data : JSON.parse(JSON.stringify(r.data)) };
+        } catch (_) {
+            return { code: r.code, data: r.data };
+        }
+    },
+
+    /** Wis de cache-sleutel die bij een mutatie hoort (resource/{id}-prefix). */
+    _invalidateCache(endpoint) {
+        const e = String(endpoint).replace(/^\//, '');
+        const m = e.match(/^([a-z-]+\/\d+)/);   // bv "work-orders/456" (ook bij .../time-entries)
+        if (m) {
+            delete this._getCache[m[1]];
+            delete this._getInflight[m[1]];
+        }
+    },
+
+    /** Rauwe fetch zonder cache (interne helper). */
+    async _rawGet(key) {
+        const url = this.BASE_URL + '/' + key;
         const res = await fetch(url, { headers: this.getHeaders() });
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
@@ -78,7 +129,43 @@ const RobawsAPI = {
         }
     },
 
+    async get(endpoint, opts) {
+        const key = String(endpoint).replace(/^\//, '');
+        const ttl = this._cacheTtlFor(key);
+        const bypass = !!(opts && opts.bypassCache);
+
+        // 1. Cache-hit
+        if (ttl > 0 && !bypass) {
+            const hit = this._getCache[key];
+            if (hit && (Date.now() - hit.at) < ttl) {
+                return this._cloneResult(hit.value);
+            }
+        }
+        // 2. In-flight dedup: deel een lopende identieke GET
+        if (!bypass && this._getInflight[key]) {
+            const shared = await this._getInflight[key];
+            return this._cloneResult(shared);
+        }
+        // 3. Echte fetch (in-flight registreren voor dedup)
+        const p = this._rawGet(key);
+        this._getInflight[key] = p;
+        let result;
+        try {
+            result = await p;
+        } finally {
+            delete this._getInflight[key];
+        }
+        // 4. Cache schrijven (enkel 200 + cachebaar) en clone teruggeven
+        if (ttl > 0 && result && result.code === 200) {
+            if (Object.keys(this._getCache).length > 800) this._getCache = {};  // simpele size-cap
+            this._getCache[key] = { at: Date.now(), value: result };
+            return this._cloneResult(result);
+        }
+        return result;
+    },
+
     async post(endpoint, body) {
+        this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const res = await fetch(url, {
             method: 'POST',
@@ -97,6 +184,7 @@ const RobawsAPI = {
     },
 
     async put(endpoint, body) {
+        this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const res = await fetch(url, {
             method: 'PUT',
