@@ -3284,6 +3284,29 @@ const RobawsAPI = {
     },
 
     /** v138: probeer Robaws's hour-types endpoint en cache namen → IDs. */
+    // v180: cache van hourType-id -> naam (1 call), zodat het dagoverzicht
+    // overuren-varianten ("Overuren zaterdag/zondag") correct kan herkennen.
+    // Voorheen werd enkel id===2 als overuren geteld -> weekend-overuren viel
+    // in de werkuren-bak.
+    _hourTypeNameCache: null,
+    async getHourTypeNameMap() {
+        if (this._hourTypeNameCache) return this._hourTypeNameCache;
+        const map = {};
+        try {
+            const res = await this.get('hour-types?limit=100');
+            if (res.code === 200) {
+                const items = (res.data && res.data.items) || res.data || [];
+                for (const ht of items) {
+                    if (ht && ht.id != null) map[String(ht.id)] = ht.name || '';
+                }
+            }
+        } catch (e) {
+            console.warn('[RobawsAPI] getHourTypeNameMap faalde:', e && e.message);
+        }
+        this._hourTypeNameCache = map;
+        return map;
+    },
+
     _weekendHourTypesLoaded: false,
     async _loadWeekendHourTypeIds() {
         if (this._weekendHourTypesLoaded) return;

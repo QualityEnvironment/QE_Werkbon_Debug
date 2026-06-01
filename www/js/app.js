@@ -7870,6 +7870,17 @@ const app = {
             //   - Overuren = som hourTypeId=2 entries (incl. negatieve compensatie-entries)
             const HT_WERKUREN = String(RobawsAPI.HOUR_TYPE_IDS.werkuren);
             const HT_OVERUREN = String(RobawsAPI.HOUR_TYPE_IDS.overuren);
+            // v180: een entry telt als OVERUREN als z'n hourType-NAAM "overuren"
+            // bevat (dekt ook "Overuren zaterdag/zondag"). Voorheen werd enkel
+            // id===2 herkend, waardoor weekend-overuren in de werkuren-bak vielen
+            // (werkuren te hoog, overuren te laag). Fallback op id===2 als de naam
+            // onbekend is (bv. hour-types call faalde) -> geen regressie.
+            const htNameMap = await RobawsAPI.getHourTypeNameMap();
+            const isOverurenHt = (ht) => {
+                const n = (htNameMap[String(ht)] || '').toLowerCase();
+                if (n) return n.includes('overuren');
+                return String(ht) === HT_OVERUREN;
+            };
             let totalHours = 0;
             let werkurenTotal = 0;
             let overurenTotal = 0;
@@ -7879,8 +7890,8 @@ const app = {
                     const h = parseFloat(te.hours || te.billableHours || 0) || 0;
                     totalHours += h;
                     const ht = String(te.hourTypeId || (te.hourType && te.hourType.id) || '');
-                    if (ht === HT_OVERUREN) overurenTotal += h;
-                    else werkurenTotal += h;  // default = werkuren (incl. legacy entries zonder hourTypeId)
+                    if (isOverurenHt(ht)) overurenTotal += h;
+                    else werkurenTotal += h;
                 }
             }
             // v87: 2 decimalen voor uren-stats (zoals Robaws ze toont)
@@ -7999,8 +8010,9 @@ const app = {
                             const aId = String(te.articleId || (te.article && te.article.id) || '');
                             const ht = String(te.hourTypeId || (te.hourType && te.hourType.id) || '');
                             const hours = parseFloat(te.hours || te.billableHours || 0) || 0;
+                            const htName = htNameMap[ht] || '';   // v180: echte Robaws hourType-naam
                             const isLL = (aId === llArtId);
-                            const isOveruren = (ht === HT_OVERUREN);
+                            const isOveruren = isOverurenHt(ht);
                             const isCompensatie = (hours < 0);
                             const sStr = te.startTime
                                 ? String(te.startTime.hour).padStart(2, '0') + ':' + String(te.startTime.minute).padStart(2, '0')
@@ -8029,10 +8041,10 @@ const app = {
                                 label = 'Laden & lossen';
                             } else if (isOveruren) {
                                 icon = '⏰'; bg = '#fff8e1'; fg = '#ef6c00';
-                                label = 'Overuren';
+                                label = htName || 'Overuren';   // v180: toon echte tag (bv "Overuren zaterdag")
                             } else {
                                 icon = '✅'; bg = '#f1f8e9'; fg = '#2e7d32';
-                                label = 'Werkuren';
+                                label = htName || 'Werkuren';
                             }
                             const absHrs = Math.abs(hours).toFixed(2);
                             const headerLine = timeBlockTxt
