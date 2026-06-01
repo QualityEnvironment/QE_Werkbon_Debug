@@ -1497,7 +1497,7 @@ const app = {
         window.scrollTo(0, 0);
 
         if (screenId === 'screenUitgevoerd') this.loadUitgevoerd();
-        if (screenId === 'screenDagoverzicht') this.loadDagoverzicht();
+        if (screenId === 'screenDagoverzicht') this.loadDagoverzicht(0);
         if (screenId === 'screenClock') this.onNavigateToClock();
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
@@ -7717,7 +7717,13 @@ const app = {
     // ========================================
     // DAGOVERZICHT
     // ========================================
-    async loadDagoverzicht() {
+    // v179: monthOffset 0 = huidige maand, -1 = vorige maand, enz. Zonder
+    // argument wordt de laatst bekeken maand behouden (refresh-knop +
+    // pull-to-refresh verversen dus de bekeken maand i.p.v. terug te springen).
+    async loadDagoverzicht(monthOffset) {
+        if (typeof monthOffset === 'number') this._dagoverzichtMonthOffset = monthOffset;
+        const offset = this._dagoverzichtMonthOffset || 0;
+
         const container = document.getElementById('dagoverzichtContent');
         container.innerHTML = '<div class="spinner"></div>';
 
@@ -7731,12 +7737,15 @@ const app = {
             // v58: Tijdsregistratie-werkbonnen i.p.v. time-registrations
             const today = new Date();
             today.setHours(12, 0, 0, 0);
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            // v179: doelmaand = huidige maand + offset (offset <= 0).
+            const target = new Date(today.getFullYear(), today.getMonth() + offset, 1, 12, 0, 0);
+            const isCurrentMonth = (offset === 0);
+            const yyyy = target.getFullYear();
+            const mm = String(target.getMonth() + 1).padStart(2, '0');
             const monthPrefix = `${yyyy}-${mm}`;
             const monthNames = ['januari','februari','maart','april','mei','juni',
                 'juli','augustus','september','oktober','november','december'];
-            const monthLabel = `${monthNames[today.getMonth()].toUpperCase()} ${yyyy}`;
+            const monthLabel = `${monthNames[target.getMonth()].toUpperCase()} ${yyyy}`;
 
             const userId = user.robawsUserId || user.userId;
             const workOrders = await RobawsAPI.getMyTimeRegistrationWorkOrders(userId, monthPrefix);
@@ -7880,6 +7889,15 @@ const app = {
 
             let html = '';
 
+            // v179: maand-navigatie. "Volgende" is uitgeschakeld op de huidige
+            // maand (geen toekomst). Knoppen herladen met de nieuwe offset.
+            html += `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
+                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset - 1})" style="font-size:13px;padding:6px 12px">◀ Vorige maand</button>
+                    <span style="font-size:13px;font-weight:600;color:var(--qe-darkblue);flex:1;text-align:center">${monthLabel}</span>
+                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset + 1})" ${isCurrentMonth ? 'disabled' : ''} style="font-size:13px;padding:6px 12px;${isCurrentMonth ? 'opacity:0.4;pointer-events:none' : ''}">Volgende ▶</button>
+                </div>`;
+
             // Samenvatting kaart — v83: Totaal, Werkuren, Overuren, Werkdagen, Te laat
             html += `
                 <div class="card" style="margin-bottom:16px;padding:20px;background:linear-gradient(135deg, var(--qe-darkblue), var(--qe-purple));color:#fff;border-radius:16px">
@@ -7908,11 +7926,15 @@ const app = {
                     </div>
                 </div>`;
 
-            // Per dag: alle dagen van huidige maand t/m vandaag
+            // Per dag: huidige maand t/m vandaag; een vorige maand = volledige
+            // maand (laatste dag t/m de 1e). v179.
             const days = ['Zo','Ma','Di','Wo','Do','Vr','Za'];
             const allDates = [];
-            for (let day = today.getDate(); day >= 1; day--) {
-                const d = new Date(yyyy, today.getMonth(), day, 12, 0, 0);
+            const lastDay = isCurrentMonth
+                ? today.getDate()
+                : new Date(yyyy, target.getMonth() + 1, 0).getDate();
+            for (let day = lastDay; day >= 1; day--) {
+                const d = new Date(yyyy, target.getMonth(), day, 12, 0, 0);
                 const ddStr = String(d.getDate()).padStart(2, '0');
                 allDates.push(`${yyyy}-${mm}-${ddStr}`);
             }
