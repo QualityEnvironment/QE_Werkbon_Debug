@@ -7771,19 +7771,14 @@ const app = {
             // binnen rate-limit). Resultaat cached in teByWoId. Toont L&L cycli + uren.
             // v173: parallelliseren met Promise.all i.p.v. sequentiële await-loop.
             // Voorheen: 30 werkbonnen × ~250ms = 7-8 sec blokkerend. Nu: ~500ms parallel.
+            // v178: time-entries komen nu INLINE mee via ?include=timeEntries in
+            // getMyTimeRegistrationWorkOrders (zie HANDLEIDING 2.16). Geen aparte
+            // GET /work-orders/{id}/time-entries per werkbon meer (was N+1 -> bij
+            // ~30 werkbonnen 30 extra calls). teByWoId behoudt dezelfde shape.
             const teByWoId = {};
-            const teResults = await Promise.all(
-                workOrders.map(wo =>
-                    RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`)
-                        .catch(() => null)
-                )
-            );
-            workOrders.forEach((wo, idx) => {
-                const teRes = teResults[idx];
-                if (teRes && teRes.code === 200 && teRes.data && teRes.data.items) {
-                    teByWoId[wo.id] = teRes.data.items;
-                }
-            });
+            for (const wo of workOrders) {
+                teByWoId[wo.id] = wo.timeEntries || [];
+            }
             const m = (s) => { const x = String(s||'').match(/^(\d{1,2}):(\d{1,2})/); return x ? (+x[1])*60 + (+x[2]) : 0; };
             // v74: kwartier-afronding (in=up, uit=down)
             // v94+: TOLERANTIE van 4 minuten — moet identiek zijn aan clock.js zodat
@@ -7800,25 +7795,15 @@ const app = {
                 if (distUpper > 0 && distUpper <= TOLERANCE) return mins + distUpper;
                 return Math.floor(mins / 15) * 15;
             };
-            // Haal pauze + startuur 1x van ingelogde user
-            let userStartuurMin = 7 * 60;  // 07:00 default
+            // v178: employee startuur/pauze-fetch VERWIJDERD (scheelt 1 API-call
+            // per keer dat de Uren-tab opent). Deze waarden voedden enkel
+            // computeHours() -- de legacy v68 uren-berekening die sinds v83 niet
+            // meer wordt aangeroepen (de totalen komen nu rechtstreeks uit de
+            // time-entries hieronder). De twee defaults blijven staan zodat de
+            // (dode) computeHours nog geldig refereert; mag in een latere
+            // cosmetische pass volledig weg.
+            let userStartuurMin = 7 * 60;  // default (enkel nog door dode computeHours)
             let userPauze = 60;
-            try {
-                const empRes = await RobawsAPI.get(`employees/${user.robawsEmployeeId}`);
-                if (empRes.code === 200 && empRes.data && empRes.data.extraFields) {
-                    for (const [name, fdata] of Object.entries(empRes.data.extraFields)) {
-                        const low = name.toLowerCase();
-                        if (low.includes('startuur')) {
-                            const v = RobawsAPI._extractFieldVal(fdata);
-                            if (v && /^\d{1,2}:\d{2}/.test(v)) userStartuurMin = m(v);
-                        } else if (low.includes('pauze')) {
-                            const v = RobawsAPI._extractFieldVal(fdata);
-                            const num = String(v).match(/(\d+)/);
-                            if (num) userPauze = parseInt(num[1], 10) || 60;
-                        }
-                    }
-                }
-            } catch(_) {}
 
             const computeHours = (wo) => {
                 const ef = wo.extraFields || {};

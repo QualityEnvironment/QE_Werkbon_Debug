@@ -2621,7 +2621,10 @@ const RobawsAPI = {
         // wanneer we het installatie-adres ophalen voor `siteAddress`, en later
         // gebruikt als extra TEXT-lijn op de factuur (zodat de back-office
         // direct kan zien welke postcode bij de werkbon hoort).
+        // v177: ook de gemeente bewaren zodat we "2900 Schoten" kunnen plakken
+        // i.p.v. enkel "2900".
         let invoicePostalCode = '';
+        let invoiceCity       = '';
 
         // Stap 1: Werkorder details
         const woResult = await this.get(`work-orders/${workOrderId}`);
@@ -2717,6 +2720,8 @@ const RobawsAPI = {
                         country: instAddr.country || null,
                     };
                     invoicePostalCode = instAddr.postalCode || '';
+                    // v177: ook de gemeente bewaren voor de "2900 Schoten" tekstlijn
+                    invoiceCity = instAddr.city || '';
                 }
             } catch(e) {
                 console.warn('Installatie-adres ophalen voor factuur mislukt:', e);
@@ -2755,10 +2760,16 @@ const RobawsAPI = {
         // 3b: v112 — Postcode-tekstlijn (uit dagplanning werfadres) zodat de
         // back-office in één oogopslag weet welke postcode bij deze factuur
         // hoort. Komt rechts ná de notities-lijn.
-        if (invoicePostalCode && String(invoicePostalCode).trim()) {
+        // v177: nu ook de gemeentenaam erbij in Belgisch standaardformaat
+        // ("2900 Schoten"). Als de gemeente onbekend is, valt het automatisch
+        // terug op enkel de postcode zoals voorheen.
+        const pcTrim   = String(invoicePostalCode || '').trim();
+        const cityTrim = String(invoiceCity || '').trim();
+        const postcodeText = (pcTrim && cityTrim) ? (pcTrim + ' ' + cityTrim) : pcTrim;
+        if (postcodeText) {
             const postcodeLine = {
                 type: 'TEXT',
-                description: String(invoicePostalCode).trim(),
+                description: postcodeText,
             };
             if (woSalesOrderId) postcodeLine.orderId = woSalesOrderId;
             const r = await this.post(`sales-invoices/${invoiceId}/line-items`, postcodeLine);
@@ -3881,58 +3892,67 @@ const RobawsAPI = {
      * enkel hun eigen kaarten zien.
      */
     async getMyTimeRegistrationWorkOrders(userId, monthPrefix) {
-        // v66: maxPages drastisch verlaagd naar 8 + smart break om rate-limit
-        // (HTTP 429) te vermijden. Sort=id:desc behouden — onze recente
-        // werkbonnen staan vooraan; 800 werkbonnen is ruim genoeg.
-        // Smart break: stop zodra 2 opeenvolgende pages 0 nieuwe Tijdsregistratie
-        // werkbonnen voor monthPrefix opleveren.
-        // v83b: BUG FIX — Robaws negeert ?page=N (elke "page" gaf dezelfde 100
-        // items), waardoor werkbonnen met lagere ID onbereikbaar waren (bv. id 1259
-        // voor 5/5/26). We gebruiken nu ?offset=N*limit i.p.v. ?page=N.
+        // v178: deterministische + efficiente fetch.
+        //  - ?include=timeEntries -> time-entries komen INLINE mee (geen N+1 meer;
+        //    zie ROBAWS_API_HANDLEIDING 2.16). loadDagoverzicht hoeft dus geen
+        //    aparte GET /work-orders/{id}/time-entries per werkbon meer te doen.
+        //  - Stop-conditie op DATUM i.p.v. de oude "smart break". De vorige aanpak
+        //    stopte na 2 pagina's zonder maand-match; omdat /work-orders op id:desc
+        //    staat en er constant nieuwe werkbonnen bijkomen (elke klok-in), viel
+        //    die break elke load op een ANDERE diepte -> wisselende registraties.
+        //    Nu stoppen we zodra een volledige pagina ouder is dan de maandstart:
+        //    id:desc ~ aanmaakvolgorde en tijdsregistratie-werkbonnen worden op hun
+        //    eigen dag aangemaakt, dus alle items van de doelmaand staan bovenaan
+        //    en nieuwe komen er bovenop -> STABIEL resultaat tussen loads.
+        //  - Server-side filteren op user/status/datum kan NIET op /work-orders
+        //    (2.18: status genegeerd; 2.1: enkel clientId/salesOrderId werken),
+        //    vandaar de client-side filter onderaan.
         const LIMIT = 100;
-        let allItems = [];
+        const monthStart = monthPrefix + '-01';   // bv "2026-06-01"
+        const allItems = [];
         const seenIds = new Set();
-        let page = 0;
-        const maxPages = 8;
-        let emptyPagesInRow = 0;
-        while (page < maxPages) {
+        const MAX_PAGES = 40;   // veiligheidsplafond; de datum-stop kapt normaal
+                                // al na enkele pagina's binnen een maand.
+        for (let page = 0; page < MAX_PAGES; page++) {
             const offset = page * LIMIT;
-            const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
+            const res = await this.get(
+                `work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc&include=timeEntries`
+            );
             if (res.code !== 200) {
                 throw new Error(`Tijdsregistratie-werkbonnen fetch faalde (${res.code})`);
             }
-            if (!res.data || !res.data.items || res.data.items.length === 0) break;
-            let foundOnPage = 0;
-            for (const it of res.data.items) {
+            const items = (res.data && res.data.items) || [];
+            if (items.length === 0) break;
+
+            let maxRealDate = '';   // hoogste ECHTE datum op deze pagina
+            for (const it of items) {
+                const d = (it.date || '').substring(0, 10);
+                if (d && d > maxRealDate) maxRealDate = d;
                 if (it.id == null || seenIds.has(String(it.id))) continue;
                 seenIds.add(String(it.id));
                 allItems.push(it);
-                // Tel matching items (status + datum) op voor smart break
-                const status = String(it.status || '').toLowerCase();
-                const dateMonth = (it.date || '').substring(0, 7);
-                if (status.includes('tijdsregistratie') && dateMonth === monthPrefix) {
-                    foundOnPage++;
-                }
             }
-            if (foundOnPage === 0) emptyPagesInRow++;
-            else emptyPagesInRow = 0;
-            if (emptyPagesInRow >= 2) break;
-            page++;
-            if (res.data.totalPages && page >= res.data.totalPages) break;
+
+            // Deterministische stop: zagen we een echte datum EN is de hele pagina
+            // ouder dan de maandstart, dan zijn alle volgende pagina's (lagere id =
+            // ouder) dat ook -> klaar. Lege/null-datums tellen niet mee voor de stop.
+            if (maxRealDate && maxRealDate < monthStart) break;
+            if (items.length < LIMIT) break;
+            if (res.data.totalPages && (page + 1) >= res.data.totalPages) break;
         }
-        // Filter: status=Tijdsregistratie EN assignedUser=ingelogde user EN maand klopt
+        // Client-side filter: status~tijdsregistratie + assignedUser = user + maand.
         const filtered = allItems.filter(item => {
             const status = String(item.status || '').toLowerCase();
             if (!status.includes('tijdsregistratie')) return false;
-            const dateMonth = (item.date || '').substring(0, 7);
-            if (dateMonth !== monthPrefix) return false;
+            if ((item.date || '').substring(0, 7) !== monthPrefix) return false;
             const itemUserId = item.assignedUserId
                 || (item.assignedUser && item.assignedUser.id);
             if (itemUserId && String(itemUserId) !== String(userId)) return false;
             return true;
         });
-        console.log('[RobawsAPI] Tijdsregistratie-werkbonnen: ' + allItems.length +
-            ' fetched, ' + filtered.length + ' voor user ' + userId + ' in ' + monthPrefix);
+        console.log('[RobawsAPI] Tijdsregistratie-werkbonnen (v178 include+datumstop): ' +
+            allItems.length + ' gescand, ' + filtered.length + ' voor user ' + userId +
+            ' in ' + monthPrefix);
         return filtered;
     },
 
