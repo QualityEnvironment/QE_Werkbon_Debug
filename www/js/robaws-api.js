@@ -2441,14 +2441,23 @@ const RobawsAPI = {
         // 2. Alle werkbons van afgelopen 7 dagen ophalen → mappen op planningItemId
         const sinceDate = this._localDateStr(null, -7);
         const werkbonsPerPlanning = {};
-        let woPage = 0;
-        do {
-            const r = await this.get(`work-orders?limit=100&page=${woPage}&sort=createdAt:desc`);
+        // v186: ?include=timeEntries -> time-entries komen INLINE mee (geen
+        // per-werkbon time-entries-call meer in stap 4, zie HANDLEIDING 2.16).
+        // Ook ?offset= i.p.v. ?page= (Robaws negeert page op /work-orders, v83b)
+        // + dedup op id zodat dezelfde werkbon niet dubbel telt.
+        const WO_LIMIT = 100;
+        const seenWoIds = new Set();
+        for (let woPage = 0; woPage < 15; woPage++) {
+            const r = await this.get(`work-orders?limit=${WO_LIMIT}&offset=${woPage * WO_LIMIT}&sort=createdAt:desc&include=timeEntries`);
             if (r.code !== 200) break;
-            const items = r.data.items || [];
+            const items = (r.data && r.data.items) || [];
             if (items.length === 0) break;
             let stop = false;
             for (const wo of items) {
+                if (wo.id != null) {
+                    if (seenWoIds.has(String(wo.id))) continue;
+                    seenWoIds.add(String(wo.id));
+                }
                 const d = wo.date || '';
                 if (d && d < sinceDate) { stop = true; break; }
                 if (!wo.planningItemId) continue;
@@ -2457,37 +2466,28 @@ const RobawsAPI = {
                 werkbonsPerPlanning[key].push(wo);
             }
             if (stop) break;
-            const totalPages = r.data.totalPages || 1;
-            woPage++;
-            if (woPage >= totalPages || woPage > 10) break;
-        } while (true);
+            if (items.length < WO_LIMIT) break;
+            if (r.data.totalPages && (woPage + 1) >= r.data.totalPages) break;
+        }
 
         // 3. Enkel plannings die al ≥1 werkbon hebben overhouden
         const planningenMetWerkbon = planningenInScope.filter(p => werkbonsPerPlanning[String(p.id)]);
 
         // 4. Voor elke planning: client + sub-entries van alle linked werkbons sommeren
-        const result = [];
-        for (const p of planningenMetWerkbon) {
+        // v186: verwerk alle plannings PARALLEL (Promise.all) i.p.v. sequentieel.
+        const result = await Promise.all(planningenMetWerkbon.map(async (p) => {
             const wos = werkbonsPerPlanning[String(p.id)] || [];
-            // Klant
+            // Klant + order parallel ophalen (gecached via v184)
+            const [cr, sr] = await Promise.all([
+                p.clientId ? this.get(`clients/${p.clientId}`).catch(() => null) : Promise.resolve(null),
+                p.salesOrderId ? this.get(`sales-orders/${p.salesOrderId}`).catch(() => null) : Promise.resolve(null),
+            ]);
             let clientName = '', clientAddress = '';
-            if (p.clientId) {
-                try {
-                    const cr = await this.get(`clients/${p.clientId}`);
-                    if (cr.code === 200) {
-                        clientName = cr.data.name || '';
-                        clientAddress = this.formatAddress(cr.data.address);
-                    }
-                } catch(e) {}
+            if (cr && cr.code === 200 && cr.data) {
+                clientName = cr.data.name || '';
+                clientAddress = this.formatAddress(cr.data.address);
             }
-            // Order
-            let orderLogicId = null;
-            if (p.salesOrderId) {
-                try {
-                    const sr = await this.get(`sales-orders/${p.salesOrderId}`);
-                    if (sr.code === 200) orderLogicId = sr.data.logicId || null;
-                } catch(e) {}
-            }
+            const orderLogicId = (sr && sr.code === 200 && sr.data) ? (sr.data.logicId || null) : null;
             // Sub-entries van elke werkbon
             let totalHours = 0;
             let totalCommute = 0;
@@ -2497,41 +2497,41 @@ const RobawsAPI = {
             // We hebben de uurcode-articleIds nodig om uren te splitsen klant vs verplaatsing
             // → niet beschikbaar zonder employee-rol; we slaan beide totals op en laten UI splitsen op articleId
             const hoursPerArticle = {}; // articleId → totalHours
-            for (const wo of wos) {
+            // v186: time-entries komen INLINE mee via ?include=timeEntries (geen
+            // per-werkbon call meer). line-items wel nog per werkbon -> parallel.
+            const liResults = await Promise.all(
+                wos.map(wo => this.get(`work-orders/${wo.id}/line-items`).catch(() => null))
+            );
+            wos.forEach((wo, idx) => {
                 sourceWerkbonIds.push(wo.id);
                 if (wo.remark && wo.remark.trim()) remarks.push(wo.remark.trim());
-                // time-entries
-                try {
-                    const te = await this.get(`work-orders/${wo.id}/time-entries`);
-                    const teItems = (te.data && (te.data.items || te.data)) || [];
-                    for (const t of teItems) {
-                        const hrs = parseFloat(t.hours || t.billableHours || 0);
-                        const aId = String(t.articleId || '');
-                        if (!hoursPerArticle[aId]) hoursPerArticle[aId] = 0;
-                        hoursPerArticle[aId] += hrs;
-                        totalHours += hrs;
-                    }
-                } catch(e) {}
+                // time-entries (inline)
+                const teItems = wo.timeEntries || [];
+                for (const t of teItems) {
+                    const hrs = parseFloat(t.hours || t.billableHours || 0);
+                    const aId = String(t.articleId || (t.article && t.article.id) || '');
+                    if (!hoursPerArticle[aId]) hoursPerArticle[aId] = 0;
+                    hoursPerArticle[aId] += hrs;
+                    totalHours += hrs;
+                }
                 // line-items (materialen)
-                try {
-                    const li = await this.get(`work-orders/${wo.id}/line-items`);
-                    const liItems = (li.data && (li.data.items || li.data)) || [];
-                    for (const l of liItems) {
-                        const aId = String(l.articleId || '');
-                        const desc = l.description || '';
-                        const key = aId + '|' + desc;
-                        if (!materialMap[key]) {
-                            materialMap[key] = {
-                                articleId: aId || null,
-                                description: desc,
-                                quantity: 0,
-                                unitPrice: parseFloat(l.price || 0),
-                            };
-                        }
-                        materialMap[key].quantity += parseFloat(l.quantity || 0);
+                const li = liResults[idx];
+                const liItems = (li && li.data && (li.data.items || li.data)) || [];
+                for (const l of liItems) {
+                    const aId = String(l.articleId || '');
+                    const desc = l.description || '';
+                    const key = aId + '|' + desc;
+                    if (!materialMap[key]) {
+                        materialMap[key] = {
+                            articleId: aId || null,
+                            description: desc,
+                            quantity: 0,
+                            unitPrice: parseFloat(l.price || 0),
+                        };
                     }
-                } catch(e) {}
-            }
+                    materialMap[key].quantity += parseFloat(l.quantity || 0);
+                }
+            });
 
             // Origineel werkbon = de eerste (oudste) — dat is de "echte" werkbon, latere zijn al correcties.
             // BUG-fix: vroegere code sorteerde lexicografisch ('10' < '2'), waardoor
@@ -2544,7 +2544,7 @@ const RobawsAPI = {
                 return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
             })[0];
 
-            result.push({
+            return {
                 planningItemId: p.id,
                 clientId: p.clientId,
                 clientName,
@@ -2565,8 +2565,8 @@ const RobawsAPI = {
                     materials: Object.values(materialMap).filter(m => m.quantity !== 0),
                     remark: remarks.join(' | '),
                 },
-            });
-        }
+            };
+        }));
 
         // Sorteer: vandaag eerst, dan op startDate desc
         result.sort((a, b) => {
