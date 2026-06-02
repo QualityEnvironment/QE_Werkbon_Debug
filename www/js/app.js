@@ -2413,6 +2413,16 @@ const app = {
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById(tabId).classList.add('active');
+        if (tabId && tabId.toLowerCase().indexOf('materi') !== -1) this._warmArticleCache();
+    },
+
+    // Warm de artikel-catalogus (1x laden) zodat zoeken + onderhoud-prijzen instant zijn.
+    _warmArticleCache() {
+        try {
+            if (window.RobawsAPI && RobawsAPI._loadAllArticles && !RobawsAPI._articleCache && !RobawsAPI._articleCacheLoading) {
+                RobawsAPI._loadAllArticles().catch(() => {});
+            }
+        } catch (e) {}
     },
 
     // ========================================
@@ -3136,6 +3146,10 @@ const app = {
         const myQueryId = (this._searchQueryId = (this._searchQueryId || 0) + 1);
 
         this.searchTimeout = setTimeout(async () => {
+            if (window.RobawsAPI && !RobawsAPI._articleCache) {
+                container.innerHTML = '<p class="text-grey text-sm text-center" style="padding:12px">Artikelen laden…</p>';
+                container.style.display = 'block';
+            }
             try {
                 const res = await fetch(
                     `api/articles.php?action=search&name=${encodeURIComponent(query)}&limit=20`,
@@ -3563,6 +3577,7 @@ const app = {
         if (!window.ONDERHOUD_DATA || !window.ONDERHOUD_DATA.CATEGORIES) return;
         const container = document.getElementById('onderhoudCategories');
         if (!container) return;
+        this._warmArticleCache();
         // Categorie-knoppen renderen
         container.innerHTML = ONDERHOUD_DATA.CATEGORIES.map((cat, i) => `
             <button class="btn btn-outline btn-sm" onclick="app.onderhoudPickCat(${i})"
@@ -3596,7 +3611,7 @@ const app = {
         }
 
         // Toon stap 2: vermogen kiezen
-        document.getElementById('onderhoudCatLabel').textContent = cat.icon + ' ' + cat.label;
+        document.getElementById('onderhoudCatLabel').innerHTML = cat.icon + ' ' + this.escapeHtml(cat.label);
         const sizesDiv = document.getElementById('onderhoudSizes');
         sizesDiv.innerHTML = cat.sizes.map((s, i) => `
             <button class="btn btn-outline btn-sm btn-full" onclick="app.onderhoudPickSize(${i})"
@@ -3636,8 +3651,8 @@ const app = {
     },
 
     _ohShowStep3(cat, size) {
-        document.getElementById('onderhoudSizeLabel').textContent =
-            cat.icon + ' ' + cat.label + ' — ' + size.label;
+        document.getElementById('onderhoudSizeLabel').innerHTML =
+            cat.icon + ' ' + this.escapeHtml(cat.label + ' — ' + size.label);
         document.getElementById('onderhoudStep1').style.display = 'none';
         document.getElementById('onderhoudStep2').style.display = 'none';
         document.getElementById('onderhoudStep3').style.display = '';
@@ -3694,11 +3709,13 @@ const app = {
         const zoneData = size.zones[zone];
         if (!zoneData) return;
         this._ohZone = zone;
+        const _livePrice = (window.RobawsAPI && RobawsAPI.getCachedArticlePrice) ? RobawsAPI.getCachedArticlePrice(zoneData.id) : null;
+        const _price = (_livePrice != null) ? _livePrice : zoneData.price;
         this._ohArticle = {
             id: zoneData.id,
             name: `Onderhoud ${cat.label.replace(' (AG)', '')} ${size.label} - ZONE ${zone}`,
-            salePrice: zoneData.price,
-            unitPrice: zoneData.price,
+            salePrice: _price,
+            unitPrice: _price,
             unit: 'stuk'
         };
         const verpl = ONDERHOUD_DATA.ZONE_VERPLAATSING[zone] || '?';

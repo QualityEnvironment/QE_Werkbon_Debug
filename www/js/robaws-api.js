@@ -1719,36 +1719,61 @@ const RobawsAPI = {
     // ARTIKELEN ZOEKEN (materialen)
     // =============================================
     async searchArticles(query, limit = 20) {
-        // Probeer eerst op naam te zoeken via de API
-        const result = await this.get(`articles?name=${encodeURIComponent(query)}&limit=${limit}`);
-        let items = result.data.items || [];
+        const raw = (query || '').trim();
+        if (!raw) return [];
+        const q = raw.toLowerCase();
 
-        // Als query een nummer lijkt, ook op articleNumber zoeken
-        if (/^\d+/.test(query.trim())) {
+        // Volledige catalogus 1x in cache laden; daarna kost zoeken 0 API-calls.
+        let cache = this._articleCache;
+        if (!cache) {
+            try { cache = await this._loadAllArticles(); }
+            catch (e) { cache = this._articleCache || null; }
+        }
+
+        // Fallback: cache (nog) niet beschikbaar -> server-side zoeken.
+        if (!cache || cache.length === 0) {
             try {
-                const numResult = await this.get(`articles?articleNumber=${encodeURIComponent(query.trim())}&limit=${limit}`);
-                const numItems = numResult.data.items || [];
-                // Merge zonder duplicaten
-                const existingIds = new Set(items.map(i => i.id));
-                numItems.forEach(i => { if (!existingIds.has(i.id)) items.push(i); });
-            } catch(e) {}
+                const result = await this.get(`articles?name=${encodeURIComponent(raw)}&limit=${limit}`);
+                return (result.data.items || []).slice(0, limit);
+            } catch (e) { return []; }
         }
 
-        // Client-side fuzzy filter: als minder dan 3 resultaten, zoek ook door cache
-        if (items.length < 3 && this._articleCache && this._articleCache.length > 0) {
-            const q = query.toLowerCase().trim();
-            const words = q.split(/\s+/);
-            const fuzzyMatches = this._articleCache.filter(art => {
-                const name = (art.name || '').toLowerCase();
-                const nr = (art.articleNumber || '').toLowerCase();
-                // Elk woord moet voorkomen in naam of artikelnummer
-                return words.every(w => name.includes(w) || nr.includes(w));
-            }).slice(0, limit);
-            const existingIds = new Set(items.map(i => i.id));
-            fuzzyMatches.forEach(i => { if (!existingIds.has(i.id)) items.push(i); });
-        }
+        return this._rankArticles(cache, q, limit);
+    },
 
-        return items.slice(0, limit);
+    // Client-side ranked matcher: artikelnr exact > naam start > bevat > alle woorden.
+    _rankArticles(cache, q, limit) {
+        const words = q.split(/\s+/).filter(Boolean);
+        const scored = [];
+        for (let i = 0; i < cache.length; i++) {
+            const art = cache[i];
+            const name = (art.name || '').toLowerCase();
+            const nr = (art.articleNumber || '').toLowerCase();
+            let score = 0;
+            if (nr && nr === q) score = 1000;
+            else if (name === q) score = 950;
+            else if (name.startsWith(q)) score = 850;
+            else if (nr && nr.startsWith(q)) score = 800;
+            else if (name.includes(q)) score = 700;
+            else if (nr && nr.includes(q)) score = 600;
+            else if (words.length > 0 && words.every(w => name.includes(w) || nr.includes(w))) score = 500;
+            if (score > 0) {
+                // Lichte voorkeur voor kortere (specifiekere) namen
+                score += Math.max(0, 80 - name.length) * 0.05;
+                scored.push({ art, score, idx: i });
+            }
+        }
+        scored.sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+        return scored.slice(0, limit).map(s => s.art);
+    },
+
+    // Live verkoopprijs uit de artikel-cache op id (0 extra API-calls).
+    getCachedArticlePrice(id) {
+        if (!this._articleCache || id == null) return null;
+        const a = this._articleCache.find(x => String(x.id) === String(id));
+        if (!a) return null;
+        const p = (a.salePrice != null) ? a.salePrice : a.unitPrice;
+        return (p != null) ? p : null;
     },
 
     // =============================================
@@ -2369,8 +2394,15 @@ const RobawsAPI = {
             if (page >= totalPages) break;
         } while (true);
 
+        // Dedupe op id (Robaws-paginatie kan dezelfde groep meermaals teruggeven -> dubbele tegels)
+        const _seen = new Set();
+        const uniqueGroups = [];
+        for (const g of allGroups) {
+            if (g && !_seen.has(g.id)) { _seen.add(g.id); uniqueGroups.push(g); }
+        }
+
         // Filter alleen wappy=true
-        const wappyGroups = allGroups.filter(g => g.wappy === true);
+        const wappyGroups = uniqueGroups.filter(g => g.wappy === true);
 
         // Boomstructuur
         const rootGroups = [];

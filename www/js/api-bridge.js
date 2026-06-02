@@ -477,7 +477,7 @@ const APIBridge = {
     async handleArticleGroups() {
         const result = await RobawsAPI.getArticleGroups();
         return this.jsonResponse({
-            groups: result.tree,
+            groups: result.all,
             allGroups: result.all,
             count: result.all.length,
         });
