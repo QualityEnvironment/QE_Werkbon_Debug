@@ -1721,24 +1721,57 @@ const RobawsAPI = {
     async searchArticles(query, limit = 20) {
         const raw = (query || '').trim();
         if (!raw) return [];
-        const q = raw.toLowerCase();
+        const ql = raw.toLowerCase();
+        const words = ql.split(/\s+/).filter(Boolean);
 
-        // Volledige catalogus 1x in cache laden; daarna kost zoeken 0 API-calls.
-        let cache = this._articleCache;
-        if (!cache) {
-            try { cache = await this._loadAllArticles(); }
-            catch (e) { cache = this._articleCache || null; }
+        // Robaws zoekt server-side op naam, maar matcht meerdere woorden slecht.
+        // Daarom sturen we het meest onderscheidende (langste) woord naar Robaws
+        // en verfijnen we de rest client-side op de teruggekregen kandidaten.
+        const primary = words.reduce((a, b) => (b.length > a.length ? b : a), raw);
+
+        const byId = new Map();
+        const add = arr => {
+            for (const it of (arr || [])) {
+                if (it && it.id != null && !byId.has(String(it.id))) byId.set(String(it.id), it);
+            }
+        };
+
+        // 1) Op naam (ruime limit zodat client-side verfijnen materiaal heeft)
+        try {
+            const r = await this.get(`articles?name=${encodeURIComponent(primary)}&limit=50`);
+            add(r.data && r.data.items);
+        } catch (e) {}
+        // 2) Ook op artikelnummer (codes)
+        try {
+            const r2 = await this.get(`articles?articleNumber=${encodeURIComponent(raw)}&limit=20`);
+            add(r2.data && r2.data.items);
+        } catch (e) {}
+
+        let items = Array.from(byId.values());
+
+        // 3) Bij meerdere woorden: enkel artikels waar ALLE woorden in voorkomen
+        if (words.length > 1) {
+            const refined = items.filter(it => {
+                const hay = ((it.name || '') + ' ' + (it.articleNumber || '')).toLowerCase();
+                return words.every(w => hay.includes(w));
+            });
+            if (refined.length) items = refined;
         }
 
-        // Fallback: cache (nog) niet beschikbaar -> server-side zoeken.
-        if (!cache || cache.length === 0) {
-            try {
-                const result = await this.get(`articles?name=${encodeURIComponent(raw)}&limit=${limit}`);
-                return (result.data.items || []).slice(0, limit);
-            } catch (e) { return []; }
-        }
+        // 4) Rangschikken: artikelnr exact > naam begint met > naam bevat
+        const score = it => {
+            const name = (it.name || '').toLowerCase();
+            const nr = (it.articleNumber || '').toLowerCase();
+            if (nr && nr === ql) return 1000;
+            if (name === ql) return 950;
+            if (name.startsWith(ql)) return 850;
+            if (nr && nr.startsWith(ql)) return 800;
+            if (name.includes(ql)) return 700;
+            return 500;
+        };
+        items.sort((a, b) => score(b) - score(a) || (a.name || '').localeCompare(b.name || ''));
 
-        return this._rankArticles(cache, q, limit);
+        return items.slice(0, limit);
     },
 
     // Client-side ranked matcher: artikelnr exact > naam start > bevat > alle woorden.

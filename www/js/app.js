@@ -3169,10 +3169,6 @@ const app = {
         const myQueryId = (this._searchQueryId = (this._searchQueryId || 0) + 1);
 
         this.searchTimeout = setTimeout(async () => {
-            if (window.RobawsAPI && !RobawsAPI._articleCache) {
-                container.innerHTML = '<p class="text-grey text-sm text-center" style="padding:12px">Artikelen laden…</p>';
-                container.style.display = 'block';
-            }
             try {
                 const res = await fetch(
                     `api/articles.php?action=search&name=${encodeURIComponent(query)}&limit=20`,
