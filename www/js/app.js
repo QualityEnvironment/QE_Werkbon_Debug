@@ -27,12 +27,12 @@ const app = {
     // worden toegevoegd in Robaws.
     _TIJD_STYLES: {
         'Op tijd':              { color: '#2e7d32', bg: '#f1f8e9', icon: '',   label: 'Werkuren' },
-        'Te laat':              { color: '#e65100', bg: '#fff3e0', icon: '⚠️', label: 'Te laat' },
-        'Ziek':                 { color: '#b71c1c', bg: '#ffebee', icon: '🤒', label: 'Ziek' },
-        'Verlof':               { color: '#1565c0', bg: '#e3f2fd', icon: '🏖️', label: 'Verlof' },
-        'Betaalde feestdag':    { color: '#b8860b', bg: '#fff8e1', icon: '🎉', label: 'Betaalde feestdag' },
-        'Inhaal rustdag':       { color: '#00695c', bg: '#e0f2f1', icon: '🛌', label: 'Inhaal rustdag' },
-        'Sociaal verlof':       { color: '#6a1b9a', bg: '#f3e5f5', icon: '🤝', label: 'Sociaal verlof' },
+        'Te laat':              { color: '#e65100', bg: '#fff3e0', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 4 3 19h18z"/><path d="M12 10v4M12 17h.01"/></svg>', label: 'Te laat' },
+        'Ziek':                 { color: '#b71c1c', bg: '#ffebee', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 4a2 2 0 0 1 2 2v7a4 4 0 1 1-4 0V6a2 2 0 0 1 2-2z"/></svg>', label: 'Ziek' },
+        'Verlof':               { color: '#1565c0', bg: '#e3f2fd', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>', label: 'Verlof' },
+        'Betaalde feestdag':    { color: '#b8860b', bg: '#fff8e1', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="4" y="9" width="16" height="11" rx="1"/><path d="M4 13h16M12 9v11"/><path d="M12 9C9 9 7.5 7.5 8 6s3-1 4 3c1-4 3.5-4.5 4-3s-1 3-4 3z"/></svg>', label: 'Betaalde feestdag' },
+        'Inhaal rustdag':       { color: '#00695c', bg: '#e0f2f1', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 14A8 8 0 0 1 10 4a7 7 0 1 0 10 10z"/></svg>', label: 'Inhaal rustdag' },
+        'Sociaal verlof':       { color: '#6a1b9a', bg: '#f3e5f5', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.2a3 3 0 0 1 0 5.6M21 20a6 6 0 0 0-4.5-5.8"/></svg>', label: 'Sociaal verlof' },
     },
 
     _getTijdStyle(tijd) {
@@ -847,7 +847,7 @@ const app = {
                 const newVersion = QEBridge.getAppVersion ? QEBridge.getAppVersion() : 0;
                 if (newVersion > startVersion) {
                     clearInterval(poll);
-                    if (status) { status.style.color = 'var(--qe-green)'; status.textContent = `✅ Bijgewerkt naar versie ${newVersion}!`; }
+                    if (status) { status.style.color = 'var(--qe-green)'; status.textContent = ` Bijgewerkt naar versie ${newVersion}!`; }
                     if (btn) { btn.disabled = false; btn.textContent = 'Controleren'; }
                     const versionEl = document.getElementById('appVersionInfo');
                     if (versionEl) versionEl.textContent = `Huidige versie: ${newVersion}`;
@@ -1015,7 +1015,7 @@ const app = {
         // Indicator zichtbaar als override actief is
         if (active !== base) {
             note.style.display = '';
-            note.textContent = '⚠ Test-modus: app gedraagt zich als ' + active +
+            note.textContent = 'Test-modus: app gedraagt zich als ' + active +
                 ' (basis-rol: ' + base + ').';
         } else {
             note.style.display = 'none';
@@ -1794,7 +1794,33 @@ const app = {
             'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
             'alert': '<path d="M12 4 3 19h18z"/><path d="M12 10v4M12 17h.01"/>',
             'package': '<path d="M12 3 21 7.5v9L12 21 3 16.5v-9z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/>',
-            'minus': '<path d="M5 12h14"/>'
+            'minus': '<path d="M5 12h14"/>',
+            'tool': '<path d="M15.5 5.5a3.5 3.5 0 0 0-4.4 4.4l-5.3 5.3a1.5 1.5 0 1 0 2.1 2.1l5.3-5.3a3.5 3.5 0 0 0 4.4-4.4L15.2 9 13 8.8 12.8 6.6z"/>',
+            'car': '<path d="M6 11l1.5-4h9L18 11M5 16h14M7 11h10a2 2 0 0 1 2 2v3H5v-3a2 2 0 0 1 2-2z"/><circle cx="8" cy="16.5" r="1.4"/><circle cx="16" cy="16.5" r="1.4"/>',
+            'coffee': '<path d="M5 8h11v4a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4z"/><path d="M16 9h2a2 2 0 0 1 0 4h-2"/><path d="M7 3v2M10 3v2M13 3v2"/>',
+            'edit': '<path d="M4 20h4l10-10-4-4L4 16z"/><path d="M14 6l4 4"/>',
+            'file': '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 12h5M9.5 15.5h5"/>',
+            'folder': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+            'refresh': '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>',
+            'info': '<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6h.01"/>',
+            'download': '<path d="M12 4v10M8 11l4 4 4-4"/><path d="M5 19h14"/>',
+            'card': '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/>',
+            'bank': '<path d="M4 10h16M4 10 12 4l8 6M6 10v7M10 10v7M14 10v7M18 10v7M4 19h16"/>',
+            'flag': '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+            'phone-off': '<path d="M9 3.5 4 4l1 5-2 1.5a11 11 0 0 0 5 5.5"/><path d="M3 3l18 18"/>',
+            'thermometer': '<path d="M12 4a2 2 0 0 1 2 2v7a4 4 0 1 1-4 0V6a2 2 0 0 1 2-2z"/>',
+            'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>',
+            'gift': '<rect x="4" y="9" width="16" height="11" rx="1"/><path d="M4 13h16M12 9v11"/><path d="M12 9C9 9 7.5 7.5 8 6s3-1 4 3c1-4 3.5-4.5 4-3s-1 3-4 3z"/>',
+            'moon': '<path d="M20 14A8 8 0 0 1 10 4a7 7 0 1 0 10 10z"/>',
+            'users': '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.2a3 3 0 0 1 0 5.6M21 20a6 6 0 0 0-4.5-5.8"/>',
+            'hourglass': '<path d="M7 4h10M7 20h10M8 4c0 5 8 3 8 8s-8 3-8 8M16 4c0 5-8 3-8 8s8 3 8 8"/>',
+            'paperclip': '<path d="M20 11l-8 8a4.5 4.5 0 0 1-6.4-6.4l8.5-8.5a3 3 0 0 1 4.3 4.3l-8.5 8.5a1.5 1.5 0 0 1-2.1-2.1l7.8-7.8"/>',
+            'image': '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 16-5-5L5 20"/>',
+            'star': '<path d="M12 4l2.3 4.7 5.2.8-3.8 3.7.9 5.1-4.6-2.4-4.6 2.4.9-5.1L4.5 9.5l5.2-.8z"/>',
+            'camera': '<path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/>',
+            'mail-send': '<path d="M3 6h18v12H3z"/><path d="m3 7 9 6 9-6"/>',
+            'x': '<path d="M6 6l12 12M18 6 6 18"/>',
+            'home': '<path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/>'
         };
         return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
     },
@@ -2281,7 +2307,7 @@ const app = {
                     </div>
                     <button class="btn btn-outline btn-sm btn-full" onclick="event.stopPropagation(); app.editInstallation('${inst.id}')"
                         style="margin-top:8px;border-color:var(--qe-purple);color:var(--qe-purple);font-size:12px">
-                        ✏️ Installatie bewerken
+                        ${this.icon('edit', { size: 16, style: 'vertical-align:-3px' })} Installatie bewerken
                     </button>
                 </div>
             `).join('');
@@ -2338,7 +2364,7 @@ const app = {
             }
 
             this.closeModal();
-            this.toast('Installatie bijgewerkt ✓');
+            this.toast('Installatie bijgewerkt ');
             // Herlaad installaties in de UI
             const installationIds = this.currentWO?.installationIds || [];
             const clientId = this.currentWO?.client?.id;
@@ -2364,7 +2390,7 @@ const app = {
             container.innerHTML = docs.map(doc => `
                 <div class="card" style="padding:10px 12px;margin-bottom:6px">
                     <a href="${doc.url}" target="_blank" style="text-decoration:none;color:var(--qe-darkblue);display:flex;align-items:center;gap:8px">
-                        <span>📄</span>
+                        <span>${this.icon('file', { size: 18 })}</span>
                         <span style="font-size:14px">${this.escapeHtml(doc.name || 'Document')}</span>
                     </a>
                 </div>
@@ -2994,15 +3020,15 @@ const app = {
             return;
         }
 
-        const icons = { klant: '🔧', verplaatsing: '🚗', pauze: '☕' };
+        const icons = { klant: this.icon('tool', { size: 18 }), verplaatsing: this.icon('car', { size: 18 }), pauze: this.icon('coffee', { size: 18 }) };
         const labels = { klant: 'Werkuren', verplaatsing: 'Verplaatsing', pauze: 'Pauze' };
 
         container.innerHTML = data.hours.map(h => {
-            const empLabel = h.employeeName ? `<div style="font-size:11px;color:var(--qe-purple);font-weight:500">👷 ${this.escapeHtml(h.employeeName)}</div>` : '';
-            const pauzeLabel = h.pauze && h.pauze > 0 ? `<span style="font-size:11px;color:var(--qe-grey);margin-left:4px">(☕${h.pauze}m)</span>` : '';
+            const empLabel = h.employeeName ? `<div style="font-size:11px;color:var(--qe-purple);font-weight:500">${this.icon('user', { size: 13, style: 'vertical-align:-2px' })} ${this.escapeHtml(h.employeeName)}</div>` : '';
+            const pauzeLabel = h.pauze && h.pauze > 0 ? `<span style="font-size:11px;color:var(--qe-grey);margin-left:4px">(${this.icon('coffee', { size: 12, style: 'vertical-align:-2px' })} ${h.pauze}m)</span>` : '';
             return `
             <div class="hour-entry">
-                <div class="he-type ${h.type}">${icons[h.type] || '🔧'}</div>
+                <div class="he-type ${h.type}">${icons[h.type] || this.icon('tool', { size: 18 })}</div>
                 <div class="he-info">
                     ${empLabel}
                     <div class="he-label">${labels[h.type] || h.type}${pauzeLabel}</div>
@@ -3173,7 +3199,7 @@ const app = {
         card.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box';
 
         card.innerHTML =
-            '<div style="font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px">✏️ Eenmalig artikel</div>' +
+            '<div style="font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px">' + this.icon('edit', { size: 16, style: 'vertical-align:-3px' }) + ' Eenmalig artikel</div>' +
             '<div style="font-size:12px;color:#666;margin-bottom:16px">Voor artikels die nog niet in Robaws staan. Felicity krijgt een taakje om het artikel aan te maken.</div>' +
             '<div style="margin-bottom:12px">' +
                 '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Omschrijving</label>' +
@@ -3235,7 +3261,7 @@ const app = {
             });
             m.remove();
             this.renderMaterials();
-            this.toast('✏️ Eenmalig artikel toegevoegd — Felicity krijgt taak bij verzenden');
+            this.toast('Eenmalig artikel toegevoegd — Felicity krijgt taak bij verzenden');
         });
         document.getElementById('caCancel').addEventListener('click', () => m.remove());
     },
@@ -3301,7 +3327,7 @@ const app = {
         const orderNr = this.currentWO.orderLogicId || this.currentWO.salesOrderId || '—';
 
         document.getElementById('modalContent').innerHTML = `
-            <h3 style="font-size:16px;margin-bottom:12px">⚠️ Materiaal ontbreekt</h3>
+            <h3 style="font-size:16px;margin-bottom:12px">${this.icon('alert', { size: 18, style: 'vertical-align:-3px' })} Materiaal ontbreekt</h3>
             <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Laat het kantoor weten welk materiaal je nodig hebt. Er wordt een e-mail gestuurd.</p>
             <div class="form-group">
                 <label>Welk materiaal ontbreekt?</label>
@@ -3315,7 +3341,7 @@ const app = {
                 <label>Extra opmerking (optioneel)</label>
                 <textarea class="form-input" id="missingMatNote" rows="2" placeholder="Bijv. dringend, specifiek merk..."></textarea>
             </div>
-            <button class="btn btn-primary btn-full" onclick="app._sendMissingMaterial()">📧 Verstuur melding</button>
+            <button class="btn btn-primary btn-full" onclick="app._sendMissingMaterial()">${this.icon('mail-send', { size: 16, style: 'vertical-align:-3px' })} Verstuur melding</button>
         `;
         this.openModal();
     },
@@ -3513,9 +3539,9 @@ const app = {
             }
 
             this.closeModal();
-            this.toast('BTW tarief bijgewerkt ✓');
+            this.toast('BTW tarief bijgewerkt ');
         } catch (err) {
-            if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✓ Opslaan'; }
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Opslaan'; }
             this.toast('Fout: ' + err.message);
         }
     },
@@ -4182,7 +4208,7 @@ const app = {
 
         const content = document.getElementById('planItemsContent');
         if (items.length === 0) {
-            content.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><h3>Geen items</h3></div>';
+            content.innerHTML = '<div class="empty-state"><div class="empty-icon">' + this.icon('package', { size: 44, stroke: 1.6 }) + '</div><h3>Geen items</h3></div>';
             return;
         }
 
@@ -4196,7 +4222,7 @@ const app = {
                 <div class="card" style="display:flex;align-items:center;gap:14px;padding:16px;margin-bottom:10px;${checked ? 'opacity:0.5;' : ''}" id="planItemCard_${i}">
                     <label style="width:40px;height:40px;border-radius:10px;background:${checked ? 'var(--qe-green)' : 'rgba(106,44,145,0.08)'};display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;cursor:pointer;transition:background 0.2s">
                         <input type="checkbox" ${checked ? 'checked' : ''} onchange="app.togglePlanItem(${i}, this.checked)" style="display:none">
-                        <span style="font-size:20px">${checked ? '✅' : '📦'}</span>
+                        <span style="font-size:20px;color:${checked ? 'var(--qe-green)' : 'var(--qe-grey)'}">${checked ? this.icon('check-circle', { size: 20 }) : this.icon('package', { size: 20 })}</span>
                     </label>
                     <div style="flex:1;min-width:0">
                         <div style="font-size:15px;font-weight:600;color:var(--qe-darkblue);line-height:1.3;${checked ? 'text-decoration:line-through;' : ''}">${this.escapeHtml(desc)}</div>
@@ -4216,7 +4242,7 @@ const app = {
         if (card) {
             card.style.opacity = checked ? '0.5' : '1';
             const icon = card.querySelector('label span');
-            if (icon) icon.textContent = checked ? '✅' : '📦';
+            if (icon) icon.innerHTML = checked ? this.icon('check-circle', { size: 20 }) : this.icon('package', { size: 20 });
             const label = card.querySelector('label');
             if (label) label.style.background = checked ? 'var(--qe-green)' : 'rgba(106,44,145,0.08)';
             const desc = card.querySelector('div[style*="font-weight:600"]');
@@ -4238,7 +4264,7 @@ const app = {
         section.style.display = '';
         // v181: knop om alle bestanden in 1 keer te downloaden (bij >1 bestand)
         const bulkBtn = docs.length > 1
-            ? `<button class="btn btn-primary btn-sm btn-full" style="margin-bottom:8px" onclick="app.downloadAllPlanDocuments()">⬇️ Alle ${docs.length} bestanden downloaden</button>`
+            ? `<button class="btn btn-primary btn-sm btn-full" style="margin-bottom:8px" onclick="app.downloadAllPlanDocuments()">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Alle ${docs.length} bestanden downloaden</button>`
             : '';
         list.innerHTML = bulkBtn + docs.map(doc => {
             const icon = this._getFileIcon(doc.contentType);
@@ -4251,7 +4277,7 @@ const app = {
                         <div style="font-size:14px;font-weight:500;color:var(--qe-darkblue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(doc.name)}</div>
                         ${sizeStr ? `<div style="font-size:12px;color:var(--qe-grey)">${sizeStr}</div>` : ''}
                     </div>
-                    <span style="font-size:20px;color:var(--qe-purple)">⬇️</span>
+                    <span style="color:var(--qe-purple)">${this.icon('download', { size: 20 })}</span>
                 </div>`;
         }).join('');
     },
@@ -4466,7 +4492,7 @@ const app = {
         const warnings = this._validateWerkbon();
         const hasErrors = warnings.some(w => w.level === 'error');
         if (warnings.length > 0) {
-            const icons = { error: '❌', warn: '⚠️', info: 'ℹ️' };
+            const icons = { error: this.icon('alert', { size: 18 }), warn: this.icon('alert', { size: 18 }), info: this.icon('info', { size: 18 }) };
             const colors = { error: 'var(--qe-red)', warn: 'var(--qe-orange)', info: 'var(--qe-grey)' };
             document.getElementById('modalContent').innerHTML = `
                 <h3>Werkbon checklist</h3>
@@ -4537,7 +4563,7 @@ const app = {
                 byEmployee[name].pauze += (h.pauze || 0);
             });
             const empRows = Object.entries(byEmployee).map(([name, d]) =>
-                `<div class="day-hours-row"><span>👷 ${this.escapeHtml(name)}</span><span style="font-weight:500">${this.formatMinutes(d.duration)}${d.pauze > 0 ? ` <span style="font-size:11px;color:var(--qe-grey)">(☕${d.pauze}m)</span>` : ''}</span></div>`
+                `<div class="day-hours-row"><span>${this.icon('user', { size: 13, style: 'vertical-align:-2px' })} ${this.escapeHtml(name)}</span><span style="font-weight:500">${this.formatMinutes(d.duration)}${d.pauze > 0 ? ` <span style="font-size:11px;color:var(--qe-grey)">(${this.icon('coffee', { size: 12, style: 'vertical-align:-2px' })} ${d.pauze}m)</span>` : ''}</span></div>`
             ).join('');
 
             hoursContent.innerHTML = `
@@ -4661,7 +4687,7 @@ const app = {
             if (pmSection) pmSection.style.display = 'none';
             if (pmEmailSection) pmEmailSection.style.display = 'none';
             if (btn) {
-                btn.innerHTML = '📤 Uren & materiaal versturen';
+                btn.innerHTML = 'Uren & materiaal versturen';
                 btn.onclick = () => this.executeMonteurSubmitFlow();
                 btn.disabled = false;
             }
@@ -4676,7 +4702,7 @@ const app = {
                 b.style.borderColor = '';
             });
             if (btn) {
-                btn.innerHTML = '✍️ Ondertekenen & Versturen';
+                btn.innerHTML = 'Ondertekenen & Versturen';
                 btn.onclick = () => this.startSubmitFlow();
                 btn.disabled = true; // Pas actief na betaalmethode selectie
             }
@@ -4762,7 +4788,7 @@ const app = {
                     } catch (photoErr) { /* niet kritisch */ }
                 }
 
-                this.toast('Werkbon verstuurd ✓');
+                this.toast('Werkbon verstuurd ');
                 // Bewaar uren voor daguren overzicht vóór reset
                 const woId = this.currentWO.id;
                 if (!this.submittedHours[woId]) this.submittedHours[woId] = [];
@@ -4922,7 +4948,7 @@ const app = {
 
         // Loading state
         const origBtn = btnEl ? btnEl.textContent : '';
-        if (btnEl) { btnEl.textContent = '⏳'; btnEl.disabled = true; }
+        if (btnEl) { btnEl.textContent = ''; btnEl.disabled = true; }
 
         try {
             const res = await RobawsAPI.get(`clients/${clientId}`);
@@ -4961,12 +4987,12 @@ const app = {
             }
 
             inputEl.value = found.trim();
-            this.toast('📋 Email ingevuld: ' + inputEl.value);
+            this.toast('Email ingevuld: ' + inputEl.value);
         } catch (e) {
             console.warn('[fillKlantEmail] fout:', e && e.message);
             this.toast('Kon email niet ophalen');
         } finally {
-            if (btnEl) { btnEl.textContent = origBtn || '📋'; btnEl.disabled = false; }
+            if (btnEl) { btnEl.textContent = origBtn || ''; btnEl.disabled = false; }
         }
     },
 
@@ -5036,7 +5062,7 @@ const app = {
         if (section.style.display === 'none') {
             section.style.display = 'block';
             section.scrollIntoView({ behavior: 'smooth' });
-            btn.innerHTML = '✓ Ondertekenen & Versturen';
+            btn.innerHTML = 'Ondertekenen & Versturen';
             btn.onclick = () => this.executeSubmitFlow();
             setTimeout(() => this.initSignatureCanvas(), 100);
         } else {
@@ -5447,10 +5473,10 @@ const app = {
                 RobawsAPI.sendWorkOrderByEmail(workOrderId, klantEmail).then(r => {
                     if (r.ok) {
                         console.log('[werkbon-email] verstuurd naar', klantEmail, '(id ' + r.emailId + ')');
-                        this.toast('📧 Werkbon gemaild naar ' + klantEmail);
+                        this.toast('Werkbon gemaild naar ' + klantEmail);
                     } else {
                         console.warn('[werkbon-email] faalde:', r.error);
-                        this.toast('⚠️ Mail niet verstuurd: ' + (r.error || 'onbekend'));
+                        this.toast('Mail niet verstuurd: ' + (r.error || 'onbekend'));
                     }
                 }).catch(e => {
                     console.warn('[werkbon-email] exception:', e && e.message);
@@ -5490,7 +5516,7 @@ const app = {
             } else {
                 // v85: Cash of Via factuur → factuur is aangemaakt, werkbon + order
                 // staan nu op 'gefactureerd' (zie robaws-api stap 6). Geen extra UI.
-                this.toast(`Werkbon verstuurd — betaling: ${paymentMethod} ✓`);
+                this.toast(`Werkbon verstuurd — betaling: ${paymentMethod} `);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
@@ -5505,7 +5531,7 @@ const app = {
         } finally {
             this._submitInProgress = false;
             btn.disabled = false;
-            btn.innerHTML = '✍️ Ondertekenen & Versturen';
+            btn.innerHTML = 'Ondertekenen & Versturen';
             btn.onclick = () => this.startSubmitFlow();
         }
     },
@@ -5604,7 +5630,7 @@ const app = {
                 } catch (e) { /* foto's niet kritisch */ }
             }
 
-            this.toast('Werkbon verstuurd ✓');
+            this.toast('Werkbon verstuurd ');
 
             // Data resetten en terug naar planning
             const woId = this.currentWO.id;
@@ -5626,7 +5652,7 @@ const app = {
         } finally {
             this._submitInProgress = false;
             btn.disabled = false;
-            btn.innerHTML = '📤 Uren & materiaal versturen';
+            btn.innerHTML = 'Uren & materiaal versturen';
             btn.onclick = () => this.executeMonteurSubmitFlow();
         }
     },
@@ -5758,7 +5784,7 @@ const app = {
         el.style.border = '2px solid var(--qe-purple)';
         el.style.background = '#f3e8ff';
         const selIcon = el.querySelector('div > div:first-child');
-        if (selIcon) { selIcon.style.background = 'var(--qe-purple)'; selIcon.style.color = '#fff'; selIcon.textContent = '✓'; }
+        if (selIcon) { selIcon.style.background = 'var(--qe-purple)'; selIcon.style.color = '#fff'; selIcon.textContent = ''; }
 
         // Enable confirm knop
         const btn = document.getElementById('btnConfirmTerminal');
@@ -5900,11 +5926,11 @@ const app = {
                 '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
                 '<div style="font-size:18px;color:#1A237E;font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
                 '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
-                mkBtnHtml('Mollie Tap',    '💳', 'Bancontact / kaart (Mollie Tap)') +
-                mkBtnHtml('Viva wallet',   '💳', 'Viva Wallet (legacy)') +
-                mkBtnHtml('Cash',          '💵', 'Cash') +
-                mkBtnHtml('Overschrijving','🏦', 'Overschrijving ter plaatse') +
-                mkBtnHtml('Via factuur',   '📋', 'Via factuur') +
+                mkBtnHtml('Mollie Tap',    this.icon('card', { size: 20 }), 'Bancontact / kaart (Mollie Tap)') +
+                mkBtnHtml('Viva wallet',   this.icon('card', { size: 20 }), 'Viva Wallet (legacy)') +
+                mkBtnHtml('Cash',          this.icon('cash', { size: 20 }), 'Cash') +
+                mkBtnHtml('Overschrijving',this.icon('bank', { size: 20 }), 'Overschrijving ter plaatse') +
+                mkBtnHtml('Via factuur',   this.icon('file', { size: 20 }), 'Via factuur') +
                 '<div id="changePmStatus" style="font-size:13px;text-align:center;margin-top:12px;padding:10px;display:none;border-radius:8px"></div>' +
                 '<button onclick="app.goBack()" style="width:100%;padding:14px;margin-top:14px;background:#f5f5f5;color:#444;border:none;border-radius:10px;font-size:15px;cursor:pointer">Annuleren</button>' +
             '</div>';
@@ -5966,7 +5992,7 @@ const app = {
             statusEl.style.display = 'block';
             statusEl.style.color = '#444';
             statusEl.style.background = '#fff8e1';
-            statusEl.textContent = '⏳ Bijwerken in Robaws…';
+            statusEl.textContent = 'Bijwerken in Robaws…';
         }
 
         try {
@@ -5984,7 +6010,7 @@ const app = {
                     if (res.results.workOrder && !res.results.workOrder.ok) failed.push('werkbon');
                     if (res.results.salesOrder && !res.results.salesOrder.ok) failed.push('order');
                     if (res.results.invoice && !res.results.invoice.ok) failed.push('factuur');
-                    statusEl.textContent = '⚠️ Niet alles is bijgewerkt: ' + failed.join(', ');
+                    statusEl.textContent = 'Niet alles is bijgewerkt: ' + failed.join(', ');
                 }
                 return;
             }
@@ -6054,7 +6080,7 @@ const app = {
             // L&L actief — krijgt voorrang in de statusbar
             bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
                 'background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-left:4px solid #1565c0';
-            icon.textContent = '📦';
+            icon.innerHTML = this.icon('package', { size: 22 });
             text.textContent = 'Bezig met Laden & Lossen';
             text.style.color = '#0d47a1';
             sub.textContent = llStartTxt ? ('Gestart om ' + llStartTxt) : 'Actief';
@@ -6063,7 +6089,7 @@ const app = {
             // Ingeklokt (hoofd-shift)
             const lateClass = isLate ? 'background:linear-gradient(135deg,#fff3e0,#ffccbc)' : 'background:linear-gradient(135deg,#e8f5e9,#c8e6c9)';
             bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
-            icon.textContent = isLate ? '⚠️' : '✅';
+            icon.innerHTML = isLate ? this.icon('alert', { size: 22 }) : this.icon('check-circle', { size: 22 });
             const activeTag = QEClock.getActiveTagName();
             const cleanTag = this._publicRemark(activeTag);
             text.textContent = `Actief sinds ${session.startTime}`;
@@ -6074,7 +6100,7 @@ const app = {
             // Uitgeklokt — 🏁 finish-vlag
             bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
                 'background:linear-gradient(135deg,#e8eaf6,#c5cae9);border-left:4px solid #001E45';
-            icon.textContent = '🏁';
+            icon.innerHTML = this.icon('flag', { size: 22 });
             text.textContent = `Uitgeklokt — ${clockTime}`;
             text.style.color = '#001E45';
             sub.textContent = 'Klaar voor vandaag';
@@ -6084,7 +6110,7 @@ const app = {
             const isLateNow = QEClock.isLate();
             const bg = isLateNow ? 'background:linear-gradient(135deg,#fce4ec,#ffcdd2)' : 'background:linear-gradient(135deg,#e3f2fd,#bbdefb)';
             bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${bg}`;
-            icon.textContent = isLateNow ? '🚨' : '⏰';
+            icon.innerHTML = isLateNow ? this.icon('alert', { size: 22 }) : this.icon('clock', { size: 22 });
             text.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
             text.style.color = isLateNow ? '#c62828' : '#1565c0';
             sub.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
@@ -6148,7 +6174,7 @@ const app = {
         // v78: L&L active block wordt onafhankelijk gerenderd, ook als main session inactief.
         const llActiveHtml = session && session.llActive ? `
             <div style="margin-top:10px;padding:14px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:8px;display:flex;align-items:center;gap:12px">
-                <span style="font-size:28px">📦</span>
+                <span style="color:#e65100">${this.icon('package', { size: 26 })}</span>
                 <div>
                     <div style="font-size:15px;font-weight:700;color:#0d47a1">Bezig met Laden &amp; Lossen</div>
                     <div style="font-size:12px;color:#1565c0;opacity:0.9;margin-top:2px">Gestart om ${session.llStartTime || '?'} — scan de L&amp;L tag opnieuw om te stoppen</div>
@@ -6158,7 +6184,7 @@ const app = {
         if (isActive) {
             const isLate = session.registrationType === 'Te laat';
             const isLL = session.registrationType === 'Laden & Lossen';
-            bigStatus.textContent = isLL ? '📦' : (isLate ? '⚠️' : '✅');
+            bigStatus.innerHTML = isLL ? this.icon('package', { size: 52 }) : (isLate ? this.icon('alert', { size: 52 }) : this.icon('check-circle', { size: 52 }));
             bigText.textContent = isLL ? 'Laden & Lossen' : 'Ingeklokt';
             bigText.style.color = isLate ? '#e65100' : 'var(--qe-green)';
             const _cleanTag = this._publicRemark(session.tagName);
@@ -6170,7 +6196,7 @@ const app = {
                 activeEl.style.display = 'block';
                 document.getElementById('clockActiveContent').innerHTML = `
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                        <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">🔄 Actieve registratie</h3>
+                        <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">${this.icon('refresh', { size: 16, style: 'vertical-align:-3px' })} Actieve registratie</h3>
                         <span style="background:${isLL ? '#e3f2fd' : '#e8f5e9'};color:${isLL ? '#1565c0' : '#2e7d32'};font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600">${session.registrationType}</span>
                     </div>
                     <div style="display:flex;gap:16px;margin-bottom:8px">
@@ -6184,12 +6210,12 @@ const app = {
         } else {
             const isLateNow = QEClock.isLate();
             if (clockTime) {
-                bigStatus.textContent = '🏁';
+                bigStatus.innerHTML = this.icon('flag', { size: 52 });
                 bigText.textContent = 'Uitgeklokt';
                 bigText.style.color = 'var(--qe-darkblue)';
                 bigTime.textContent = `Eerste scan: ${clockTime}`;
             } else {
-                bigStatus.textContent = isLateNow ? '🚨' : '⏰';
+                bigStatus.innerHTML = isLateNow ? this.icon('alert', { size: 52 }) : this.icon('clock', { size: 52 });
                 bigText.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
                 bigText.style.color = isLateNow ? '#c62828' : 'var(--qe-darkblue)';
                 bigTime.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
@@ -6201,14 +6227,14 @@ const app = {
             if (window.QEBridge && !QEBridge.isNfcEnabled()) {
                 nfcCard.innerHTML = `
                     <div style="text-align:center;padding:20px">
-                        <div style="font-size:32px;margin-bottom:8px">📵</div>
+                        <div style="margin-bottom:8px;color:var(--qe-grey)">${this.icon('phone-off', { size: 34 })}</div>
                         <div style="font-size:15px;font-weight:600;margin-bottom:4px">NFC niet beschikbaar</div>
                         <div style="font-size:13px;color:var(--qe-grey)">Zet NFC aan in je telefoon-instellingen</div>
                         ${llActiveHtml}
                     </div>`;
             } else {
                 nfcCard.innerHTML = `
-                    <div style="font-size:32px;margin-bottom:8px">📱</div>
+                    <div style="margin-bottom:8px;color:var(--qe-purple)">${this.icon('phone', { size: 34 })}</div>
                     <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
                     <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
                     ${llActiveHtml}
@@ -6431,7 +6457,7 @@ const app = {
                 <button onclick="app.startTerminalPayment('${inv.id}', ${amount}, '${inv.paymentInstruction}', '${this.escapeHtml(inv.logicId)}')"
                     style="padding:16px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--qe-orange),#F97316);
                     color:#fff;font-size:16px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px">
-                    💳 Betalen via terminal
+                    ${this.icon('card', { size: 18, style: 'vertical-align:-3px' })} Betalen via terminal
                 </button>
                 ${terminalInfo}
             </div>
@@ -6509,7 +6535,7 @@ const app = {
             }
             if (!merchantRef) {
                 // Geen OGM beschikbaar — waarschuw, maar laat gebruiker beslissen
-                if (!confirm('⚠ Geen gestructureerde mededeling beschikbaar voor deze factuur.\n\nDoorgaan zonder OGM? Dan moet je de betaling later handmatig matchen.')) {
+                if (!confirm('Geen gestructureerde mededeling beschikbaar voor deze factuur.\n\nDoorgaan zonder OGM? Dan moet je de betaling later handmatig matchen.')) {
                     statusDiv.innerHTML = '';
                     return;
                 }
@@ -6521,7 +6547,7 @@ const app = {
             if (opened) {
                 statusDiv.innerHTML = `
                     <div style="color:#2e7d32;padding:16px;background:#e8f5e9;border-radius:12px;text-align:center">
-                        <div style="font-size:28px;margin-bottom:8px">📲</div>
+                        <div style="margin-bottom:8px;color:var(--qe-purple)">${this.icon('phone', { size: 28 })}</div>
                         <div style="font-weight:600;font-size:15px">Terminal geopend</div>
                         <div style="font-size:13px;color:#558b2f;margin-top:4px">Controleer de Viva Wallet app</div>
                         <div style="font-size:12px;color:#689f38;margin-top:8px">Bedrag: € ${amount.toFixed(2)} — ${this.escapeHtml(ogm || '')}</div>
@@ -6819,7 +6845,7 @@ const app = {
             } else if (skipAppRobaws) {
                 console.log('[Mollie] success via Worker-poll — Robaws-update al door Worker gedaan');
                 try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
-                setTimeout(() => this.toast('✓ Factuur ' + (ctx.invoiceLogicId || '') + ' op betaald'), 1200);
+                setTimeout(() => this.toast('Factuur ' + (ctx.invoiceLogicId || '') + ' op betaald'), 1200);
             }
             if (!sigOk) {
                 setTimeout(() => this.toast(
@@ -7092,7 +7118,7 @@ const app = {
             if (res.success) {
                 console.log('[Mollie→Robaws] factuur op betaald gezet (variant ' + (res.variant || '?') + ')');
                 try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
-                setTimeout(() => this.toast('✓ Factuur ' + (invoiceLogicId || invoiceId) + ' op betaald'), 1200);
+                setTimeout(() => this.toast('Factuur ' + (invoiceLogicId || invoiceId) + ' op betaald'), 1200);
                 return;
             }
             // Niet gelukt → naar retry-queue
@@ -7169,7 +7195,7 @@ const app = {
         }
         try { localStorage.setItem(this._MOLLIE_RETRY_KEY, JSON.stringify(remaining)); } catch(_) {}
         if (remaining.length === 0 && list.length > 0) {
-            this.toast('✓ Alle wachtende Mollie-betalingen op betaald gezet');
+            this.toast('Alle wachtende Mollie-betalingen op betaald gezet');
         }
     },
 
@@ -7258,16 +7284,16 @@ const app = {
             // Geen succesvolle betaling gevonden
             if (btn) {
                 btn.disabled = false;
-                btn.innerHTML = '✅ Ik heb betaald — controleer betaling';
+                btn.innerHTML = 'Ik heb betaald — controleer betaling';
             }
             const reason = data.found
                 ? 'Transactie gevonden maar nog niet voltooid (status: ' + (data.status || '?') + ')'
                 : 'Nog geen betaling gevonden bij Viva voor referentie ' + ref;
-            alert('❌ ' + reason + '\n\nProbeer over een paar seconden opnieuw, of annuleer om later te betalen.');
+            alert('' + reason + '\n\nProbeer over een paar seconden opnieuw, of annuleer om later te betalen.');
         } catch (e) {
             if (btn) {
                 btn.disabled = false;
-                btn.innerHTML = '✅ Ik heb betaald — controleer betaling';
+                btn.innerHTML = 'Ik heb betaald — controleer betaling';
             }
             alert('Fout bij controleren: ' + e.message);
         }
@@ -7360,7 +7386,7 @@ const app = {
                 <div style="display:flex;flex-direction:column;gap:8px;margin-top:18px">
                     <button id="paymentRetryBtn"
                         style="width:100%;padding:13px;background:#c62828;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">
-                        🔄 Opnieuw proberen
+                        ${this.icon('refresh', { size: 18, style: 'vertical-align:-3px' })} Opnieuw proberen
                     </button>
                     <button id="paymentLaterBtn"
                         style="width:100%;padding:13px;background:#fff;color:#c62828;border:2px solid #ffcdd2;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">
@@ -7462,7 +7488,7 @@ const app = {
                         </div>
                         <button onclick="app.retryPendingPayment('${p.invoiceId}')"
                             style="background:var(--qe-orange);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer">
-                            💳 Betalen
+                            ${this.icon('card', { size: 16, style: 'vertical-align:-3px' })} Betalen
                         </button>
                     </div>
                 `).join('')}
@@ -7538,7 +7564,7 @@ const app = {
                     // Betaling gelukt!
                     statusDiv.innerHTML = `
                         <div style="background:#e8f5e9;border-radius:12px;padding:24px;text-align:center">
-                            <div style="font-size:48px;margin-bottom:8px">✅</div>
+                            <div style="margin-bottom:8px;color:var(--qe-green)">${this.icon('check-circle', { size: 44 })}</div>
                             <div style="font-size:20px;font-weight:700;color:#2e7d32">Betaling ontvangen!</div>
                             <div style="font-size:13px;color:#558b2f;margin-top:4px">Factuur wordt als betaald gemarkeerd...</div>
                         </div>
@@ -7605,10 +7631,10 @@ const app = {
             document.getElementById('instHistoryInfo').innerHTML = `
                 <div class="card" style="margin-bottom:8px">
                     <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px;color:var(--qe-grey)">
-                        ${inst.brand ? `<span>🏭 ${this.escapeHtml(inst.brand)}</span>` : ''}
-                        ${inst.model ? `<span>📋 ${this.escapeHtml(inst.model)}</span>` : ''}
-                        ${inst.serialNumber ? `<span>🔢 ${this.escapeHtml(inst.serialNumber)}</span>` : ''}
-                        ${inst.bouwjaar ? `<span>📅 ${this.escapeHtml(String(inst.bouwjaar))}</span>` : ''}
+                        ${inst.brand ? `<span>${this.icon('home', { size: 13, style: 'vertical-align:-2px' })} ${this.escapeHtml(inst.brand)}</span>` : ''}
+                        ${inst.model ? `<span>${this.icon('clipboard', { size: 13, style: 'vertical-align:-2px' })} ${this.escapeHtml(inst.model)}</span>` : ''}
+                        ${inst.serialNumber ? `<span># ${this.escapeHtml(inst.serialNumber)}</span>` : ''}
+                        ${inst.bouwjaar ? `<span>${this.icon('calendar', { size: 13, style: 'vertical-align:-2px' })} ${this.escapeHtml(String(inst.bouwjaar))}</span>` : ''}
                     </div>
                 </div>`;
         }
@@ -7702,14 +7728,14 @@ const app = {
                         <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px">
                             <div>
                                 <div style="font-size:15px;font-weight:500">${this.escapeHtml(wo.logicId || `#${wo.id}`)}</div>
-                                <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">📅 ${dateLabel}</div>
+                                <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">${this.icon('calendar', { size: 13, style: 'vertical-align:-2px' })} ${dateLabel}</div>
                             </div>
                             <span class="wo-type ${statusClass}" style="font-size:11px">${this.escapeHtml(status)}</span>
                         </div>
                         ${summary ? `<div style="font-size:13px;color:var(--qe-grey);margin-top:4px">${this.escapeHtml(summary)}</div>` : ''}
                         ${timeCount > 0 ? `
                         <div style="font-size:12px;color:var(--qe-grey);margin-top:6px">
-                            <span>🕐 ${timeCount} ${timeCount === 1 ? 'tijdsregistratie' : 'tijdsregistraties'}</span>
+                            <span>${this.icon('clock', { size: 13, style: 'vertical-align:-2px' })} ${timeCount} ${timeCount === 1 ? 'tijdsregistratie' : 'tijdsregistraties'}</span>
                         </div>` : ''}
                     </div>`;
             }).join('');
@@ -8186,7 +8212,7 @@ const app = {
                             // wordt de werkuren-styling overruled door de afwezigheids-kleur
                             let icon, bg, fg, label;
                             if (isAbsence) {
-                                icon = tijdStyle.icon || '📅';
+                                icon = tijdStyle.icon || this.icon('calendar', { size: 18 });
                                 bg = tijdStyle.bg;
                                 fg = tijdStyle.color;
                                 label = tijdStyle.label;
@@ -8273,7 +8299,7 @@ const app = {
             // v166: helper gebruikt ipv hardcoded switch — dekt ook Verlof,
             // Betaalde feestdag, Inhaal rustdag, Sociaal verlof.
             const _tijdStyle = this._getTijdStyle(tijd);
-            const typeIcon = _tijdStyle.icon || '✅';
+            const typeIcon = _tijdStyle.icon || this.icon('calendar', { size: 24 });
 
             // Haal time-entries op voor totaal-uren weergave
             let totalHours = 0;
@@ -8364,13 +8390,13 @@ const app = {
                 assignedUserId: '5', // Vince Van de Vliet (kantoor)
             });
 
-            this.toast('Aanpassing ingediend bij Vince ✓');
+            this.toast('Aanpassing ingediend bij Vince ');
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {
             this.toast('Fout bij indienen: ' + e.message, true);
             btn.disabled = false;
-            btn.textContent = '📩 Aanpassing indienen';
+            btn.textContent = 'Aanpassing indienen';
         }
     },
 
@@ -8503,7 +8529,7 @@ const app = {
 
             let html = paymentBtns + `
                 <div class="card" style="margin-bottom:12px;background:rgba(106,44,145,0.06);border-left:3px solid var(--qe-purple)">
-                    <div style="font-size:13px;color:var(--qe-purple);font-weight:600">✏️ Correctie-modus</div>
+                    <div style="font-size:13px;color:var(--qe-purple);font-weight:600">${this.icon('edit', { size: 14, style: 'vertical-align:-2px' })} Correctie-modus</div>
                     <div style="font-size:12px;color:var(--qe-grey);margin-top:4px">Klik op een planning om uren of materialen te corrigeren. De originele werkbon blijft staan; er wordt een correctie-werkbon met het verschil aangemaakt.</div>
                 </div>`;
 
@@ -8534,7 +8560,7 @@ const app = {
                                 <div style="text-align:right">
                                     ${p.origineelLogicId ? `<div style="font-size:13px;font-weight:600;color:var(--qe-purple)">${this.escapeHtml(p.origineelLogicId)}</div>` : ''}
                                     ${p.orderLogicId ? `<div style="font-size:11px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(p.orderLogicId)}</div>` : ''}
-                                    <div style="font-size:18px;color:var(--qe-purple);margin-top:6px">✏️</div>
+                                    <div style="font-size:18px;color:var(--qe-purple);margin-top:6px">${this.icon('edit', { size: 18 })}</div>
                                 </div>
                             </div>
                         </div>`;
@@ -9390,11 +9416,11 @@ const app = {
                     terugEl.value = String(result.terug);
                     console.log('[KM] auto-fill:', result);
                     if (result.error) {
-                        errEl.textContent = '⚠️ ' + result.error + ' — vul handmatig in.';
+                        errEl.textContent = '' + result.error + ' — vul handmatig in.';
                         errEl.style.color = '#e65100';
                         errEl.style.display = 'block';
                     } else if (result.warning) {
-                        errEl.textContent = 'ℹ️ ' + result.warning;
+                        errEl.textContent = '' + result.warning;
                         errEl.style.color = '#0277bd';
                         errEl.style.display = 'block';
                     }
@@ -9402,7 +9428,7 @@ const app = {
                     heenEl.value = '0';
                     terugEl.value = '0';
                     if (thrownMsg) {
-                        errEl.textContent = '⚠️ Auto-km mislukt (' + thrownMsg + ') — vul handmatig in.';
+                        errEl.textContent = 'Auto-km mislukt ('+ thrownMsg + ') — vul handmatig in.';
                         errEl.style.color = '#e65100';
                         errEl.style.display = 'block';
                     }
@@ -9644,7 +9670,7 @@ const app = {
         document.getElementById('newWoNewClientFields').style.display = 'none';
         document.getElementById('newWoSelectedStep').style.display = '';
         const pill = document.getElementById('newWoSelectedClient');
-        pill.innerHTML = '🏢 ' + this._escapeHtml(client.name)
+        pill.innerHTML = this.icon('home', { size: 14, style: 'vertical-align:-2px' }) + ' ' + this._escapeHtml(client.name)
             + (client.address ? ' <span style="opacity:0.65;font-weight:400;font-size:12px">— ' + this._escapeHtml(client.address) + '</span>' : '')
             + ' <span class="x" title="Wissen" onclick="app._newWoClearSelection()">✕</span>';
         this._newWoUpdateSubmitState();
@@ -9760,7 +9786,7 @@ const app = {
             });
 
             statusEl.className = 'qe-newwo-status ok';
-            statusEl.textContent = '✓ Werkbon aangemaakt!';
+            statusEl.textContent = 'Werkbon aangemaakt!';
             setTimeout(() => {
                 this.closeNewWorkOrderModal();
                 this.toast('Werkbon aangemaakt: ' + reason);
@@ -9768,7 +9794,7 @@ const app = {
             }, 600);
         } catch (e) {
             console.warn('[App] nieuwe werkbon maken faalde:', e);
-            statusEl.textContent = '✗ ' + (e && e.message || 'onbekende fout');
+            statusEl.textContent = '' + (e && e.message || 'onbekende fout');
             btn.disabled = false;
         }
     },
@@ -10036,7 +10062,7 @@ const app = {
 
             if (this._lastPlanningCount !== null && count > this._lastPlanningCount) {
                 const diff = count - this._lastPlanningCount;
-                this.toast(`📋 ${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
+                this.toast(` ${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
                 // Badge tonen op planning-scherm
                 const badge = document.getElementById('woCount');
                 if (badge) { badge.textContent = count; badge.style.background = 'var(--qe-orange)'; }
@@ -10140,7 +10166,7 @@ const app = {
         const woId = this.currentWO.id;
         const saved = this.woData[woId]?.checklist || {};
 
-        document.getElementById('checklistTitle').textContent = '\u2705 ' + checklist.label;
+        document.getElementById('checklistTitle').textContent = '' + checklist.label;
         container.innerHTML = checklist.items.map(item => {
             const checked = saved[item.id] ? 'checked' : '';
             return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--qe-grey-light);cursor:pointer">
@@ -10204,10 +10230,10 @@ const app = {
         if (!remark) return '';
         const cleanLine = (line) => {
             let s = String(line || '').replace(/^\s*klok-(in|uit):\s*/i, '');
-            const m = s.match(/^(.*?)\s+[\u2014-]\s+/);
+            const m = s.match(/^(.*?)\s+[—-]\s+/);
             if (m) return m[1].trim();
             const httpIdx = s.indexOf('http');
-            if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-\u2014]+$/, '').trim();
+            if (httpIdx > 0) return s.substring(0, httpIdx).replace(/[\s\-—]+$/, '').trim();
             return s.trim();
         };
         const lines = String(remark).split(/\r?\n/).map(cleanLine).filter(Boolean);
@@ -10225,7 +10251,7 @@ const app = {
     async testCreateTimeRegistration() {
         const resultEl = document.getElementById('testTrResult');
         resultEl.style.color = 'var(--qe-grey)';
-        resultEl.textContent = '⏳ Bezig...';
+        resultEl.textContent = 'Bezig...';
 
         try {
             const user = RobawsAPI.getLoggedInUser();
@@ -10252,7 +10278,7 @@ const app = {
 
             resultEl.style.color = '#2e7d32';
             const woUrl = `https://app.robaws.com/work-orders/${result.workOrderId}`;
-            resultEl.innerHTML = '✅ Werkbon aangemaakt: <a href="' + woUrl +
+            resultEl.innerHTML = 'Werkbon aangemaakt: <a href="' + woUrl +
                 '" target="_blank" style="color:#1565c0">#' + result.workOrderId +
                 '</a>\n\nKlik link, controleer alle velden in Robaws, en stuur screenshot.';
         } catch (e) {
@@ -10267,7 +10293,7 @@ const app = {
                 if (putRes) extra += '\n\nPUT response: ' + putRes.slice(0, 300);
                 if (putReq) extra += '\n\nPUT request body: ' + putReq.slice(0, 400);
             } catch(_) {}
-            resultEl.textContent = '❌ FOUT: ' + e.message + extra;
+            resultEl.textContent = 'FOUT: ' + e.message + extra;
         }
     },
 

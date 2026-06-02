@@ -263,3 +263,17 @@ body.dark-mode .qe-skel { background: linear-gradient(100deg, #222B36 30%, #2A34
 @media (prefers-reduced-motion: reduce) {
     .screen, #workorderList > .card, .tab-btn.active::after { animation: none !important; }
 }
+
+/* =========================================================
+   v189 — rustiger kleurvlakken (werkbon-overzicht + knoppen)
+   ========================================================= */
+#wbOrderBanner { background: var(--qe-darkblue) !important; box-shadow: none; }
+.werkbon-summary { box-shadow: none; border: 1px solid var(--qe-hairline); }
+.werkbon-summary .ws-header {
+    background: var(--qe-light) !important;
+    color: var(--qe-darkblue) !important;
+    border-bottom: 1px solid var(--qe-hairline);
+    font-weight: 700;
+}
+.btn-success { background: #2E9E63 !important; }
+.btn-success:active { filter: brightness(0.95); }

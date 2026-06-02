@@ -1501,6 +1501,26 @@ const RobawsAPI = {
                 if (fullItem.code === 200 && fullItem.data) {
                     if (fullItem.data.description) fullDescription = fullItem.data.description;
                     if (typeof fullItem.data.timeAndMaterial === 'boolean') planRegie = fullItem.data.timeAndMaterial;
+                    // v188: tweede regie-vinkje "Regie monteurs" (custom veld op de
+                    // dagplanning). Voor de werknemer telt regie zodra ÉÉN van beide
+                    // vinkjes aan staat. We scannen de extraFields op een sleutel die
+                    // zowel "regie" als "monteur" bevat en accepteren booleanValue of
+                    // stringValue ("true"/"ja"/"1"/"x") als aangevinkt.
+                    const _ef = fullItem.data.extraFields || item.extraFields || {};
+                    for (const _k of Object.keys(_ef)) {
+                        const _kl = _k.toLowerCase();
+                        if (_kl.includes('regie') && _kl.includes('monteur')) {
+                            const _f = _ef[_k];
+                            let _on = false;
+                            if (_f === true) _on = true;
+                            else if (_f && typeof _f === 'object' && _f.booleanValue === true) _on = true;
+                            else {
+                                const _s = String((_f && (_f.stringValue ?? _f.value)) ?? _f ?? '').trim().toLowerCase();
+                                _on = (_s === 'true' || _s === 'ja' || _s === '1' || _s === 'yes' || _s === 'x');
+                            }
+                            if (_on) planRegie = true;
+                        }
+                    }
                 }
             } catch(e) { /* Fallback naar list-description */ }
 
