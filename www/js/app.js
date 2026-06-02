@@ -2732,35 +2732,58 @@ const app = {
 
     // Notitie-templates — standaardzinnen met één tik invoegen
     NOTE_TEMPLATES: [
-        'Jaarlijks onderhoud uitgevoerd conform voorschriften.',
-        'Installatie werkt naar behoren na interventie.',
-        'Klant is op de hoogte gebracht van de toestand.',
-        'Onderdeel besteld — vervolgafspraak nodig.',
-        'Storing verholpen — testrun OK.',
-        'Ketel gereinigd en bijgevuld.',
-        'Koelmiddel bijgevuld.',
-        'Filters vervangen.',
-        'Klant was niet aanwezig — buur heeft toegang verleend.',
-        'Garantie-interventie — geen kost voor klant.',
+        { cat: 'Onderhoud', items: [
+            { label: 'Onderhoud uitgevoerd', text: 'Jaarlijks onderhoud uitgevoerd volgens de voorschriften.' },
+            { label: 'Ketel gereinigd', text: 'Ketel en brander gereinigd.' },
+            { label: 'Verbrandingsmeting OK', text: 'Verbrandingsmeting uitgevoerd — waarden conform.' },
+            { label: 'Bijgevuld / op druk', text: 'Installatie bijgevuld en op druk gebracht.' },
+            { label: 'Filters vervangen', text: 'Filters gereinigd of vervangen.' },
+        ] },
+        { cat: 'Herstelling', items: [
+            { label: 'Storing verholpen', text: 'Storing verholpen — installatie getest en werkt naar behoren.' },
+            { label: 'Onderdeel vervangen', text: 'Defect onderdeel vervangen.' },
+            { label: 'Onderdeel besteld', text: 'Onderdeel besteld — vervolgafspraak volgt.' },
+            { label: 'Lek gedicht', text: 'Lek opgespoord en gedicht.' },
+            { label: 'Tijdelijke oplossing', text: 'Tijdelijke oplossing toegepast — definitieve herstelling volgt.' },
+        ] },
+        { cat: 'Vaststelling & advies', items: [
+            { label: 'Werkt correct', text: 'Installatie gecontroleerd en werkt correct.' },
+            { label: 'Vervanging aangeraden', text: 'Installatie verouderd — vervanging aangeraden.' },
+            { label: 'Offerte opmaken', text: 'Offerte op te maken voor herstelling of vervanging.' },
+        ] },
+        { cat: 'Klant & administratief', items: [
+            { label: 'Klant ingelicht', text: 'Klant ingelicht over de toestand van de installatie.' },
+            { label: 'Klant akkoord', text: 'Klant akkoord met de uitgevoerde werken.' },
+            { label: 'Klant afwezig', text: 'Klant was niet aanwezig tijdens de interventie.' },
+            { label: 'Onder garantie', text: 'Interventie onder garantie — geen kosten voor de klant.' },
+            { label: 'Vervolgbezoek nodig', text: 'Vervolgbezoek nodig om de werken af te ronden.' },
+        ] },
     ],
 
     renderNoteTemplates() {
         const bar = document.getElementById('noteTemplatesBar');
         if (!bar) return;
-        bar.innerHTML = this.NOTE_TEMPLATES.map((t, i) => {
-            // Toon alleen de eerste paar woorden als label
-            const label = t.length > 35 ? t.substring(0, 32) + '...' : t;
-            return `<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 8px;white-space:nowrap" onclick="app.insertNoteTemplate(${i})">${this.escapeHtml(label)}</button>`;
+        bar.style.display = 'block';
+        bar.innerHTML = this.NOTE_TEMPLATES.map((grp, g) => {
+            const rows = grp.items.map((t, i) =>
+                `<div onclick="app.insertNoteTemplate(${g}, ${i})" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 2px;border-bottom:1px solid var(--qe-hairline);cursor:pointer">
+                    <span style="font-size:13px;color:var(--qe-darkblue)">${this.escapeHtml(t.label)}</span>
+                    <span style="color:var(--qe-orange);font-size:18px;line-height:1;flex-shrink:0">+</span>
+                </div>`
+            ).join('');
+            return `<div style="font-size:12px;font-weight:600;color:var(--qe-grey);margin:${g === 0 ? '0' : '14px'} 0 2px">${this.escapeHtml(grp.cat)}</div>${rows}`;
         }).join('');
     },
 
-    insertNoteTemplate(index) {
-        const template = this.NOTE_TEMPLATES[index];
-        if (!template || !this.currentWO) return;
+    insertNoteTemplate(groupIdx, itemIdx) {
+        const grp = this.NOTE_TEMPLATES[groupIdx];
+        const tpl = grp && grp.items ? grp.items[itemIdx] : null;
+        if (!tpl || !this.currentWO) return;
+        const text = (typeof tpl === 'string') ? tpl : tpl.text;
         const ta = document.getElementById('workNotes');
         const current = ta.value;
         // Voeg toe met een nieuwe regel als er al tekst staat
-        const newVal = current ? current.trimEnd() + '\n' + template : template;
+        const newVal = current ? current.trimEnd() + '\n' + text : text;
         ta.value = newVal;
         this.syncWorkNotes(newVal);
         this.toast('Tekst toegevoegd');
@@ -5534,8 +5557,11 @@ const app = {
                 // Overschrijving ter plaatse → toon betaalscherm met QR code
                 // (legacy "Overschrijving ter plaatse" string ook ondersteund voor backward compat)
                 this.showOverschrijvingScreen(invoiceResult);
+            } else if (paymentMethod === 'Cash') {
+                // Contant → afrekenscherm met totaal, ontvangen bedrag en wisselgeld
+                this.showCashScreen(invoiceResult);
             } else {
-                // v85: Cash of Via factuur → factuur is aangemaakt, werkbon + order
+                // v85: Via factuur → factuur is aangemaakt, werkbon + order
                 // staan nu op 'gefactureerd' (zie robaws-api stap 6). Geen extra UI.
                 this.toast(`Werkbon verstuurd — betaling: ${paymentMethod} `);
                 this.navigate('screenPlanning', false);
@@ -6491,6 +6517,120 @@ const app = {
 
             <div id="paymentStatus" style="margin-top:16px"></div>
         `;
+    },
+
+    // ========================================
+    // CONTANT (CASH) — afrekenscherm met wisselgeld
+    // ========================================
+    showCashScreen(invoiceData) {
+        const inv = (invoiceData && invoiceData.invoice) ? invoiceData.invoice : null;
+        const amount = (inv && inv.totalInclVat != null) ? inv.totalInclVat : null;
+        if (amount == null) {
+            // Geen factuurtotaal beschikbaar -> oude afhandeling
+            this.toast('Werkbon verstuurd — contant');
+            this.navigate('screenPlanning', false);
+            this.screenHistory = [];
+            this.loadPlanning();
+            return;
+        }
+
+        this._cashTotal = amount;
+        this.navigate('screenPayment', true);
+
+        const quick = this._cashQuickAmounts(amount);
+        const quickBtns = [{ v: amount, label: 'Gepast' }]
+            .concat(quick.map(v => ({ v: v, label: this.formatPrice(v) })))
+            .map(q => `<button onclick="app._cashSetReceived(${q.v})" style="flex:1;min-width:90px;padding:10px;border:1px solid var(--qe-hairline);border-radius:10px;background:#fff;color:var(--qe-darkblue);font-size:14px;font-weight:500;cursor:pointer">${this.escapeHtml(q.label)}</button>`)
+            .join('');
+
+        const content = document.getElementById('paymentContent');
+        content.innerHTML = `
+            <div style="margin-bottom:20px">
+                <div style="width:80px;height:80px;border-radius:50%;background:var(--qe-orange);
+                    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;color:#fff">
+                    ${this.icon('cash', { size: 40 })}
+                </div>
+                <h2 style="color:var(--qe-darkblue);margin:0 0 4px;font-size:22px">Contant betalen</h2>
+                ${inv.logicId ? `<div style="font-size:14px;color:var(--qe-grey)">Factuur ${this.escapeHtml(inv.logicId)}</div>` : ''}
+            </div>
+
+            <div style="background:var(--qe-darkblue);color:#fff;border-radius:16px;padding:24px;margin-bottom:20px">
+                <div style="font-size:14px;opacity:0.7;margin-bottom:4px">Totaal te ontvangen</div>
+                <div style="font-size:36px;font-weight:700">${this.formatPrice(amount)}</div>
+            </div>
+
+            <div style="text-align:left;margin-bottom:12px">
+                <label style="font-size:14px;color:var(--qe-darkblue);font-weight:500;display:block;margin-bottom:8px">Ontvangen bedrag</label>
+                <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--qe-hairline);border-radius:12px;padding:2px 14px">
+                    <span style="font-size:26px;color:var(--qe-grey)">€</span>
+                    <input id="cashReceived" type="text" inputmode="decimal" placeholder="0,00"
+                        oninput="app._cashUpdateChange()"
+                        style="border:none;outline:none;font-size:30px;font-weight:700;color:var(--qe-darkblue);width:100%;padding:10px 0;background:transparent;text-align:right">
+                </div>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px">${quickBtns}</div>
+
+            <div id="cashChangeBox" style="border-radius:16px;padding:20px;margin-bottom:24px;text-align:center;display:none">
+                <div style="font-size:14px;color:var(--qe-grey);margin-bottom:4px" id="cashChangeLabel">Wisselgeld</div>
+                <div style="font-size:34px;font-weight:700" id="cashChangeValue">€0,00</div>
+            </div>
+
+            <button onclick="app.finishCashPayment()" style="padding:16px;border:none;border-radius:12px;background:var(--qe-orange);
+                color:#fff;font-size:16px;font-weight:600;cursor:pointer;width:100%">
+                Afronden
+            </button>
+        `;
+
+        setTimeout(() => { const el = document.getElementById('cashReceived'); if (el) el.focus(); }, 150);
+    },
+
+    _cashQuickAmounts(total) {
+        const opts = [10, 50, 100].map(n => Math.ceil(total / n) * n).filter(v => v > total);
+        return Array.from(new Set(opts)).sort((a, b) => a - b);
+    },
+
+    _cashParse(str) {
+        if (str == null) return NaN;
+        return parseFloat(String(str).replace(/\s/g, '').replace(',', '.'));
+    },
+
+    _cashSetReceived(val) {
+        const el = document.getElementById('cashReceived');
+        if (!el) return;
+        el.value = String(Math.round(val * 100) / 100).replace('.', ',');
+        this._cashUpdateChange();
+    },
+
+    _cashUpdateChange() {
+        const el = document.getElementById('cashReceived');
+        const box = document.getElementById('cashChangeBox');
+        const lbl = document.getElementById('cashChangeLabel');
+        const val = document.getElementById('cashChangeValue');
+        if (!el || !box) return;
+        const received = this._cashParse(el.value);
+        const total = this._cashTotal || 0;
+        if (isNaN(received) || String(el.value).trim() === '') { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        const diff = Math.round((received - total) * 100) / 100;
+        if (diff >= 0) {
+            lbl.textContent = 'Wisselgeld';
+            val.textContent = this.formatPrice(diff);
+            box.style.background = '#EAF3EA';
+            val.style.color = '#2E7D4F';
+        } else {
+            lbl.textContent = 'Te weinig ontvangen';
+            val.textContent = this.formatPrice(Math.abs(diff));
+            box.style.background = '#FDECEA';
+            val.style.color = '#C0392B';
+        }
+    },
+
+    finishCashPayment() {
+        this.toast('Werkbon verstuurd — contant betaald');
+        this.navigate('screenPlanning', false);
+        this.screenHistory = [];
+        this.loadPlanning();
     },
 
     async startTerminalPayment(invoiceId, amount, ogm, invoiceLogicId) {

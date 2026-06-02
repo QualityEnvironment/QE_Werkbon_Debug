@@ -2348,6 +2348,23 @@ const RobawsAPI = {
         }
 
         this._articleCacheLoading = true;
+
+        // 0) Meegeleverde snapshot proberen (data/articles.json in de www-update) -> 0 API-calls.
+        //    Valt automatisch terug op live ophalen als het bestand er (nog) niet is of leeg is.
+        try {
+            const snapRes = await fetch('data/articles.json', { cache: 'no-store' });
+            if (snapRes.ok) {
+                const snap = await snapRes.json();
+                const snapItems = Array.isArray(snap) ? snap : (snap.items || snap.articles || []);
+                if (Array.isArray(snapItems) && snapItems.length > 0) {
+                    this._articleCache = snapItems;
+                    this._articleCacheLoading = false;
+                    if (onProgress) onProgress(snapItems.length, snapItems.length);
+                    return this._articleCache;
+                }
+            }
+        } catch (e) { /* geen snapshot -> live ophalen */ }
+
         const allArticles = [];
         let page = 0;
 
