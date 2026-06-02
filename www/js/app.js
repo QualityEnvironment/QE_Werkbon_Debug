@@ -1254,7 +1254,7 @@ const app = {
         return new Promise(resolve => {
             const clientName = (wo.client && wo.client.name) || wo.summary || 'Werkbon';
             document.getElementById('modalContent').innerHTML = `
-                <h3>⏰ Geklokte uren overnemen?</h3>
+                <h3>${this.icon('clock', { size: 18, style: 'vertical-align:-3px' })} Geklokte uren overnemen?</h3>
                 <p style="font-size:14px;color:var(--qe-grey);margin:8px 0 14px">
                     Je hebt nog een openstaande werkbon:
                 </p>
@@ -1301,7 +1301,7 @@ const app = {
             const meer = count > 5 ? `<div style="font-size:12px;color:var(--qe-grey);padding-top:4px">… en ${count - 5} meer</div>` : '';
 
             document.getElementById('modalContent').innerHTML = `
-                <h3>🚪 Dag beëindigen?</h3>
+                <h3>${this.icon('flag', { size: 18, style: 'vertical-align:-3px' })} Dag beëindigen?</h3>
                 <p style="font-size:14px;color:var(--qe-grey);margin:8px 0 14px">
                     Je hebt nog ${count} openstaande ${woordvorm}:
                 </p>
@@ -1363,7 +1363,7 @@ const app = {
             `).join('');
 
             document.getElementById('modalContent').innerHTML = `
-                <h3>👷 Voor wie zijn de uren?</h3>
+                <h3>${this.icon('user', { size: 18, style: 'vertical-align:-3px' })} Voor wie zijn de uren?</h3>
                 <p style="font-size:13px;color:var(--qe-grey);margin:8px 0 14px;line-height:1.4">
                     Vink aan wie er vandaag op deze werkbon werkte.
                     Iedereen krijgt dezelfde uren.
@@ -1820,7 +1820,11 @@ const app = {
             'camera': '<path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/>',
             'mail-send': '<path d="M3 6h18v12H3z"/><path d="m3 7 9 6 9-6"/>',
             'x': '<path d="M6 6l12 12M18 6 6 18"/>',
-            'home': '<path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/>'
+            'home': '<path d="M4 11 12 4l8 7"/><path d="M6 10v9h12v-9"/>',
+            'flame': '<path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 .5-3-1-5 1-7.5z"/>',
+            'droplet': '<path d="M12 4c3 4 5 6.5 5 9a5 5 0 0 1-10 0c0-2.5 2-5 5-9z"/>',
+            'bolt': '<path d="M13 3 5 13h6l-1 8 8-10h-6z"/>',
+            'wind': '<path d="M3 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 14h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 11.5h7"/>'
         };
         return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
     },
@@ -2517,7 +2521,7 @@ const app = {
         const currentEmpId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : '';
         const employeeSelect = employees.length > 0 ? `
             <div class="form-group" style="margin-bottom:12px">
-                <label>👷 Werknemer</label>
+                <label>${this.icon('user', { size: 14, style: 'vertical-align:-2px' })} Werknemer</label>
                 <select class="form-input" id="tcEmployee">
                     ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${this.escapeHtml(e.name)}</option>`).join('')}
                 </select>
@@ -2544,7 +2548,7 @@ const app = {
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
-                <label>☕ Pauze</label>
+                <label>${this.icon('coffee', { size: 14, style: 'vertical-align:-2px' })} Pauze</label>
                 <select class="form-input" id="tcPauze">${pauzeOpts}</select>
             </div>
             <button class="btn btn-primary btn-full" onclick="app._saveTimerCorrection('${type}')">✓ Opslaan</button>
@@ -2829,7 +2833,7 @@ const app = {
         const currentEmpId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : '';
         const employeeSelect = employees.length > 0 ? `
             <div class="form-group" style="margin-bottom:12px">
-                <label>👷 Werknemer</label>
+                <label>${this.icon('user', { size: 14, style: 'vertical-align:-2px' })} Werknemer</label>
                 <select class="form-input" id="hourEmployee">
                     ${employees.map(e => `<option value="${e.id}" ${String(e.id) === currentEmpId ? 'selected' : ''}>${e.name}</option>`).join('')}
                 </select>
@@ -2876,7 +2880,7 @@ const app = {
                 </div>
             </div>
             <div class="form-group" style="margin-bottom:12px">
-                <label>☕ Pauze</label>
+                <label>${this.icon('coffee', { size: 14, style: 'vertical-align:-2px' })} Pauze</label>
                 <select class="form-input" id="hourPauze">${pauzeOpts}</select>
             </div>
             <button class="btn btn-primary btn-full mt-16" onclick="app.saveManualHours('${type}')">Opslaan</button>
@@ -3862,24 +3866,24 @@ const app = {
     // Slimme iconen per groepsnaam (Robaws API geeft geen afbeeldingen)
     getGroupIcon(name) {
         const n = (name || '').toLowerCase();
-        if (n.includes('verplaatsing') || n.includes('transport')) return { icon: '🚗', bg: 'linear-gradient(135deg,#e3f2fd,#bbdefb)' };
-        if (n.includes('koper') || n.includes('koperen') || n.includes('leiding')) return { icon: '🔧', bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
-        if (n.includes('mannesmann') || n.includes('buis') || n.includes('pijp')) return { icon: '🏗️', bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
-        if (n.includes('onderhoud') || n.includes('service')) return { icon: '🛠️', bg: 'linear-gradient(135deg,#e8f5e9,#c8e6c9)' };
-        if (n.includes('expansie') || n.includes('vat')) return { icon: '🫙', bg: 'linear-gradient(135deg,#fce4ec,#f8bbd0)' };
-        if (n.includes('thermostaat') || n.includes('regeling') || n.includes('temp')) return { icon: '🌡️', bg: 'linear-gradient(135deg,#e8eaf6,#c5cae9)' };
-        if (n.includes('bosch') || n.includes('junker')) return { icon: '🔥', bg: 'linear-gradient(135deg,#fff8e1,#ffecb3)' };
-        if (n.includes('ketel') || n.includes('cv')) return { icon: '♨️', bg: 'linear-gradient(135deg,#fbe9e7,#ffccbc)' };
-        if (n.includes('atag') || n.includes('remeha') || n.includes('vaillant')) return { icon: '🏭', bg: 'linear-gradient(135deg,#f3e5f5,#e1bee7)' };
-        if (n.includes('radiat') || n.includes('convect')) return { icon: '🔲', bg: 'linear-gradient(135deg,#e0f7fa,#b2ebf2)' };
-        if (n.includes('pomp') || n.includes('circul')) return { icon: '💧', bg: 'linear-gradient(135deg,#e1f5fe,#b3e5fc)' };
-        if (n.includes('ventiel') || n.includes('kraan') || n.includes('afsluit')) return { icon: '🔩', bg: 'linear-gradient(135deg,#eceff1,#cfd8dc)' };
-        if (n.includes('elektr') || n.includes('kabel') || n.includes('draad')) return { icon: '⚡', bg: 'linear-gradient(135deg,#fffde7,#fff9c4)' };
-        if (n.includes('sanitair') || n.includes('douche') || n.includes('bad')) return { icon: '🚿', bg: 'linear-gradient(135deg,#e0f2f1,#b2dfdb)' };
-        if (n.includes('gas') || n.includes('brandstof')) return { icon: '🔥', bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
-        if (n.includes('filter') || n.includes('zuiver')) return { icon: '🧹', bg: 'linear-gradient(135deg,#f1f8e9,#dcedc8)' };
-        if (n.includes('isolatie') || n.includes('isoleer')) return { icon: '🧱', bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
-        return { icon: '📦', bg: 'linear-gradient(135deg,rgba(249,157,62,0.12),rgba(106,44,145,0.1))' };
+        if (n.includes('verplaatsing') || n.includes('transport')) return { icon: this.icon('car', { size: 28 }), bg: 'linear-gradient(135deg,#e3f2fd,#bbdefb)' };
+        if (n.includes('koper') || n.includes('koperen') || n.includes('leiding')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
+        if (n.includes('mannesmann') || n.includes('buis') || n.includes('pijp')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
+        if (n.includes('onderhoud') || n.includes('service')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#e8f5e9,#c8e6c9)' };
+        if (n.includes('expansie') || n.includes('vat')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#fce4ec,#f8bbd0)' };
+        if (n.includes('thermostaat') || n.includes('regeling') || n.includes('temp')) return { icon: this.icon('thermometer', { size: 28 }), bg: 'linear-gradient(135deg,#e8eaf6,#c5cae9)' };
+        if (n.includes('bosch') || n.includes('junker')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fff8e1,#ffecb3)' };
+        if (n.includes('ketel') || n.includes('cv')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fbe9e7,#ffccbc)' };
+        if (n.includes('atag') || n.includes('remeha') || n.includes('vaillant')) return { icon: this.icon('home', { size: 28 }), bg: 'linear-gradient(135deg,#f3e5f5,#e1bee7)' };
+        if (n.includes('radiat') || n.includes('convect')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#e0f7fa,#b2ebf2)' };
+        if (n.includes('pomp') || n.includes('circul')) return { icon: this.icon('droplet', { size: 28 }), bg: 'linear-gradient(135deg,#e1f5fe,#b3e5fc)' };
+        if (n.includes('ventiel') || n.includes('kraan') || n.includes('afsluit')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#eceff1,#cfd8dc)' };
+        if (n.includes('elektr') || n.includes('kabel') || n.includes('draad')) return { icon: this.icon('bolt', { size: 28 }), bg: 'linear-gradient(135deg,#fffde7,#fff9c4)' };
+        if (n.includes('sanitair') || n.includes('douche') || n.includes('bad')) return { icon: this.icon('droplet', { size: 28 }), bg: 'linear-gradient(135deg,#e0f2f1,#b2dfdb)' };
+        if (n.includes('gas') || n.includes('brandstof')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
+        if (n.includes('filter') || n.includes('zuiver')) return { icon: this.icon('wind', { size: 28 }), bg: 'linear-gradient(135deg,#f1f8e9,#dcedc8)' };
+        if (n.includes('isolatie') || n.includes('isoleer')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
+        return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,rgba(249,157,62,0.12),rgba(106,44,145,0.1))' };
     },
 
     renderGroupBrowser() {
@@ -3945,7 +3949,7 @@ const app = {
             </div>`;
         } else if (groups.length === 0) {
             html += `<div style="text-align:center;padding:20px;color:var(--qe-grey)">
-                <div style="font-size:28px;margin-bottom:8px">📭</div>
+                <div style="margin-bottom:8px;color:var(--qe-hint)">${this.icon('folder', { size: 28 })}</div>
                 <div style="font-size:14px">Geen groepen gevonden</div>
             </div>`;
         }
@@ -4283,12 +4287,12 @@ const app = {
     },
 
     _getFileIcon(contentType) {
-        if (!contentType) return '📄';
-        if (contentType.includes('image')) return '🖼️';
-        if (contentType.includes('pdf')) return '📕';
-        if (contentType.includes('word') || contentType.includes('document')) return '📘';
-        if (contentType.includes('sheet') || contentType.includes('excel')) return '📊';
-        return '📄';
+        if (!contentType) return this.icon('file', { size: 18 });
+        if (contentType.includes('image')) return this.icon('image', { size: 18 });
+        if (contentType.includes('pdf')) return this.icon('file', { size: 18 });
+        if (contentType.includes('word') || contentType.includes('document')) return this.icon('file', { size: 18 });
+        if (contentType.includes('sheet') || contentType.includes('excel')) return this.icon('file', { size: 18 });
+        return this.icon('file', { size: 18 });
     },
 
     _formatFileSize(bytes) {
@@ -4310,7 +4314,7 @@ const app = {
                         <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
                         <img src="${blobUrl}" style="max-width:100%;max-height:70vh;border-radius:8px" />
                         <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">💾 Opslaan</button>
+                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
                     </div>
                 `);
             } else if (contentType.includes('pdf')) {
@@ -4319,7 +4323,7 @@ const app = {
                         <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
                         <iframe src="${blobUrl}" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>
                         <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">💾 Opslaan</button>
+                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
                     </div>
                 `);
             } else {
@@ -5713,7 +5717,7 @@ const app = {
 
         let listHtml = '';
         for (const [type, terminals] of Object.entries(grouped)) {
-            const icon = type === 'ApplePos' ? '📱' : type === 'Datecs BlueLite' ? '🖨️' : '📲';
+            const icon = this.icon('phone', { size: 18 });
             listHtml += `<div style="font-size:12px;font-weight:600;color:var(--qe-grey);padding:8px 0 4px;text-transform:uppercase;letter-spacing:0.5px">${icon} ${type}</div>`;
             terminals.forEach(t => {
                 const isSelected = selected && selected.id === t.id;
@@ -6260,7 +6264,7 @@ const app = {
         if (completed.length > 0) {
             completedSection.style.display = 'block';
             completedList.innerHTML = completed.map(s => {
-                const typeIcon = s.type === 'Te laat' ? '⚠️' : (s.type === 'Laden & Lossen' ? '📦' : (s.type === 'Extra uren' ? '🔄' : '✅'));
+                const typeIcon = s.type === 'Te laat' ? this.icon('alert', { size: 16 }) : (s.type === 'Laden & Lossen' ? this.icon('package', { size: 16 }) : (s.type === 'Extra uren' ? this.icon('refresh', { size: 16 }) : this.icon('check-circle', { size: 16 })));
                 const bg = s.type === 'Te laat' ? '#fff8e1' : '#f1f8e9';
                 return `<div class="card" style="padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;background:${bg}">
                     <div style="display:flex;align-items:center;gap:10px">
@@ -6330,7 +6334,7 @@ const app = {
                 const dateShort = h.startDate.substring(5, 10);
                 const startTime = startDt.toTimeString().slice(0, 5);
                 const endTime = h.endDate ? new Date(h.endDate).toTimeString().slice(0, 5) : '...';
-                const typeIcon = h.type === 'Te laat' ? '⚠️' : (h.type === 'Laden & Lossen' ? '📦' : (h.type === 'Extra uren' ? '🔄' : '✅'));
+                const typeIcon = h.type === 'Te laat' ? this.icon('alert', { size: 16 }) : (h.type === 'Laden & Lossen' ? this.icon('package', { size: 16 }) : (h.type === 'Extra uren' ? this.icon('refresh', { size: 16 }) : this.icon('check-circle', { size: 16 })));
                 const bg = h.type === 'Te laat' ? '#fff8e1' : (h.type === 'Laden & Lossen' ? '#e3f2fd' : '#f1f8e9');
                 const hours = h.hours ? `${h.hours}u` : '';
 
@@ -6429,9 +6433,9 @@ const app = {
         const content = document.getElementById('paymentContent');
         content.innerHTML = `
             <div style="margin-bottom:24px">
-                <div style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,var(--qe-orange),#F97316);
-                    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:36px;color:#fff">
-                    💳
+                <div style="width:80px;height:80px;border-radius:50%;background:var(--qe-orange);
+                    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;color:#fff">
+                    ${this.icon('card', { size: 40 })}
                 </div>
                 <h2 style="color:var(--qe-darkblue);margin:0 0 4px;font-size:22px">Betaling</h2>
                 <div style="font-size:14px;color:var(--qe-grey)">Factuur ${this.escapeHtml(inv.logicId)}</div>
@@ -6455,7 +6459,7 @@ const app = {
             <!-- Betaalknop: alleen terminal (QR-code is voor overschrijving) -->
             <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
                 <button onclick="app.startTerminalPayment('${inv.id}', ${amount}, '${inv.paymentInstruction}', '${this.escapeHtml(inv.logicId)}')"
-                    style="padding:16px;border:none;border-radius:12px;background:linear-gradient(135deg,var(--qe-orange),#F97316);
+                    style="padding:16px;border:none;border-radius:12px;background:var(--qe-orange);
                     color:#fff;font-size:16px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px">
                     ${this.icon('card', { size: 18, style: 'vertical-align:-3px' })} Betalen via terminal
                 </button>
@@ -6555,11 +6559,11 @@ const app = {
                     <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
                         <button onclick="app.markPaymentSuccess('${invoiceId}', ${amount}, '${this.escapeHtml(invoiceLogicId || '')}')"
                             style="background:#2e7d32;color:#fff;border:none;border-radius:10px;padding:16px;font-size:16px;font-weight:600;cursor:pointer">
-                            ✅ Betaling gelukt
+                            ${this.icon('check-circle', { size: 18, style: 'vertical-align:-3px' })} Betaling gelukt
                         </button>
                         <button onclick="app.markPaymentFailed('${invoiceId}')"
                             style="background:#fff;color:#c62828;border:2px solid #c62828;border-radius:10px;padding:14px;font-size:15px;font-weight:600;cursor:pointer">
-                            ❌ Betaling niet gelukt
+                            ${this.icon('x', { size: 18, style: 'vertical-align:-3px' })} Betaling niet gelukt
                         </button>
                     </div>`;
             } else {
@@ -8352,7 +8356,7 @@ const app = {
 
                     <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${wo.id}')"
                         style="padding:14px;font-size:15px;font-weight:600" id="btnSubmitAanpassing">
-                        📩 Aanpassing indienen
+                        ${this.icon('mail-send', { size: 18, style: 'vertical-align:-3px' })} Aanpassing indienen
                     </button>
                 </div>
             `;
@@ -8484,12 +8488,12 @@ const app = {
                         localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
                     } catch(_) {}
 
-                    const methodIcon = method === 'Mollie Tap' ? '💳'
-                        : method === 'Viva wallet' ? '💳'
-                        : method === 'Cash' ? '💵'
-                        : method.startsWith('Overschrijving') ? '🏦'
-                        : method === 'Via factuur' ? '📋'
-                        : '💼';
+                    const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
+                        : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
+                        : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
+                        : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
+                        : method === 'Via factuur' ? this.icon('file', { size: 14, style: 'vertical-align:-2px' })
+                        : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
                     paymentBtns = `
                         <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
                             <div style="display:flex;align-items:center;justify-content:space-between">
@@ -8508,11 +8512,11 @@ const app = {
                         const cInv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
                         const amount = parseFloat(cInv.totalInclVat || 0).toFixed(2);
                         const method = ctx.paymentMethod || '?';
-                        const methodIcon = method === 'Mollie Tap' ? '💳'
-                            : method === 'Viva wallet' ? '💳'
-                            : method === 'Cash' ? '💵'
-                            : method.startsWith('Overschrijving') ? '🏦'
-                            : '📋';
+                        const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
+                            : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
+                            : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
+                            : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
+                            : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
                         paymentBtns = `
                             <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
                                 <div style="display:flex;align-items:center;justify-content:space-between">
@@ -8664,7 +8668,7 @@ const app = {
                             <button class="btn btn-outline btn-sm" style="width:28px;padding:4px" onclick="app.adjustCorrectieMaterial(${idx}, -1)">−</button>
                             <input type="number" step="0.01" value="${m.quantity}" style="width:60px;text-align:center;font-size:13px;padding:4px;border:1px solid #ddd;border-radius:6px" onchange="app.setCorrectieMaterialQty(${idx}, this.value)">
                             <button class="btn btn-outline btn-sm" style="width:28px;padding:4px" onclick="app.adjustCorrectieMaterial(${idx}, 1)">+</button>
-                            <button class="btn btn-outline btn-sm" style="width:28px;padding:4px;color:#c00" onclick="app.removeCorrectieMaterial(${idx})">🗑</button>
+                            <button class="btn btn-outline btn-sm" style="width:28px;padding:4px;color:#c00" onclick="app.removeCorrectieMaterial(${idx})">${this.icon('x', { size: 16 })}</button>
                         </div>
                     </div>
                 </div>`).join('');
@@ -9241,7 +9245,7 @@ const app = {
             m.innerHTML = `
                 <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box">
                     <div style="font-size:20px;font-weight:700;color:#1A237E;margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                        🚐 Kilometers vandaag
+ Kilometers vandaag
                     </div>
                     <div style="font-size:13px;color:#666;margin-bottom:14px">
                         Hoeveel kilometers heb je heen en terug afgelegd?
@@ -9263,42 +9267,42 @@ const app = {
                     <div id="kmMobilityRadio" style="display:grid;gap:6px;margin-bottom:14px">
                         <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-3" checked style="margin:0">
-                            <span>🚐 Chauffeur zonder passagiers</span>
+ <span> Chauffeur zonder passagiers</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-1" style="margin:0">
-                            <span>🚐👥 Chauffeur (met passagiers)</span>
+ <span> Chauffeur (met passagiers)</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-2" style="margin:0">
-                            <span>🧍 Passagier</span>
+ <span> Passagier</span>
                         </label>
                     </div>
 
                     <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#fff8e1">
                         <input id="kmFietsInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
-                        <span>🚲 Woonwerk-verkeer met de <strong>fiets</strong></span>
+ <span> Woonwerk-verkeer met de <strong>fiets</strong></span>
                     </label>
 
                     <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#e8f5e9">
                         <input id="kmDirectThuisWerfInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
-                        <span>🏠➡️🏗️ Rechtstreeks van <strong>thuis naar werf</strong> gereden</span>
+ <span> Rechtstreeks van <strong>thuis naar werf</strong> gereden</span>
                     </label>
 
                     <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:#e8f5e9">
                         <input id="kmDirectWerfThuisInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
-                        <span>🏗️➡️🏠 Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
+ <span> Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
                     </label>
 
                     <!-- v131: knop om rit te splitsen in 2 mobiliteits-segmenten -->
                     <button id="kmSplitToggle" type="button"
                             style="width:100%;padding:11px;background:#fff;color:#1A237E;border:2px dashed #1A237E;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:14px">
-                        ➕ Rit splitsen (deel met andere mobiliteit)
+ Rit splitsen (deel met andere mobiliteit)
                     </button>
 
                     <div id="kmSplitSection" style="display:none;border:2px solid #cfd8dc;border-radius:12px;padding:14px;margin-bottom:14px;background:#fafafa">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                            <div style="font-size:13px;font-weight:700;color:#1A237E">🚐➕ Tweede rit-segment</div>
+ <div style="font-size:13px;font-weight:700;color:#1A237E"> Tweede rit-segment</div>
                             <button id="kmSplitRemove" type="button" style="background:none;border:none;color:#c62828;cursor:pointer;font-size:13px;font-weight:600;padding:0">✕ verwijder</button>
                         </div>
                         <div style="font-size:11px;color:#888;margin-bottom:10px;line-height:1.4">
@@ -9320,15 +9324,15 @@ const app = {
                         <div id="kmMobility2Radio" style="display:grid;gap:5px">
                             <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
                                 <input type="radio" name="kmMobility2" value="-3" checked style="margin:0">
-                                <span>🚐 Chauffeur zonder passagiers</span>
+ <span> Chauffeur zonder passagiers</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
                                 <input type="radio" name="kmMobility2" value="-1" style="margin:0">
-                                <span>🚐👥 Chauffeur (met passagiers)</span>
+ <span> Chauffeur (met passagiers)</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
                                 <input type="radio" name="kmMobility2" value="-2" style="margin:0">
-                                <span>🧍 Passagier</span>
+ <span> Passagier</span>
                             </label>
                         </div>
                     </div>
@@ -9531,10 +9535,10 @@ const app = {
                     // Succes → modal weg
                     m.remove();
                     const tags = [];
-                    if (fiets) tags.push('🚲');
-                    if (directThuisWerf) tags.push('🏠→🏗️');
-                    if (directWerfThuis) tags.push('🏗️→🏠');
-                    if (hasSplit) tags.push('🔀');
+ if (fiets) tags.push('');
+ if (directThuisWerf) tags.push('→');
+ if (directWerfThuis) tags.push('→');
+ if (hasSplit) tags.push('');
                     const tagTxt = tags.length ? ' · ' + tags.join(' ') : '';
                     const totaalKm = (heen + terug) + (hasSplit ? (heen2 + terug2) : 0);
                     this.toast('Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);

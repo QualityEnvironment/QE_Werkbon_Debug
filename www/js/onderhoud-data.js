@@ -41,7 +41,7 @@ window.ONDERHOUD_DATA = {
         {
             key: 'gasketel',
             label: 'Gasketel',
-            icon: '🔥',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 .5-3-1-5 1-7.5z"/></svg>',
             sizes: [
                 {
                     label: '-70 KW',
@@ -68,7 +68,7 @@ window.ONDERHOUD_DATA = {
         {
             key: 'ag',
             label: 'Aangeblazen gas (AG)',
-            icon: '💨',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M3 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 14h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 11.5h7"/></svg>',
             sizes: [
                 {
                     label: '-70 KW',
@@ -91,7 +91,7 @@ window.ONDERHOUD_DATA = {
         {
             key: 'stookolie',
             label: 'Stookolieketel',
-            icon: '🛢️',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6" y="3.5" width="12" height="17" rx="2"/><path d="M6 9h12M6 15h12"/></svg>',
             sizes: [
                 {
                     label: '-70 KW',
@@ -119,7 +119,7 @@ window.ONDERHOUD_DATA = {
         {
             key: 'gaskachel',
             label: 'Gaskachel',
-            icon: '🔥',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 .5-3-1-5 1-7.5z"/></svg>',
             sizes: [
                 {
                     label: 'Gaskachel',
@@ -130,7 +130,7 @@ window.ONDERHOUD_DATA = {
         {
             key: 'overig',
             label: 'Overig',
-            icon: '🔧',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M15.5 5.5a3.5 3.5 0 0 0-4.4 4.4l-5.3 5.3a1.5 1.5 0 1 0 2.1 2.1l5.3-5.3a3.5 3.5 0 0 0 4.4-4.4L15.2 9 13 8.8 12.8 6.6z"/></svg>',
             sizes: [
                 { label: 'Doorstromer', single: true, articleId: 18456, price: 102 },
                 { label: 'Schouw', single: true, articleId: 439, price: 130 }
