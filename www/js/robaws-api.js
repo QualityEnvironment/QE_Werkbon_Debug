@@ -2365,26 +2365,32 @@ const RobawsAPI = {
             }
         } catch (e) { /* geen snapshot -> live ophalen */ }
 
+        // Live ophalen — Robaws negeert ?page= op /articles (zelfde quirk als
+        // /work-orders, v83b), dus ?offset= gebruiken + dedup op id + stoppen
+        // zodra een pagina niets nieuws meer oplevert.
+        const LIMIT = 100;
         const allArticles = [];
-        let page = 0;
+        const seen = new Set();
 
         try {
-            // Eerst totaal opvragen
-            const first = await this.get('articles?limit=100&page=0');
-            const totalPages = first.data.totalPages || 1;
-            const totalItems = first.data.totalItems || 0;
-            const firstItems = first.data.items || [];
-            allArticles.push(...firstItems);
-
-            if (onProgress) onProgress(firstItems.length, totalItems);
-
-            // Rest ophalen
-            for (page = 1; page < totalPages; page++) {
-                const result = await this.get(`articles?limit=100&page=${page}`);
-                const items = result.data.items || [];
+            let totalItems = 0;
+            for (let p = 0; p < 1000; p++) {
+                const result = await this.get(`articles?limit=${LIMIT}&offset=${p * LIMIT}`);
+                if (result.code && result.code !== 200) break;
+                const items = (result.data && result.data.items) || [];
                 if (items.length === 0) break;
-                allArticles.push(...items);
-                if (onProgress) onProgress(allArticles.length, totalItems);
+                totalItems = result.data.totalItems || totalItems;
+                let added = 0;
+                for (const a of items) {
+                    const key = String(a && a.id);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    allArticles.push(a);
+                    added++;
+                }
+                if (onProgress) onProgress(allArticles.length, totalItems || allArticles.length);
+                if (added === 0) break;          // paginatie-einde of -bug
+                if (items.length < LIMIT) break; // laatste pagina
             }
 
             this._articleCache = allArticles;
@@ -2399,17 +2405,25 @@ const RobawsAPI = {
     // ARTIKELGROEPEN
     // =============================================
     async getArticleGroups() {
+        // Robaws negeert ?page= -> ?offset= gebruiken + dedup + stoppen bij niets-nieuws
+        const GLIMIT = 100;
         const allGroups = [];
-        let page = 0;
-        do {
-            const result = await this.get(`article-groups?limit=100&page=${page}`);
-            const items = result.data.items || result.data || [];
+        const seenG = new Set();
+        for (let p = 0; p < 200; p++) {
+            const result = await this.get(`article-groups?limit=${GLIMIT}&offset=${p * GLIMIT}`);
+            const items = (result.data && (result.data.items || (Array.isArray(result.data) ? result.data : []))) || [];
             if (items.length === 0) break;
-            allGroups.push(...items);
-            const totalPages = result.data.totalPages || 1;
-            page++;
-            if (page >= totalPages) break;
-        } while (true);
+            let added = 0;
+            for (const g of items) {
+                const k = String(g && g.id);
+                if (seenG.has(k)) continue;
+                seenG.add(k);
+                allGroups.push(g);
+                added++;
+            }
+            if (added === 0) break;
+            if (items.length < GLIMIT) break;
+        }
 
         // Dedupe op id (Robaws-paginatie kan dezelfde groep meermaals teruggeven -> dubbele tegels)
         const _seen = new Set();
