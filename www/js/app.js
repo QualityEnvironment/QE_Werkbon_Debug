@@ -5078,6 +5078,15 @@ const app = {
         if (btn) btn.disabled = false;
     },
 
+    // v197: "Geen factuur maken" — verbergt de betaalmethode-keuze en activeert
+    // de verstuurknop (geen betaling nodig zonder factuur).
+    toggleNoInvoice(checked) {
+        const pm = document.getElementById('wbPaymentMethodSection');
+        if (pm) pm.style.display = checked ? 'none' : '';
+        const btn = document.getElementById('btnSubmitWerkbon');
+        if (btn) btn.disabled = checked ? false : !this._selectedPaymentMethod;
+    },
+
     // ========================================
     // UNIFIED SUBMIT FLOW
     // ========================================
@@ -5088,8 +5097,9 @@ const app = {
             return this.executeMonteurSubmitFlow();
         }
 
-        // Valideer betaalmethode
-        if (!this._selectedPaymentMethod) {
+        // Valideer betaalmethode (niet nodig als "Geen factuur maken" aanstaat)
+        const _noInvoice = document.getElementById('wbNoInvoice') && document.getElementById('wbNoInvoice').checked;
+        if (!_noInvoice && !this._selectedPaymentMethod) {
             this.toast('Kies eerst een betaalmethode');
             return;
         }
@@ -5332,6 +5342,18 @@ const app = {
 
             // === STAP 2: Foto's + handtekening ===
             await this._uploadPhotosAndSignature(data, workOrderId, signatureName, signatureData);
+
+            // v197: "Geen factuur maken" → werkbon is verstuurd, factuur-stap overslaan
+            // (garantie / terugkomwerk door gebreken).
+            if (document.getElementById('wbNoInvoice') && document.getElementById('wbNoInvoice').checked) {
+                this._markWOSubmitted(data);
+                this._submitInProgress = false;
+                this.toast('Werkbon verstuurd — geen factuur aangemaakt');
+                this.navigate('screenPlanning', false);
+                this.screenHistory = [];
+                this.loadPlanning();
+                return;
+            }
 
             // === STAP 3: Factuur aanmaken (met betaalmethode + notities als tekstlijn) ===
             this.toast('Factuur aanmaken...');
@@ -8228,6 +8250,9 @@ const app = {
             let werkurenTotal = 0;
             let overurenTotal = 0;
             for (const wo of workOrders) {
+                // v197: afwezigheid (Ziek/Verlof/Feestdag/Inhaal/Sociaal verlof) telt
+                // NIET mee in de uren-totalen — geen forfaitaire 8u meer.
+                if (this._isAbsenceTijd(getField(wo, 'Tijd') || 'Op tijd')) continue;
                 const teList = teByWoId[wo.id] || [];
                 for (const te of teList) {
                     const h = parseFloat(te.hours || te.billableHours || 0) || 0;
@@ -8304,6 +8329,7 @@ const app = {
                     // v83: dag-totaal = som van alle time-entries (incl. negatieve compensatie)
                     let dayTotal = 0;
                     for (const wo of wos) {
+                        if (this._isAbsenceTijd(getField(wo, 'Tijd') || 'Op tijd')) continue;  // v197: afwezigheid = 0u
                         const teList = teByWoId[wo.id] || [];
                         for (const te of teList) {
                             dayTotal += parseFloat(te.hours || te.billableHours || 0) || 0;
@@ -8327,6 +8353,19 @@ const app = {
                         const tijdColor = tijdStyle.color;
                         const tijdIcon  = tijdStyle.icon;
                         const isAbsence = this._isAbsenceTijd(tijd);
+                        // v197: afwezigheid → toon enkel het type, géén (forfaitaire) uren
+                        if (isAbsence) {
+                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${tijdStyle.bg}">
+                                <div style="display:flex;align-items:center;gap:10px">
+                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex;align-items:center">${tijdIcon || this.icon('calendar', { size: 18 })}</span>
+                                    <div style="flex:1">
+                                        <div style="font-size:14px;font-weight:500;color:${tijdColor}">${tijdStyle.label}</div>
+                                        <div style="font-size:11px;color:${tijdColor}">Geen uren gerekend</div>
+                                    </div>
+                                </div>
+                            </div>`;
+                            continue;
+                        }
                         const teList = (teByWoId[wo.id] || []).slice().sort((a, b) => {
                             // Sort: entries met startTime eerst (chronologisch), dan no-time entries
                             const aMin = a.startTime ? (a.startTime.hour * 60 + a.startTime.minute) : 9999;

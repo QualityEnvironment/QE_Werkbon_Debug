@@ -727,7 +727,9 @@ window.QEClock = {
         const currentUser = RobawsAPI.getLoggedInUser();
         const empId = currentUser ? String(currentUser.robawsEmployeeId) : session.employeeId;
         const empName = currentUser ? currentUser.name : '';
-        const userId = currentUser ? currentUser.robawsUserId : null;
+        let userId = currentUser ? currentUser.robawsUserId : null;
+        // v197: verantwoordelijke gegarandeerd zetten (anders mist hij op de tijdsregistratie)
+        if (!userId) { try { userId = await RobawsAPI.ensureUserId(); } catch (e) {} }
 
         session.employeeId = empId;
         session.employeeName = empName;
@@ -1163,7 +1165,9 @@ window.QEClock = {
             const currentUser = RobawsAPI.getLoggedInUser();
             const empId = currentUser ? String(currentUser.robawsEmployeeId) : session.employeeId;
             const empName = currentUser ? currentUser.name : '';
-            const userId = currentUser ? currentUser.robawsUserId : null;
+            let userId = currentUser ? currentUser.robawsUserId : null;
+            // v197: verantwoordelijke gegarandeerd zetten bij L&L-werkbon
+            if (!userId) { try { userId = await RobawsAPI.ensureUserId(); } catch (e) {} }
             let gpsText = '';
             try {
                 const pos = await this._getGPS({ timeoutMs: 3000, maximumAge: 60000 });
