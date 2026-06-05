@@ -4663,6 +4663,19 @@ const app = {
         const vatName = client.vatTariffName || null;
         const btwRowsEl = document.getElementById('wbBtwRows');
 
+        // v198: apart "tabje" met de transactiekost (1,5% bij kaartbetaling) + totaal incl. transactiekost
+        const FEE_RATE = 0.015;
+        const txBox = (totalIncl, btwLabel) => {
+            const gross = totalIncl / (1 - FEE_RATE);
+            const fee = gross - totalIncl;
+            return `
+                <div style="margin-top:10px;padding:10px 12px;background:#fff3e0;border-radius:10px">
+                    <div style="font-size:11px;color:#e65100;font-weight:600;margin-bottom:4px">Bij kaartbetaling (Viva)${btwLabel ? ' — ' + btwLabel : ''}</div>
+                    <div class="total-row"><span>Transactiekosten (1,5%)</span><span>${this.formatPrice(fee)}</span></div>
+                    <div class="total-row subtotal" style="font-weight:700;color:#e65100"><span>Totaal incl. transactiekosten</span><span>${this.formatPrice(gross)}</span></div>
+                </div>`;
+        };
+
         if (vatPct !== null && vatName) {
             // Klant heeft een bekend BTW tarief — toon alleen dat tarief
             clientBtwInfo.innerHTML = `<span style="font-weight:600;color:var(--qe-purple)">Klant BTW: ${this.escapeHtml(vatName)}</span>`;
@@ -4679,7 +4692,7 @@ const app = {
                 <div class="total-row subtotal" style="font-weight:700;color:var(--qe-purple)">
                     <span>Totaal incl. ${vatPct}% BTW</span>
                     <span>${this.formatPrice(subtotal + btwBedrag)}</span>
-                </div>`;
+                </div>` + txBox(subtotal + btwBedrag, '');
         } else {
             // Onbekend BTW tarief — toon beide zodat technieker kan vergelijken
             clientBtwInfo.innerHTML = '<span style="color:var(--qe-orange);font-weight:600">Klant BTW: niet ingesteld in Robaws</span>';
@@ -4692,7 +4705,7 @@ const app = {
                 <div class="total-row"><span>BTW 6%</span><span>${this.formatPrice(btw6)}</span></div>
                 <div class="total-row"><span>BTW 21%</span><span>${this.formatPrice(btw21)}</span></div>
                 <div class="total-row subtotal"><span>Totaal incl. 6% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw6)}</span></div>
-                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw21)}</span></div>`;
+                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw21)}</span></div>` + txBox(subtotal + btw6, '6% BTW') + txBox(subtotal + btw21, '21% BTW');
         }
 
         // Opmerkingen & foto's
