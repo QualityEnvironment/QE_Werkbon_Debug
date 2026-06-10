@@ -1444,28 +1444,40 @@ const RobawsAPI = {
         console.log('[getPlanning] gevraagd voor date=' + date + ' (today=' + today + ', cutoff=' + cutoff + ')');
 
         // Haal planning items op met paginatie
+        // v200: Robaws NEGEERT ?page= op /planning-items (zelfde quirk als bij
+        // /articles). Elke "pagina" gaf dezelfde eerste 100 items terug die zonder
+        // dedup werden samengevoegd -> elke werkorder werd ×(aantal pagina's)
+        // getoond (de dubbele kaarten in de planning). Fix: ?offset= + dedup op id.
         let allItems = [];
-        let page = 0;
-        let totalPages = 1;
+        const seenPlanIds = new Set();
+        let offset = 0;
+        const PAGE = 100;
 
-        do {
+        for (let p = 0; p < 30; p++) {
             const result = await this.get(
-                `planning-items?employeeId=${employeeId}&limit=100&page=${page}&sort=startDate:desc`
+                `planning-items?employeeId=${employeeId}&limit=${PAGE}&offset=${offset}&sort=startDate:desc`
             );
             if (result.code !== 200) throw new Error('Kon planning niet ophalen');
 
             const items = result.data.items || [];
             if (items.length === 0) break;
 
-            allItems = allItems.concat(items);
+            let added = 0;
+            for (const it of items) {
+                const key = String(it.id);
+                if (seenPlanIds.has(key)) continue;
+                seenPlanIds.add(key);
+                allItems.push(it);
+                added++;
+            }
 
             // Stop als we voorbij de cutoff (= oudste relevante datum) zijn
             const lastDate = (items[items.length - 1].startDate || '').split('T')[0];
             if (lastDate < cutoff) break;
-
-            totalPages = result.data.totalPages || 1;
-            page++;
-        } while (page < totalPages);
+            if (added === 0) break;          // niets nieuws meer -> stop (veiligheid)
+            if (items.length < PAGE) break;  // laatste pagina bereikt
+            offset += PAGE;
+        }
 
         // Strikt filter op datum — exact equal match
         let filtered = allItems.filter(item => {
@@ -1601,17 +1613,26 @@ const RobawsAPI = {
         // een planning-item verdwijnt alleen voor de technieker wiens werkbon eraan
         // gelinkt is (verantwoordelijke = zichzelf).
         const ids = new Set();
-        let page = 0;
+        const seenWoIds = new Set();
+        let offset = 0;
+        const PAGE = 100;
 
         try {
             const sinceDate = this._localDateStr(null, -7);
-            do {
-                const result = await this.get(`work-orders?limit=100&page=${page}&sort=createdAt:desc`);
-                const items = result.data.items || [];
+            for (let p = 0; p < 15; p++) {
+                // v200: ?offset= i.p.v. ?page= (Robaws negeert page op /work-orders)
+                // + dedup op id, anders blijf je op dezelfde eerste 100 werkbons hangen.
+                const result = await this.get(`work-orders?limit=${PAGE}&offset=${offset}&sort=createdAt:desc`);
+                const items = (result.data && result.data.items) || [];
                 if (items.length === 0) break;
 
-                let stop = false;
+                let stop = false, added = 0;
                 for (const wo of items) {
+                    if (wo.id != null) {
+                        if (seenWoIds.has(String(wo.id))) continue;
+                        seenWoIds.add(String(wo.id));
+                    }
+                    added++;
                     const woDate = wo.date || '';
                     if (woDate && woDate < sinceDate) { stop = true; break; }
                     if (wo.planningItemId) {
@@ -1628,12 +1649,10 @@ const RobawsAPI = {
                     }
                 }
                 if (stop) break;
-
-                const totalPages = result.data.totalPages || 1;
-                page++;
-                if (page >= totalPages) break;
-                if (page > 10) break;
-            } while (true);
+                if (added === 0) break;
+                if (items.length < PAGE) break;
+                offset += PAGE;
+            }
         } catch (e) { /* Bij fout: geen filtering, niet erg */ }
 
         return ids;
@@ -2530,22 +2549,33 @@ const RobawsAPI = {
         const today = this._localDateStr();
         const sevenDaysAgo = this._localDateStr(null, -7);
 
+        // v200: ?offset= i.p.v. ?page= (Robaws negeert page) + dedup op id, anders
+        // werden dezelfde planning-items dubbel geteld in de correctie-tool.
         let allPlanningen = [];
-        let page = 0;
-        do {
+        const seenUitgevoerdIds = new Set();
+        let offset = 0;
+        const PAGE = 100;
+        for (let p = 0; p < 20; p++) {
             const r = await this.get(
-                `planning-items?employeeId=${employeeId}&limit=100&page=${page}&sort=startDate:desc`
+                `planning-items?employeeId=${employeeId}&limit=${PAGE}&offset=${offset}&sort=startDate:desc`
             );
             if (r.code !== 200) break;
             const items = r.data.items || [];
             if (items.length === 0) break;
-            allPlanningen = allPlanningen.concat(items);
+            let added = 0;
+            for (const it of items) {
+                const key = String(it.id);
+                if (seenUitgevoerdIds.has(key)) continue;
+                seenUitgevoerdIds.add(key);
+                allPlanningen.push(it);
+                added++;
+            }
             const lastDate = (items[items.length - 1].startDate || '').split('T')[0];
             if (lastDate < sevenDaysAgo) break;
-            const totalPages = r.data.totalPages || 1;
-            page++;
-            if (page >= totalPages || page > 10) break;
-        } while (true);
+            if (added === 0) break;
+            if (items.length < PAGE) break;
+            offset += PAGE;
+        }
 
         const planningenInScope = allPlanningen.filter(p => {
             const d = (p.startDate || '').split('T')[0];
