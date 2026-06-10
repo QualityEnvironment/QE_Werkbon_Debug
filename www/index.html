@@ -598,24 +598,25 @@
     <div id="wbPaymentMethodSection" class="werkbon-summary mb-16">
         <div class="ws-header">Betaalmethode</div>
         <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px" id="paymentMethodBtns">
-            <!-- Mollie: tijdelijk uitgeschakeld tot officiele invoering (niet aanklikbaar) -->
-            <div style="width:100%;padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;text-align:left;border:1px solid #e6e8ee;border-radius:12px;background:#f5f6f8;color:#9aa1ad;box-sizing:border-box">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
-                <span style="display:flex;flex-direction:column;line-height:1.3;flex:1">
-                    <span>Bancontact / kaart (Mollie)</span>
-                    <span style="font-size:11px;color:#b0b0b0">+1,5% transactiekost</span>
-                </span>
-                <span style="font-size:11px;background:#e8eaf0;color:#6a2c91;padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap">Coming soon</span>
-            </div>
-            <button class="btn btn-outline btn-full payment-method-btn" data-method="Viva wallet"
-                onclick="app.selectPaymentMethod('Viva wallet')"
+            <!-- Mollie: actief sinds Exact-Mollie koppeling -->
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Mollie Tap"
+                onclick="app.selectPaymentMethod('Mollie Tap')"
                 style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
                 <span style="display:flex;flex-direction:column;line-height:1.3">
-                    <span>Viva Wallet (terminal)</span>
+                    <span>Bancontact / kaart (Mollie)</span>
                     <span style="font-size:11px;color:#e65100">+1,5% transactiekost</span>
                 </span>
             </button>
+            <!-- Viva Wallet: vergrendeld na overstap naar Mollie (niet aanklikbaar) -->
+            <div style="width:100%;padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;text-align:left;border:1px solid #e6e8ee;border-radius:12px;background:#f5f6f8;color:#9aa1ad;box-sizing:border-box">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
+                <span style="display:flex;flex-direction:column;line-height:1.3;flex:1">
+                    <span>Viva Wallet (terminal)</span>
+                    <span style="font-size:11px;color:#b0b0b0">vergrendeld</span>
+                </span>
+                <span style="font-size:11px;background:#e8eaf0;color:#6a2c91;padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap">Uit</span>
+            </div>
             <button class="btn btn-outline btn-full payment-method-btn" data-method="Cash"
                 onclick="app.selectPaymentMethod('Cash')"
                 style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
