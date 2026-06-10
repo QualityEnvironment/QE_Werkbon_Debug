@@ -320,7 +320,7 @@ const RobawsAPI = {
         try {
             let page = 0;
             do {
-                const r = await this.get(`users?limit=100&page=${page}`);
+                const r = await this.get(`users?limit=100&offset=${page * 100}`);
                 if (r.code !== 200 || !r.data) break;
                 const list = r.data.items || (Array.isArray(r.data) ? r.data : []);
                 if (list.length === 0) break;
@@ -452,7 +452,7 @@ const RobawsAPI = {
                 let page = 0;
                 const allActive = [];
                 do {
-                    const res = await this.get(`employees?status=actief&limit=100&page=${page}`);
+                    const res = await this.get(`employees?status=actief&limit=100&offset=${page * 100}`);
                     const items = (res.data && res.data.items) || [];
                     if (items.length === 0) break;
                     allActive.push(...items);
@@ -467,7 +467,7 @@ const RobawsAPI = {
                 let page = 0;
                 const allEmps2 = [];
                 do {
-                    const res = await this.get(`employees?limit=100&page=${page}`);
+                    const res = await this.get(`employees?limit=100&offset=${page * 100}`);
                     const items = (res.data && res.data.items) || [];
                     if (items.length === 0) break;
                     allEmps2.push(...items);
@@ -1100,7 +1100,7 @@ const RobawsAPI = {
         let page = 0;
         const maxPages = 10;
         while (page < maxPages) {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&offset=${page * 100}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
             }
@@ -1142,7 +1142,7 @@ const RobawsAPI = {
         while (page < maxPages) {
             // sort=id:desc: nieuwste eerst → vandaag staat altijd vooraan,
             // ook als er duizenden historische registraties zijn
-            const res = await this.get(`time-registrations?limit=100&page=${page}&sort=id:desc`);
+            const res = await this.get(`time-registrations?limit=100&offset=${page * 100}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Robaws time-registrations fetch faalde (code ${res.code})`);
             }
@@ -1334,7 +1334,7 @@ const RobawsAPI = {
         let page = 0;
         const maxPages = 20; // v57: opgekrikt van 10 -> 20 voor actieve users
         while (page < maxPages) {
-            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&page=${page}&sort=id:desc`);
+            const res = await this.get(`time-registrations?employeeId=${employeeId}&limit=100&offset=${page * 100}&sort=id:desc`);
             if (res.code !== 200) {
                 throw new Error(`Robaws time-registrations history fetch faalde (code ${res.code})`);
             }
@@ -2737,7 +2737,7 @@ const RobawsAPI = {
         let done = false;
         do {
             const userFilter = userId ? `&assignedUserId=${encodeURIComponent(userId)}` : '';
-            const result = await this.get(`work-orders?limit=50&page=${page}&sort=date:desc${userFilter}`);
+            const result = await this.get(`work-orders?limit=50&offset=${page * 50}&sort=date:desc${userFilter}`);
             const items = (result.data && result.data.items) || [];
             if (items.length === 0) break;
 
@@ -4009,7 +4009,7 @@ const RobawsAPI = {
         let page = 0;
         const MAX_PAGES = 20;      // ~2000 clients ruim genoeg voor QE
         do {
-            const res = await this.get(`clients?limit=100&page=${page}`);
+            const res = await this.get(`clients?limit=100&offset=${page * 100}`);
             const items = (res.data && res.data.items) || [];
             if (items.length === 0) break;
             all.push(...items);
