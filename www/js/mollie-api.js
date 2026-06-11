@@ -41,8 +41,9 @@ const MollieAPI = {
                 return QEBridge.getMolliePosId();
             }
         } catch(_) {}
-        // Fallback (test-omgeving)
-        return 'possecr_4imehLQB8HPAAEBNpiQRJ';
+        // v204: GEEN debug-fallback meer. native openMollieTap overschrijft
+        // secretId sowieso met de juiste gepaarde POS-id, dus '' is veilig.
+        return '';
     },
 
     getAppId() {

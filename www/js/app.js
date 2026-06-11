@@ -324,6 +324,12 @@ const app = {
             if (currentVer && hasUser && (lastVer == null || lastVer !== currentVer)) {
                 console.log('[App] OTA update gedetecteerd (v' + lastVer + ' → v' + currentVer + ') — forced logout');
                 try { localStorage.removeItem('qe_user'); } catch(_) {}
+                // v205: ook de test-rol-override wissen. Die bleef voorheen
+                // staan na een forced logout — wie daarna inlogde erfde de
+                // rol van de vorige gebruiker (bv. technieker vast in
+                // monteur-modus). woData e.d. blijven BEWUST staan zodat
+                // dezelfde gebruiker na de update kan verderwerken.
+                try { localStorage.removeItem('qe_active_role_override'); } catch(_) {}
             }
             if (currentVer) {
                 try { localStorage.setItem('qe_last_seen_version', currentVer); } catch(_) {}
@@ -565,41 +571,47 @@ const app = {
         // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
         // info) blijven staan.
         try {
-            const userBoundPrefixes = [
+            // v205: key-namen gecorrigeerd + prefixen écht als prefix gewist.
+            // Bugs voorheen: 'qe_wo_data' ≠ echte key 'qe_woData' en
+            // 'qe_timer_state' ≠ 'qe_timer' → werkbon-data (uren/materialen/
+            // notities) en de lopende timer van user A lekten naar user B op
+            // hetzelfde toestel; per-user klok-queues (qe_clock_pending_<email>)
+            // en qe_last_payment_context werden nooit gewist.
+            const exactKeys = [
                 'qe_user',                  // huidige sessie
-                'qe_wo_data',               // werkbon-state per WO
+                'qe_woData',                // werkbon-state per WO (v205-fix: was 'qe_wo_data')
                 'qe_fav_materials',         // favorieten van vorige user
-                'qe_last_payment',          // betaling-state
+                'qe_missing_materials',     // v205: lokale backup ontbrekend-materiaal
                 'qe_last_overschrijving',
-                'qe_last_wo_create_res',    // debug payloads
-                'qe_last_wo_put_req',
-                'qe_last_wo_put_res',
-                'qe_last_wo_verify',
-                'qe_clock_pending',         // offline klok-queue
                 'qe_pending_payments',
                 'qe_submitted_wos',
-                'qe_timer_state',
-                'qe_timer_correction',
+                'qe_timer',                 // lopende timer (v205-fix: was 'qe_timer_state')
+                'qe_mollie_pending',        // v205: in-flight Mollie-context vorige user
                 'qe_active_role_override',  // v117: test-rolwissel uit profiel
-
-                'qe_clock_pending_',       // v72: per-user pending sync queue (prefix-match)
             ];
-            const planItemPrefix = 'planItem_';
-            const clockSessionPrefix = 'qe_clock_v2_';
-            const empCachePrefix = 'qe_emp_cache_'; // mag staan voor offline login
-            const avatarPrefix = 'qe_avatar_';      // mag staan
-            const pinPrefix = 'qe_pin_';            // mag staan voor offline PIN-check
-
+            const wipePrefixes = [
+                'planItem_',                // checkbox-state per werkbon
+                'qe_clock_v2_',             // kloksessies per user/dag
+                'qe_clock_pending_',        // v72: per-user pending sync queue
+                'qe_last_payment',          // dekt qe_last_payment én _context (v205)
+                'qe_last_wo_',              // debug payloads
+                'qe_last_tr_',
+                'qe_last_uitg_',
+            ];
+            // Blijft bewust staan: qe_emp_cache_/qe_login_emp_cache_/qe_pin_/
+            // qe_avatar_/qe_last_online_login_ (offline herlogin), qe_nfc_tags/
+            // qe_startuur_/qe_pauze_ (toestel-config), qe_last_seen_version,
+            // qe_dark_mode, qe_viva_terminal_id, qe_pending_cleanup_v2,
+            // qe_mollie_processed_* (idempotency over users heen) en de
+            // Mollie-retry-queue (toestel-gebonden herstel van al geïnde
+            // betalingen — wissen zou een Robaws-registratie kunnen verliezen).
             const toRemove = [];
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
                 if (!k) continue;
-                if (userBoundPrefixes.includes(k)) { toRemove.push(k); continue; }
-                if (k.startsWith(planItemPrefix)) { toRemove.push(k); continue; }
-                if (k.startsWith(clockSessionPrefix)) { toRemove.push(k); continue; }
-                // empCache, avatar, pin: NIET wissen — die zijn nodig voor
-                // snelle herlogin en offline-fallback.
-                void empCachePrefix; void avatarPrefix; void pinPrefix;
+                if (exactKeys.includes(k) || wipePrefixes.some(p => k.startsWith(p))) {
+                    toRemove.push(k);
+                }
             }
             for (const k of toRemove) {
                 try { localStorage.removeItem(k); } catch(e) {}
@@ -2368,7 +2380,7 @@ const app = {
             }
 
             this.closeModal();
-            this.toast('Installatie bijgewerkt ');
+            this.toast('Installatie bijgewerkt');
             // Herlaad installaties in de UI
             const installationIds = this.currentWO?.installationIds || [];
             const clientId = this.currentWO?.client?.id;
@@ -3576,7 +3588,7 @@ const app = {
             }
 
             this.closeModal();
-            this.toast('BTW tarief bijgewerkt ');
+            this.toast('BTW tarief bijgewerkt');
         } catch (err) {
             if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Opslaan'; }
             this.toast('Fout: ' + err.message);
@@ -4866,7 +4878,7 @@ const app = {
                     } catch (photoErr) { /* niet kritisch */ }
                 }
 
-                this.toast('Werkbon verstuurd ');
+                this.toast('Werkbon verstuurd');
                 // Bewaar uren voor daguren overzicht vóór reset
                 const woId = this.currentWO.id;
                 if (!this.submittedHours[woId]) this.submittedHours[woId] = [];
@@ -5282,12 +5294,15 @@ const app = {
             this.toast('Bezig met versturen...');
             return;
         }
-        this._submitInProgress = true;
 
+        // v205: ALLE validaties VÓÓR het zetten van _submitInProgress.
+        // Voorheen stond de vlag al op true bij onderstaande early-returns
+        // (buiten try/finally) → vlag bleef op true hangen en élke volgende
+        // poging gaf "Bezig met versturen..." tot een app-herstart.
         const data = this.woData[this.currentWO.id];
         const hasWorkHours = data.hours.some(h => h.type === 'klant');
         if (hasWorkHours && !this.selectedUurcode) {
-            this.toast('Kies eerst een uurcode in het Uren tabblad');
+            this.toast('Kies eerst een uurcode in het Uren tabblad', true);
             return;
         }
 
@@ -5295,11 +5310,11 @@ const app = {
         const signatureData = this.getSignatureData();
 
         if (!signatureData) {
-            this.toast('Laat de klant eerst tekenen');
+            this.toast('Laat de klant eerst tekenen', true);
             return;
         }
         if (!signatureName) {
-            this.toast('Vul de naam van de ondertekenaar in');
+            this.toast('Vul de naam van de ondertekenaar in', true);
             return;
         }
 
@@ -5307,6 +5322,10 @@ const app = {
         const btn = document.getElementById('btnSubmitWerkbon');
         btn.disabled = true;
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Verwerken...';
+
+        // v205: vlag pas ná validaties en knop-setup, als állerlaatste vóór de
+        // try — de finally hieronder reset hem dus gegarandeerd altijd.
+        this._submitInProgress = true;
 
         try {
             // === STAP 0: Garandeer dat we een Robaws userId hebben.
@@ -5619,7 +5638,7 @@ const app = {
             } else {
                 // v85: Via factuur → factuur is aangemaakt, werkbon + order
                 // staan nu op 'gefactureerd' (zie robaws-api stap 6). Geen extra UI.
-                this.toast(`Werkbon verstuurd — betaling: ${paymentMethod} `);
+                this.toast(`Werkbon verstuurd — betaling: ${paymentMethod}`);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
@@ -5662,18 +5681,22 @@ const app = {
             this.toast('Bezig met versturen...');
             return;
         }
-        this._submitInProgress = true;
 
+        // v205: validatie VÓÓR het zetten van de vlag (zelfde leak-fix als
+        // executeSubmitFlow — vlag bleef hangen bij deze early-return).
         const data = this.woData[this.currentWO.id];
         const hasWorkHours = data.hours.some(h => h.type === 'klant');
         if (hasWorkHours && !this.selectedUurcode) {
-            this.toast('Kies eerst een uurcode in het Uren tabblad');
+            this.toast('Kies eerst een uurcode in het Uren tabblad', true);
             return;
         }
 
         const btn = document.getElementById('btnSubmitWerkbon');
         btn.disabled = true;
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Versturen...';
+
+        // v205: vlag als állerlaatste vóór de try — finally reset hem altijd.
+        this._submitInProgress = true;
 
         try {
             // Garandeer dat we een Robaws userId hebben (zie executeSubmitFlow)
@@ -5733,7 +5756,7 @@ const app = {
                 } catch (e) { /* foto's niet kritisch */ }
             }
 
-            this.toast('Werkbon verstuurd ');
+            this.toast('Werkbon verstuurd');
 
             // Data resetten en terug naar planning
             const woId = this.currentWO.id;
@@ -8625,7 +8648,7 @@ const app = {
                 assignedUserId: '5', // Vince Van de Vliet (kantoor)
             });
 
-            this.toast('Aanpassing ingediend bij Vince ');
+            this.toast('Aanpassing ingediend bij Vince');
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {
@@ -9191,11 +9214,19 @@ const app = {
         this.openModal();
     },
 
-    toast(message) {
+    /** v205: toast(message, isError) — tweede parameter werd door ±15
+     *  call-sites al meegegeven maar voorheen stil genegeerd, waardoor
+     *  foutmeldingen er identiek uitzagen als succes. isError=true →
+     *  rode toast die langer blijft staan. De timer wordt nu ook gecleared
+     *  zodat een eerdere (succes-)timer een nieuwe fout-toast niet
+     *  voortijdig kan verbergen. */
+    toast(message, isError) {
         const el = document.getElementById('toast');
         el.textContent = message;
+        el.classList.toggle('error', !!isError);
         el.classList.add('show');
-        setTimeout(() => el.classList.remove('show'), 2500);
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => el.classList.remove('show'), isError ? 4500 : 2500);
     },
 
     /** v92: format Robaws paymentInstruction (12-cijferige OGM) als +++123/4567/89012+++ */
@@ -10297,7 +10328,7 @@ const app = {
 
             if (this._lastPlanningCount !== null && count > this._lastPlanningCount) {
                 const diff = count - this._lastPlanningCount;
-                this.toast(` ${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
+                this.toast(`${diff} nieuw${diff > 1 ? 'e' : ''} werkorder${diff > 1 ? 's' : ''} in planning!`);
                 // Badge tonen op planning-scherm
                 const badge = document.getElementById('woCount');
                 if (badge) { badge.textContent = count; badge.style.background = 'var(--qe-orange)'; }

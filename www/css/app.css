@@ -909,6 +909,8 @@ textarea.form-input {
     transform: translateX(-50%) translateY(0);
     opacity: 1;
 }
+/* v205: fout-toast — rood, hoort bij toast(message, isError) in app.js */
+.toast.error { background: var(--qe-red); color: #fff; }
 
 /* ----- MODAL ----- */
 .modal-overlay {
@@ -1294,6 +1296,7 @@ body.dark-mode table th { background: #0D1117; color: #8B9AB0; }
 body.dark-mode table td { border-color: #2A3444; color: #C0CCDA; }
 body.dark-mode .offline-bar { background: #3A1A1A; }
 body.dark-mode .toast { background: #1A2332; color: #E8EDF2; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+body.dark-mode .toast.error { background: var(--qe-red); color: #fff; } /* v205 */
 body.dark-mode .day-hours-summary { background: #1A2332; border-color: #2A3444; }
 body.dark-mode #detailHeader { background: #1A2332 !important; }
 body.dark-mode .wo-card h3 { color: #E8EDF2; }
