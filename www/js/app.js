@@ -5523,6 +5523,28 @@ const app = {
             const workOrderId = werkbonResult.workOrderId;
             createdWorkOrderId = workOrderId;  // v206: vanaf hier nooit requeuen
 
+            // v211: partial-fouten van de werkbon zichtbaar maken. Robaws kan
+            // individuele uren-/materiaalregels weigeren terwijl de werkbon
+            // zelf wél bestaat — voorheen verdween dat in interne arrays en
+            // zag iedereen "verstuurd". De factuurlijnen worden apart
+            // opgebouwd, dus de factuur kan nog kloppen; bureel vergelijkt.
+            const _wbPartial = [];
+            if (Array.isArray(werkbonResult.timeErrors) && werkbonResult.timeErrors.length > 0)
+                _wbPartial.push(werkbonResult.timeErrors.length + ' uren-regel(s)');
+            if (Array.isArray(werkbonResult.materialErrors) && werkbonResult.materialErrors.length > 0)
+                _wbPartial.push(werkbonResult.materialErrors.length + ' materiaalregel(s)');
+            if (_wbPartial.length > 0) {
+                this.toast('Let op: werkbon verstuurd, maar ' + _wbPartial.join(' en ') + ' niet weggeschreven — bureel-taak aangemaakt', true);
+                try {
+                    await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                        title: 'Werkbon onvolledig weggeschreven - controleren',
+                        description: 'Bij het versturen vanuit de app weigerde Robaws ' + _wbPartial.join(' en ') +
+                            ' op deze werkbon. De factuurlijnen worden apart opgebouwd en kunnen dus wél volledig zijn — gelieve werkbon en factuur te vergelijken en aan te vullen.',
+                        assignedUserId: 5,
+                    });
+                } catch (e) { console.warn('[App] partial-taak mislukt:', e && e.message); }
+            }
+
             // v93/v94: Eenmalige artikels → toevoegen als line-item op WERKBON (zonder articleId)
             // + taak voor Felicity (userId 6) zodat zij het echte artikel in Robaws aanmaakt.
             const customArticles = (data.materials || []).filter(m => m.isCustom);
@@ -5624,7 +5646,19 @@ const app = {
             const invoiceResult = await invoiceRes.json();
 
             if (!invoiceResult.success) {
-                this.toast('Werkbon verstuurd, maar factuur aanmaken mislukt');
+                // v211: dit was een doodlopend pad — werkbon wél in Robaws,
+                // geen factuur, en niemand die het wist. Nu: rode melding +
+                // bureel-taak zodat er altijd opvolging is.
+                this.toast('Werkbon verstuurd, maar factuur aanmaken mislukt: ' + (invoiceResult.error || 'onbekende fout') + ' — bureel-taak aangemaakt', true);
+                try {
+                    await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                        title: 'Factuur aanmaken mislukt - handmatig opmaken',
+                        description: 'De app kon geen factuur aanmaken voor deze werkbon: ' +
+                            (invoiceResult.error || 'onbekende fout') +
+                            '. Gelieve handmatig te factureren en de betaling met de klant te regelen.',
+                        assignedUserId: 5,
+                    });
+                } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
                 this._markWOSubmitted(data);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
@@ -5632,9 +5666,29 @@ const app = {
                 return;
             }
 
-            // Waarschuw als er line-item fouten waren
-            if (invoiceResult.errors && invoiceResult.errors.length > 0) {
-                console.warn('[Factuur] Errors bij toevoegen lijnen:', invoiceResult.errors);
+            // v211: lijn-fouten zijn GELD-fouten — voorheen alleen een
+            // console.warn, waardoor de klant ter plaatse een te laag bedrag
+            // afrekende. Nu: betaling blokkeren + bureel-taak.
+            const invErrors = (invoiceResult.errors && invoiceResult.errors.length) ? invoiceResult.errors : [];
+            if (invErrors.length > 0) {
+                console.warn('[Factuur] Errors bij toevoegen lijnen:', invErrors);
+                this.toast('Factuur aangemaakt maar ' + invErrors.length + ' lijn(en) NIET toegevoegd — betaling geblokkeerd, bureel-taak aangemaakt. Reken NIET af met de klant.', true);
+                try {
+                    await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                        title: 'Factuur onvolledig - lijnen ontbreken',
+                        description: 'Bij het aanmaken van factuur ' +
+                            ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
+                            ' weigerde Robaws ' + invErrors.length + ' lijn(en) — het factuurbedrag is dus te laag. ' +
+                            'Gelieve de factuur aan te vullen en de betaling met de klant te regelen. Details: ' +
+                            invErrors.map(er => String((er && (er.error || er.step)) || JSON.stringify(er))).join(' | ').slice(0, 600),
+                        assignedUserId: 5,
+                    });
+                } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
+                this._markWOSubmitted(data);
+                this.navigate('screenPlanning', false);
+                this.screenHistory = [];
+                this.loadPlanning();
+                return;
             }
 
             // v94: Eenmalige artikels ook toevoegen als line-item op de FACTUUR
@@ -5642,12 +5696,91 @@ const app = {
             const customArticlesForInvoice = (data.materials || []).filter(m => m.isCustom);
             const invoiceId = (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.id) || null;
 
+            // v211: refetch-helper — ververst het lokale invoiceResult met de
+            // actuele Robaws-totalen (bron voor betaalscherm/Mollie-bedrag).
+            const _refreshInvoiceTotals = async (reason) => {
+                try {
+                    const refreshed = await RobawsAPI.get(`sales-invoices/${invoiceId}`, { bypassCache: true });
+                    if (refreshed.code === 200 && refreshed.data) {
+                        const fresh = refreshed.data;
+                        const merged = { ...invoiceResult.invoice };
+                        for (const k of ['totalInclVat', 'totalExclVat', 'totalVat',
+                                         'amount', 'amountInclVat', 'amountExclVat',
+                                         'totalCost', 'totalPrice', 'lineItems']) {
+                            if (fresh[k] !== undefined) merged[k] = fresh[k];
+                        }
+                        invoiceResult.invoice = merged;
+                        console.log(`[App] Factuur ververst na ${reason} — nieuw totaal:`, merged.totalInclVat);
+                        return true;
+                    }
+                    console.warn('[App] Refetch factuur gaf code', refreshed.code);
+                    return false;
+                } catch (e) {
+                    console.warn('[App] Refetch factuur faalde:', e && e.message);
+                    return false;
+                }
+            };
+
+            // v211: VOLGORDE GEWIJZIGD — eerst de eenmalige artikels, dán pas
+            // de transactiekost. Voorheen werd de 1,5% berekend op het totaal
+            // ZÓNDER de eenmalige artikels → de kaartbetaling dekte dat deel
+            // van de fee niet en QE paste het verschil bij.
+            if (customArticlesForInvoice.length > 0 && invoiceId) {
+                const vatTariffId = String(this.currentWO.vatTariffId);  // v210: default '4' weg
+                const customLineErrors = [];
+                for (const m of customArticlesForInvoice) {
+                    try {
+                        const li = {
+                            type: 'LINE',
+                            description: m.name || 'Eenmalig artikel',
+                            quantity: parseFloat(m.quantity || 1),
+                            price: parseFloat(m.salePrice || m.unitPrice || 0),
+                            vatTariffId: String(vatTariffId),
+                        };
+                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
+                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
+                        if (r.code !== 200 && r.code !== 201) {
+                            customLineErrors.push(m.name || 'eenmalig artikel');
+                            console.warn('[App] custom article factuur line-item POST faalde:', r.code, r.data);
+                        } else {
+                            console.log('[App] custom article toegevoegd aan factuur:', m.name);
+                        }
+                    } catch (e) {
+                        customLineErrors.push(m.name || 'eenmalig artikel');
+                        console.warn('[App] custom article factuur line-item exception:', e && e.message);
+                    }
+                }
+                // v211: ontbrekende eenmalige artikels = te lage factuur —
+                // zelfde behandeling als lijn-fouten: betaling blokkeren.
+                if (customLineErrors.length > 0) {
+                    this.toast('Eenmalige artikel(s) niet op de factuur geraakt: ' + customLineErrors.join(', ') + ' — betaling geblokkeerd, bureel-taak aangemaakt. Reken NIET af met de klant.', true);
+                    try {
+                        await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                            title: 'Factuur onvolledig - eenmalige artikels ontbreken',
+                            description: 'Deze eenmalige artikels konden niet als factuurlijn toegevoegd worden: ' +
+                                customLineErrors.join(', ') + '. Factuur: ' +
+                                ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
+                                '. Gelieve aan te vullen en de betaling met de klant te regelen.',
+                            assignedUserId: 5,
+                        });
+                    } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
+                    this._markWOSubmitted(data);
+                    this.navigate('screenPlanning', false);
+                    this.screenHistory = [];
+                    this.loadPlanning();
+                    return;
+                }
+                await _refreshInvoiceTotals('eenmalige artikels');
+            }
+
             // v170: Transactiekost 1.5% voor card payments toevoegen aan factuur.
             // Math: gross = net / (1 - 0.015), fee = gross - net. Zo ontvangt QE
             // netto exact het originele factuurbedrag nadat Mollie z'n 1.5%
             // afhoudt. Robaws verwacht `price` excl. BTW → we delen door
-            // (1 + btw-rate).
+            // (1 + btw-rate). v211: draait nu NÁ de eenmalige artikels, op het
+            // verse totaal.
             let transactionFeeAdded = false;
+            let _feeGrossTotal = null;
             const CARD_PAYMENT_METHODS = ['Mollie Tap', 'Viva wallet'];
             if (invoiceId && CARD_PAYMENT_METHODS.includes(paymentMethod)) {
                 const originalTotal = parseFloat(invoiceResult.invoice.totalInclVat || 0);
@@ -5692,65 +5825,30 @@ const app = {
                                 ' excl × ' + (vatRate * 100).toFixed(0) + '% toegevoegd aan factuur',
                                 invoiceId, '(' + paymentMethod + ')');
                             transactionFeeAdded = true;
+                            _feeGrossTotal = grossTotal;
                         } else {
                             console.warn('[transactiekosten] POST faalde:', r.code, r.data);
+                            // v211: niet meer stil — QE droeg deze 1,5% onzichtbaar zelf
+                            this.toast('Let op: transactiekost-lijn kon niet toegevoegd worden — klant betaalt het factuurbedrag zonder de 1,5%', true);
                         }
                     } catch (e) {
                         console.warn('[transactiekosten] exception:', e && e.message);
+                        this.toast('Let op: transactiekost-lijn kon niet toegevoegd worden — klant betaalt het factuurbedrag zonder de 1,5%', true);
                     }
+                } else {
+                    console.warn('[transactiekosten] geen totaal beschikbaar — fee overgeslagen');
                 }
             }
 
-            if (customArticlesForInvoice.length > 0 && invoiceId) {
-                const vatTariffId = String(this.currentWO.vatTariffId);  // v210: default '4' weg
-                for (const m of customArticlesForInvoice) {
-                    try {
-                        const li = {
-                            type: 'LINE',
-                            description: m.name || 'Eenmalig artikel',
-                            quantity: parseFloat(m.quantity || 1),
-                            price: parseFloat(m.salePrice || m.unitPrice || 0),
-                            vatTariffId: String(vatTariffId),
-                        };
-                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
-                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
-                        if (r.code !== 200 && r.code !== 201) {
-                            console.warn('[App] custom article factuur line-item POST faalde:', r.code, r.data);
-                        } else {
-                            console.log('[App] custom article toegevoegd aan factuur:', m.name);
-                        }
-                    } catch (e) {
-                        console.warn('[App] custom article factuur line-item exception:', e && e.message);
-                    }
-                }
-
-            }
-
-            // v109/v170: factuur ververst na elk type bijkomende line-items.
-            // Triggers wanneer: custom articles toegevoegd, OF transactiekost toegevoegd.
-            // De factuur in Robaws is altijd correct; deze refetch is om
-            // het lokale invoiceResult-object in sync te brengen voor het betaalscherm.
-            if (invoiceId && (customArticlesForInvoice.length > 0 || transactionFeeAdded)) {
-                try {
-                    const refreshed = await RobawsAPI.get(`sales-invoices/${invoiceId}`);
-                    if (refreshed.code === 200 && refreshed.data) {
-                        const fresh = refreshed.data;
-                        const merged = { ...invoiceResult.invoice };
-                        for (const k of ['totalInclVat', 'totalExclVat', 'totalVat',
-                                         'amount', 'amountInclVat', 'amountExclVat',
-                                         'totalCost', 'totalPrice', 'lineItems']) {
-                            if (fresh[k] !== undefined) merged[k] = fresh[k];
-                        }
-                        invoiceResult.invoice = merged;
-                        const reason = transactionFeeAdded
-                            ? (customArticlesForInvoice.length > 0 ? 'eenmalige artikels + transactiekost' : 'transactiekost')
-                            : 'eenmalige artikels';
-                        console.log(`[App] Factuur ververst na ${reason} — nieuw totaal:`, merged.totalInclVat);
-                    } else {
-                        console.warn('[App] Refetch factuur gaf code', refreshed.code);
-                    }
-                } catch (e) {
-                    console.warn('[App] Refetch factuur faalde:', e && e.message);
+            // v211: het betaalbedrag MOET de fee bevatten. Refetch; lukt die
+            // niet, dan tellen we de fee lokaal bij — voorheen betaalde de
+            // klant in dat geval het bedrag zónder fee en bleef de factuur
+            // deels open staan.
+            if (invoiceId && transactionFeeAdded) {
+                const refreshOk = await _refreshInvoiceTotals('transactiekost');
+                if (!refreshOk && _feeGrossTotal != null) {
+                    invoiceResult.invoice.totalInclVat = Math.round(_feeGrossTotal * 100) / 100;
+                    console.warn('[App] Refetch faalde — fee lokaal bijgeteld:', invoiceResult.invoice.totalInclVat);
                 }
             }
 
@@ -5763,6 +5861,26 @@ const app = {
                 } catch (e) {
                     console.warn('[App] Foto-upload naar factuur faalde (niet kritiek):', e && e.message);
                 }
+            }
+
+            // v211: status-fouten (werkbon/order/factuur-status) blokkeren de
+            // betaling niet — het bedrag klopt — maar moeten zichtbaar zijn.
+            // Een werkbon die niet op 'gefactureerd' raakt, kan later dubbel
+            // gefactureerd worden; een factuur zonder 'Technieker'-status valt
+            // buiten de nakijklijst van bureel.
+            const stErrors = (invoiceResult.statusErrors && invoiceResult.statusErrors.length) ? invoiceResult.statusErrors : [];
+            if (stErrors.length > 0) {
+                this.toast('Let op: ' + stErrors.join('; ') + ' — bureel-taak aangemaakt', true);
+                try {
+                    await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                        title: 'Status-updates mislukt na facturatie - nakijken',
+                        description: 'Na het aanmaken van factuur ' +
+                            ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
+                            ' faalden deze status-updates: ' + stErrors.join('; ') +
+                            '. Gelieve werkbon/order/factuur-status manueel te zetten (anders risico op dubbele facturatie of een factuur buiten de nakijklijst).',
+                        assignedUserId: 5,
+                    });
+                } catch (e) { console.warn('[App] status-taak mislukt:', e && e.message); }
             }
 
             this._markWOSubmitted(data);

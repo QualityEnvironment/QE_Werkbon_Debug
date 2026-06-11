@@ -228,6 +228,24 @@ const RobawsAPI = {
         }
     },
 
+    // v211: DELETE-wrapper — nodig voor rollback van half-aangemaakte records
+    // (bv. een werkbon waarvan de veld-PUT faalde).
+    async del(endpoint) {
+        this._invalidateCache(endpoint);
+        const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
+        const res = await this._fetchWithTimeout(url, {
+            method: 'DELETE',
+            headers: this.getHeaders(),
+        });
+        if (res.status === 204) return { code: 204, data: null };
+        const txt = await res.text();
+        try {
+            return { code: res.status, data: txt ? JSON.parse(txt) : null };
+        } catch (e) {
+            return { code: res.status, data: { raw: txt } };
+        }
+    },
+
     async uploadFile(endpoint, file, fileName) {
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
@@ -2021,6 +2039,29 @@ const RobawsAPI = {
             log.push('PUT werkbon exception: ' + e.message);
         }
 
+        // v211: een werkbon zónder velden (PUT mislukt) is een onbruikbaar
+        // spook-record — geen titel/klant/datum/verantwoordelijke, onvindbaar
+        // in elke filter, en de uren zouden eraan blijven hangen. Voorheen
+        // ging de flow gewoon door en kreeg de gebruiker "verstuurd ✓".
+        // Nu: lege werkbon direct opruimen en een ECHTE fout teruggeven,
+        // zodat de app veilig opnieuw kan proberen.
+        const putOk = !!(putResult && (putResult.code === 200 || putResult.code === 201 || putResult.code === 204));
+        if (!putOk) {
+            try {
+                const delRes = await this.del(`work-orders/${workOrderId}`);
+                log.push('Rollback lege werkbon: DELETE → ' + (delRes && delRes.code));
+            } catch (e) {
+                log.push('Rollback mislukt: ' + (e && e.message));
+            }
+            try { localStorage.setItem('qe_last_wo_verify', JSON.stringify({ putFailed: true, log })); } catch(e){}
+            return {
+                success: false,
+                error: 'Werkbon-velden konden niet weggeschreven worden (code ' + (putResult && putResult.code) + ') — er is niets verstuurd, probeer opnieuw',
+                workOrderId: null,
+                log,
+            };
+        }
+
         // Stap 2: POST elke time-entry naar /work-orders/{id}/time-entries
         let timeSuccess = 0;
         const timeErrors = [];
@@ -2911,6 +2952,10 @@ const RobawsAPI = {
         // i.p.v. enkel "2900".
         let invoicePostalCode = '';
         let invoiceCity       = '';
+        // v211: status-updates die falen horen zichtbaar te zijn, maar mogen
+        // de betaling NIET blokkeren (het factuurbedrag zelf klopt). Aparte
+        // lijst naast errors[] (die wél geld-fouten bevat).
+        const statusErrors = [];
 
         // Stap 1: Werkorder details
         const woResult = await this.get(`work-orders/${workOrderId}`);
@@ -3021,7 +3066,13 @@ const RobawsAPI = {
                     stringValue: paymentMethod,
                 };
             }
-            await this.put(`sales-invoices/${invoiceId}`, invFull);
+            // v211: deze PUT was ongecontroleerd — faalde hij, dan had de
+            // factuur geen 'Technieker'-status en viel hij buiten de
+            // nakijklijst van bureel (werd dus nooit verstuurd).
+            const statusPut = await this.put(`sales-invoices/${invoiceId}`, invFull);
+            if (statusPut.code !== 200 && statusPut.code !== 204) {
+                statusErrors.push('factuur-status/verantwoordelijke niet gezet (code ' + statusPut.code + ')');
+            }
         }
 
         // Stap 3: Line items toevoegen
@@ -3123,7 +3174,16 @@ const RobawsAPI = {
                 if (h.type && h.type !== 'klant') continue;
                 const dur = Number(h.duration || 0);
                 const salePrice = Number(h.salePrice || 0);
-                if (dur <= 0 || salePrice <= 0) continue;
+                if (dur <= 0) continue;
+                // v211: uren met prijs €0/null werden hier STIL overgeslagen —
+                // volledige arbeid ontbrak dan op de factuur zonder dat iemand
+                // het zag (bv. als de uurcode-prijs niet geladen was). Nu gaat
+                // dit in errors[] en blokkeert de app de betaling.
+                if (salePrice <= 0) {
+                    errors.push({ line: 'Werkuren (' + (dur / 60).toFixed(2) + 'u)', code: 'GEEN_PRIJS',
+                        error: 'Uurcode zonder verkoopprijs — uren NIET op de factuur gezet' });
+                    continue;
+                }
                 const artKey = h.articleId || '_default';
                 if (!hoursByArticle[artKey]) hoursByArticle[artKey] = { totalMinutes: 0, salePrice, articleId: h.articleId };
                 hoursByArticle[artKey].totalMinutes += dur;
@@ -3278,11 +3338,19 @@ const RobawsAPI = {
                             stringValue: paymentMethod,
                         };
                     }
-                    await this.put(`work-orders/${workOrderId}`, woFull.data);
-                    console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
+                    // v211: resultaat checken — een werkbon die níet op
+                    // 'gefactureerd' raakt, blijft op 'Uitgevoerd' staan en
+                    // kan later dubbel gefactureerd worden.
+                    const woPut = await this.put(`work-orders/${workOrderId}`, woFull.data);
+                    if (woPut.code === 200 || woPut.code === 204) {
+                        console.log(`[RobawsAPI] Werkbon ${workOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
+                    } else {
+                        statusErrors.push('werkbon-status niet op gefactureerd (code ' + woPut.code + ')');
+                    }
                 }
             } catch(e) {
                 console.warn('[RobawsAPI] Werkbon status/Betaling updaten mislukt:', e);
+                statusErrors.push('werkbon-status niet op gefactureerd (' + (e && e.message) + ')');
             }
 
             // v88: Sales order status + Betaling extra-field updaten
@@ -3299,11 +3367,16 @@ const RobawsAPI = {
                                 stringValue: paymentMethod,
                             };
                         }
-                        await this.put(`sales-orders/${woSalesOrderId}`, soFull.data);
-                        console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
+                        const soPut = await this.put(`sales-orders/${woSalesOrderId}`, soFull.data);
+                        if (soPut.code === 200 || soPut.code === 204) {
+                            console.log(`[RobawsAPI] Order ${woSalesOrderId} status → ${newStatus}, Betaling → ${paymentMethod}`);
+                        } else {
+                            statusErrors.push('order-status niet op gefactureerd (code ' + soPut.code + ')');  // v211
+                        }
                     }
                 } catch(e) {
                     console.warn('[RobawsAPI] Order status/Betaling updaten mislukt:', e);
+                    statusErrors.push('order-status niet op gefactureerd (' + (e && e.message) + ')');
                 }
             }
         }
@@ -3332,6 +3405,7 @@ const RobawsAPI = {
             },
             lineItemsAdded: addedLines,
             errors,
+            statusErrors,  // v211: niet-blokkerende status-fouten (apart van geld-fouten)
             paymentMethod,
             salesOrderId: woSalesOrderId,
             workOrder: {
