@@ -596,10 +596,10 @@ const APIBridge = {
         }
 
         if (action === 'process') {
-            if (!navigator.onLine) {
-                return this.jsonResponse({ success: true, processed: 0, failed: 0,
-                    remaining: this._readWerkbonQueue().length, offline: true });
-            }
+            // v207: geen navigator.onLine-gate — die is in de Android-WebView
+            // onbetrouwbaar (blijft vaak true in vliegtuigmodus en kan ook
+            // vals op false blijven hangen). Echt offline → de submits falen
+            // gewoon snel met een netwerkfout en de entries blijven staan.
             if (this._queueProcessing) {
                 return this.jsonResponse({ success: true, processed: 0, failed: 0, busy: true,
                     remaining: this._readWerkbonQueue().length });

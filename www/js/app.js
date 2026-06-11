@@ -1452,10 +1452,9 @@ const app = {
             const cRes = await fetch('api/werkbon-queue.php?action=count');
             const c = await cRes.json();
             if (!c || !c.count) return;
-            if (!navigator.onLine) {
-                this.toast(`${c.count} werkbon(nen) wachten op internetverbinding`);
-                return;
-            }
+            // v207: geen navigator.onLine-gate (onbetrouwbaar in de WebView):
+            // we proberen gewoon. Echt offline = snelle netwerkfout per entry,
+            // en die herkennen we hieronder aan de foutmelding.
             const res = await fetch('api/werkbon-queue.php?action=process', { method: 'POST' });
             const data = await res.json();
             if (data.processed > 0) {
@@ -1464,10 +1463,18 @@ const app = {
                 if (this.currentScreen === 'screenPlanning') this.loadPlanning();
             }
             if (data.failed > 0) {
-                // v206: falen is zichtbaar (rode toast) — entries blijven staan
-                // en worden bij de volgende sync opnieuw geprobeerd.
-                this.toast(`${data.failed} werkbon(nen) in wachtrij konden niet verstuurd worden — nieuwe poging bij volgende sync`, true);
-                console.warn('Werkbon queue fouten:', data.errors);
+                const errs = data.errors || [];
+                const alleenNetwerk = errs.length > 0 &&
+                    errs.every(e => /failed to fetch|net::err|networkerror/i.test(String(e)));
+                if (alleenNetwerk) {
+                    // v207: gewoon nog geen verbinding — informeren, geen alarm
+                    this.toast(`${data.remaining} werkbon(nen) wachten op internetverbinding`);
+                } else {
+                    // v206: echt falen is zichtbaar — entries blijven staan en
+                    // worden bij de volgende poging opnieuw geprobeerd.
+                    this.toast(`${data.failed} werkbon(nen) in wachtrij konden niet verstuurd worden — nieuwe poging volgt automatisch`, true);
+                    console.warn('Werkbon queue fouten:', errs);
+                }
             }
         } catch (e) { console.warn('[Queue] verwerken mislukt:', e && e.message); }
     },
@@ -5661,15 +5668,21 @@ const app = {
             }
 
         } catch (err) {
-            if (!navigator.onLine && !createdWorkOrderId) {
+            // v207: navigator.onLine is in de Android-WebView onbetrouwbaar
+            // (blijft vaak true in vliegtuigmodus) → herken netwerkfouten ook
+            // aan de fetch-foutmelding zelf, anders wordt er nooit gequeued.
+            const msg = String((err && err.message) || err || '');
+            const isNetworkError = !navigator.onLine ||
+                /failed to fetch|net::err|networkerror/i.test(msg);
+            if (isNetworkError && !createdWorkOrderId) {
                 // v206: foto's, handtekening en betaalmethode mee de wachtrij in
                 await this.queueWerkbonOffline(data, { signatureName, signatureData, paymentMethod });
-            } else if (!navigator.onLine) {
+            } else if (isNetworkError) {
                 // v206: werkbon staat al in Robaws — requeuen zou een duplicaat
                 // maken. Eerlijk melden wat er nog ontbreekt.
                 this.toast('Werkbon staat al in Robaws, maar factuur/foto\'s konden niet verwerkt worden (verbinding weg). NIET opnieuw versturen — meld dit aan bureel.', true);
             } else {
-                this.toast('Fout: ' + err.message, true);
+                this.toast('Fout: ' + msg, true);
             }
         } finally {
             this._submitInProgress = false;
@@ -5795,14 +5808,19 @@ const app = {
             this.screenHistory = [];
             this.loadPlanning();
         } catch (err) {
-            if (!navigator.onLine && !createdWorkOrderId) {
+            // v207: zelfde netwerkfout-detectie als executeSubmitFlow
+            // (navigator.onLine is onbetrouwbaar in de WebView).
+            const msg = String((err && err.message) || err || '');
+            const isNetworkError = !navigator.onLine ||
+                /failed to fetch|net::err|networkerror/i.test(msg);
+            if (isNetworkError && !createdWorkOrderId) {
                 // v206: monteur heeft geen handtekening/factuur; betaalmethode
                 // expliciet op null zodat geen oude selectie meelekt.
                 await this.queueWerkbonOffline(data, { paymentMethod: null });
-            } else if (!navigator.onLine) {
+            } else if (isNetworkError) {
                 this.toast('Werkbon staat al in Robaws, maar foto\'s konden niet verstuurd worden (verbinding weg). NIET opnieuw versturen.', true);
             } else {
-                this.toast('Fout: ' + err.message, true);
+                this.toast('Fout: ' + msg, true);
             }
         } finally {
             this._submitInProgress = false;
@@ -10348,7 +10366,13 @@ const app = {
     },
 
     async _pollForNewPlanning() {
-        if (!navigator.onLine || !this.currentUser) return;
+        if (!this.currentUser) return;
+        // v207: wachtrij elke poll-tik mee laten proberen — het 'online'-event
+        // en navigator.onLine zijn in de WebView onbetrouwbaar, dus dit is de
+        // garantie dat gequeue'de werkbonnen binnen 5 min na herstel vertrekken.
+        // (Fire-and-forget; processOfflineQueue stopt zelf direct bij count=0.)
+        this.processOfflineQueue();
+        if (!navigator.onLine) return;
         try {
             const date = this._localDateStr();
             const result = await RobawsAPI.getPlanning(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
