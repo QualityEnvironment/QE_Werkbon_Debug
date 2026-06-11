@@ -3630,8 +3630,11 @@ const app = {
         if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Opslaan...'; }
 
         try {
-            // Haal actuele klantdata op uit Robaws (PUT = FULL REPLACE)
-            const clientResult = await RobawsAPI.get(`clients/${clientId}`);
+            // Haal actuele klantdata op uit Robaws (PUT = FULL REPLACE).
+            // v210: bypassCache — de client-cache (15 min TTL) kon hier een
+            // verouderd record aanleveren, waardoor de full-replace-PUT
+            // tussentijdse kantoorwijzigingen stil terugdraaide.
+            const clientResult = await RobawsAPI.get(`clients/${clientId}`, { bypassCache: true });
             if (clientResult.code !== 200) throw new Error('Klant niet gevonden');
             const clientData = clientResult.data;
 
@@ -3646,6 +3649,10 @@ const app = {
 
             // Update lokaal in currentWO
             this.currentWO.client.vatTariffId = newVatId;
+            // v210: óók op de werkbon zelf — dit is wat de factuur gebruikt.
+            // Voorheen werd het gekozen id hier niet doorgezet en kon de
+            // preview-reconstructie het overschrijven.
+            this.currentWO.vatTariffId = String(newVatId);
             const selectedTariff = (this._vatTariffsCache || []).find(t => String(t.id) === String(newVatId));
             if (selectedTariff) {
                 this.currentWO.client.vatPercentage = selectedTariff.percentage ?? null;
@@ -4938,19 +4945,25 @@ const app = {
             }
         }
 
-        // Bewaar vatTariffId op currentWO voor factuur-aanmaak
-        // Robaws vat-tariff IDs: 1=21%, 2=Verlegd (0%), 3=0%, 4=6%   // v182: 2 = verlegd, niet 12%
-        // BUG-fix: Robaws kan vatPercentage als string ("6") teruggeven.
-        // De vorige === vergelijkingen faalden dan stilletjes en de
-        // factuur kreeg de default 6% (vatTariffId='4'), waardoor
-        // 21%-klanten een verkeerd tarief op hun factuur kregen.
-        const vatPctNum = (client.vatPercentage === null || client.vatPercentage === undefined)
-            ? null
-            : Number(client.vatPercentage);
-        if (vatPctNum === 6) this.currentWO.vatTariffId = '4';
-        else if (vatPctNum === 21) this.currentWO.vatTariffId = '1';
-        else if (vatPctNum === 0) this.currentWO.vatTariffId = '3';
-        // v182: 12% -> id 2 mapping VERWIJDERD (id 2 = Verlegd/0%, niet 12%).
+        // Bewaar vatTariffId op currentWO voor factuur-aanmaak.
+        // v210: het tarief-ID van de KLANT is de bron van waarheid — de oude
+        // percentage→id-reconstructie gooide het gekozen id weg. Daardoor
+        // bereikte "Verlegd" (id 2, 0%) de factuur nooit: 0% werd id '3', of
+        // het viel terug op de 6%-default. Reconstructie blijft enkel als
+        // noodfallback voor 6/21 (eenduidig); 0% zonder id wordt bewust NIET
+        // geraden — de submit blokkeert dan met de vraag het tarief in te
+        // stellen via "BTW wijzigen".
+        if (client.vatTariffId != null && String(client.vatTariffId) !== '') {
+            this.currentWO.vatTariffId = String(client.vatTariffId);
+        } else {
+            // Robaws kan vatPercentage als string ("6") teruggeven → Number()
+            const vatPctNum = (client.vatPercentage === null || client.vatPercentage === undefined)
+                ? null
+                : Number(client.vatPercentage);
+            if (vatPctNum === 6) this.currentWO.vatTariffId = '4';
+            else if (vatPctNum === 21) this.currentWO.vatTariffId = '1';
+            // 0%: niet raden — Verlegd (id 2) en 0% (id 3) zijn fiscaal verschillend.
+        }
 
         this.navigate('screenWerkbon');
     },
@@ -5457,6 +5470,18 @@ const app = {
             return;
         }
 
+        // v210: zonder gekend BTW-tarief géén factuur-flow — de stille
+        // 6%-default is weg. Uitzondering: "Geen factuur maken" (geen factuur,
+        // dus geen tarief nodig).
+        const _noInvoiceChecked = !!(document.getElementById('wbNoInvoice') &&
+                                     document.getElementById('wbNoInvoice').checked);
+        const _vatIdKnown = this.currentWO.vatTariffId != null &&
+                            String(this.currentWO.vatTariffId) !== '';
+        if (!_noInvoiceChecked && !_vatIdKnown) {
+            this.toast('Geen BTW-tarief gekend voor deze klant — stel het in via "BTW wijzigen" op de info-tab', true);
+            return;
+        }
+
         const paymentMethod = this._selectedPaymentMethod;
         const btn = document.getElementById('btnSubmitWerkbon');
         btn.disabled = true;
@@ -5560,7 +5585,7 @@ const app = {
             this.toast('Factuur aanmaken...');
             const invoicePayload = {
                 workOrderId,
-                vatTariffId: this.currentWO.vatTariffId || '4',
+                vatTariffId: String(this.currentWO.vatTariffId),  // v210: gegarandeerd door pre-submit-guard; default '4' weg
                 clientId: this.currentWO.clientId || this.currentWO.endClientId,
                 companyId: this.currentWO.companyId,
                 salesOrderId: this.currentWO.salesOrderId || null,
@@ -5621,7 +5646,7 @@ const app = {
             // Math: gross = net / (1 - 0.015), fee = gross - net. Zo ontvangt QE
             // netto exact het originele factuurbedrag nadat Mollie z'n 1.5%
             // afhoudt. Robaws verwacht `price` excl. BTW → we delen door
-            // (1 + btw-rate). VatTariffId-map: 1=21%, 2=12%, 3=0%, 4=6%.
+            // (1 + btw-rate).
             let transactionFeeAdded = false;
             const CARD_PAYMENT_METHODS = ['Mollie Tap', 'Viva wallet'];
             if (invoiceId && CARD_PAYMENT_METHODS.includes(paymentMethod)) {
@@ -5631,9 +5656,23 @@ const app = {
                     const grossTotal = originalTotal / (1 - FEE_RATE);
                     const feeInclVat = grossTotal - originalTotal;
 
-                    const vatTariffId = String(this.currentWO.vatTariffId || '4');
-                    const vatRateMap = { '1': 0.21, '2': 0.00, '3': 0.00, '4': 0.06 };  // v182: id 2 = Verlegd (0%)
-                    const vatRate = vatRateMap[vatTariffId] || 0;
+                    // v210: tarief-id is gegarandeerd (pre-submit-guard), de
+                    // default '4' is weg. Percentage uit de LIVE Robaws-
+                    // tariefmap (één bron); de lokale tabel is enkel nood-
+                    // fallback en kent nu ook id 5 (21%), die ontbrak —
+                    // daardoor kreeg de fee-lijn bij zo'n klant 0% excl-prijs.
+                    const vatTariffId = String(this.currentWO.vatTariffId);
+                    let vatRate = null;
+                    try {
+                        const vmap = await RobawsAPI.getVatTariffMap();
+                        const pct = (vmap && vmap[vatTariffId]) ? vmap[vatTariffId].percentage : null;
+                        if (pct != null && !isNaN(Number(pct))) vatRate = Number(pct) / 100;
+                    } catch (_) {}
+                    if (vatRate == null) {
+                        const vatRateMap = { '1': 0.21, '2': 0.00, '3': 0.00, '4': 0.06, '5': 0.21 };
+                        vatRate = (vatRateMap[vatTariffId] !== undefined) ? vatRateMap[vatTariffId] : 0;
+                        console.warn('[BTW] live tariefmap onbeschikbaar — noodfallback gebruikt voor id', vatTariffId);
+                    }
                     const feeExclVat = feeInclVat / (1 + vatRate);
                     const roundedFeeExclVat = Math.round(feeExclVat * 100) / 100;
 
@@ -5663,7 +5702,7 @@ const app = {
             }
 
             if (customArticlesForInvoice.length > 0 && invoiceId) {
-                const vatTariffId = this.currentWO.vatTariffId || '4';
+                const vatTariffId = String(this.currentWO.vatTariffId);  // v210: default '4' weg
                 for (const m of customArticlesForInvoice) {
                     try {
                         const li = {

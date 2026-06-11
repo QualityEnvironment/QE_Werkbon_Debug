@@ -2887,13 +2887,21 @@ const RobawsAPI = {
     // =============================================
     // FACTUUR AANMAKEN VANUIT WERKORDER
     // =============================================
-    async createInvoice({ workOrderId, paymentConditionId = '9', vatTariffId = '4',
+    async createInvoice({ workOrderId, paymentConditionId = '9', vatTariffId = null,
         clientId: passedClientId = null, companyId: passedCompanyId = null,
         salesOrderId = null, paymentMethod = null, notes = '',
         materials = [], hours = [], onderhoud = false,
         userId = null, installationIds = [] }) {
 
         const toStr = v => (v == null || v === '') ? null : String(v);
+
+        // v210: GEEN stille BTW-default meer (was '4' = 6% — een klant zonder
+        // gekend tarief kreeg zo geruisloos 6% op de hele factuur). Zonder
+        // expliciet tarief wordt de factuur geweigerd; de app blokkeert dit
+        // al vóór de submit, dus dit is het laatste vangnet.
+        if (vatTariffId == null || String(vatTariffId) === '') {
+            return { success: false, error: 'Geen BTW-tarief meegegeven — factuur niet aangemaakt. Stel het BTW-tarief van de klant in (info-tab → BTW wijzigen).' };
+        }
 
         // v112: Postcode van de werf — bewaard in functie-scope. Wordt gevuld
         // wanneer we het installatie-adres ophalen voor `siteAddress`, en later
@@ -3201,11 +3209,22 @@ const RobawsAPI = {
             // We ondersteunen nu zowel '1' als '5' als 21% (Robaws blijkt
             // historisch beide te gebruiken) en loggen een waarschuwing
             // i.p.v. stille foute berekening.
-            const vatRates = { '1': 0.21, '2': 0, '3': 0, '4': 0.06, '5': 0.21 };  // v182: id 2 = Verlegd (0%), niet 12%
+            // v210: percentages eerst uit de LIVE Robaws-tariefmap (één bron,
+            // dekt ook nieuwe/gewijzigde tarieven); de lokale tabel is enkel
+            // nog noodfallback als de map niet laadt.
+            let liveVatMap = null;
+            try { liveVatMap = await this.getVatTariffMap(); } catch (_) {}
+            const vatRates = { '1': 0.21, '2': 0, '3': 0, '4': 0.06, '5': 0.21 };  // noodfallback (id 2 = Verlegd, 0%)
             for (const l of lines) {
                 const lineExcl = (Number(l.quantity) || 0) * (Number(l.price) || 0) * (1 - (Number(l.discount) || 0) / 100);
                 const tariffKey = String(l.vatTariffId);
-                let vatRate = vatRates[tariffKey];
+                let vatRate;
+                const livePct = (liveVatMap && liveVatMap[tariffKey]) ? liveVatMap[tariffKey].percentage : null;
+                if (livePct != null && !isNaN(Number(livePct))) {
+                    vatRate = Number(livePct) / 100;
+                } else {
+                    vatRate = vatRates[tariffKey];
+                }
                 if (vatRate === undefined) {
                     console.warn('[Factuur] Onbekend vatTariffId:', tariffKey, '— gerekend met 0% (controleer in Robaws)');
                     vatRate = 0;
@@ -3604,7 +3623,13 @@ const RobawsAPI = {
         } catch (e) {
             console.warn('[RobawsAPI] getVatTariffMap faalde:', e && e.message);
         }
-        this._vatTariffMapCache = map;
+        // v210: een LEGE map niet cachen — één mislukte fetch bij opstart
+        // betekende voorheen de hele sessie geen BTW-percentages (kaarten
+        // zonder %, fee-berekening op noodfallback). Nu wordt het bij de
+        // volgende aanroep gewoon opnieuw geprobeerd.
+        if (Object.keys(map).length > 0) {
+            this._vatTariffMapCache = map;
+        }
         return map;
     },
 
