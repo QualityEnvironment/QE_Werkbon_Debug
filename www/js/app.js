@@ -1465,7 +1465,7 @@ const app = {
             if (data.failed > 0) {
                 const errs = data.errors || [];
                 const alleenNetwerk = errs.length > 0 &&
-                    errs.every(e => /failed to fetch|net::err|networkerror/i.test(String(e)));
+                    errs.every(e => /failed to fetch|net::err|networkerror|timeout/i.test(String(e)));
                 if (alleenNetwerk) {
                     // v207: gewoon nog geen verbinding — informeren, geen alarm
                     this.toast(`${data.remaining} werkbon(nen) wachten op internetverbinding`);
@@ -5246,14 +5246,16 @@ const app = {
                 const blob = new Blob([bytes], { type: mime });
                 const fd = new FormData();
                 fd.append('file', blob, name);
-                const res = await fetch(BASE + '/sales-invoices/' + invoiceId + '/documents', {
+                // v207: via de timeout-wrapper — een rauwe fetch kon hier op
+                // dode wifi minutenlang hangen, midden in de submit-keten.
+                const res = await RobawsAPI._fetchWithTimeout(BASE + '/sales-invoices/' + invoiceId + '/documents', {
                     method: 'POST',
                     headers: {
                         'Authorization': 'Basic ' + auth,
                         'X-Tenant': RobawsAPI.TENANT,
                     },
                     body: fd,
-                });
+                }, RobawsAPI._TIMEOUT_UPLOAD_MS);
                 console.log('[Photo→Invoice] ' + name + ' → HTTP ' + res.status);
             } catch (e) {
                 console.warn('[Photo→Invoice] upload mislukt voor ' + name + ':', e && e.message);
@@ -5673,7 +5675,7 @@ const app = {
             // aan de fetch-foutmelding zelf, anders wordt er nooit gequeued.
             const msg = String((err && err.message) || err || '');
             const isNetworkError = !navigator.onLine ||
-                /failed to fetch|net::err|networkerror/i.test(msg);
+                /failed to fetch|net::err|networkerror|timeout/i.test(msg);
             if (isNetworkError && !createdWorkOrderId) {
                 // v206: foto's, handtekening en betaalmethode mee de wachtrij in
                 await this.queueWerkbonOffline(data, { signatureName, signatureData, paymentMethod });
@@ -5812,7 +5814,7 @@ const app = {
             // (navigator.onLine is onbetrouwbaar in de WebView).
             const msg = String((err && err.message) || err || '');
             const isNetworkError = !navigator.onLine ||
-                /failed to fetch|net::err|networkerror/i.test(msg);
+                /failed to fetch|net::err|networkerror|timeout/i.test(msg);
             if (isNetworkError && !createdWorkOrderId) {
                 // v206: monteur heeft geen handtekening/factuur; betaalmethode
                 // expliciet op null zodat geen oude selectie meelekt.

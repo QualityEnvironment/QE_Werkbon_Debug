@@ -115,10 +115,34 @@ const RobawsAPI = {
         }
     },
 
+    // v207: fetch met harde timeout. In de Android-WebView kan een fetch op
+    // "dode" wifi (verbonden maar geen internet, vliegtuigmodus-randgevallen)
+    // MINUTENLANG hangen — en navigator.onLine zegt dan ook nog true. Eén
+    // centrale timeout maakt elke Robaws-call eindig; de foutmelding bevat
+    // "timeout" zodat de netwerkfout-detectie in app.js hem herkent en de
+    // werkbon alsnog netjes de offline-wachtrij in gaat.
+    _TIMEOUT_MS: 20000,          // get/post/put
+    _TIMEOUT_UPLOAD_MS: 90000,   // uploads (foto's op traag 4G)
+    async _fetchWithTimeout(url, opts, timeoutMs) {
+        const ms = timeoutMs || this._TIMEOUT_MS;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), ms);
+        try {
+            return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+        } catch (e) {
+            if (e && (e.name === 'AbortError' || /abort/i.test(String(e && e.message)))) {
+                throw new Error('Netwerk-timeout na ' + Math.round(ms / 1000) + 's (geen verbinding?)');
+            }
+            throw e;
+        } finally {
+            clearTimeout(timer);
+        }
+    },
+
     /** Rauwe fetch zonder cache (interne helper). */
     async _rawGet(key) {
         const url = this.BASE_URL + '/' + key;
-        const res = await fetch(url, { headers: this.getHeaders() });
+        const res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
         if (!txt) return { code: res.status, data: null };
@@ -167,7 +191,7 @@ const RobawsAPI = {
     async post(endpoint, body) {
         this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const res = await fetch(url, {
+        const res = await this._fetchWithTimeout(url, {   // v207: timeout
             method: 'POST',
             headers: this.getHeaders(),
             body: JSON.stringify(body),
@@ -186,7 +210,7 @@ const RobawsAPI = {
     async put(endpoint, body) {
         this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const res = await fetch(url, {
+        const res = await this._fetchWithTimeout(url, {   // v207: timeout
             method: 'PUT',
             headers: this.getHeaders(),
             body: JSON.stringify(body),
@@ -211,7 +235,7 @@ const RobawsAPI = {
         const formData = new FormData();
         formData.append('file', file, fileName);
 
-        const res = await fetch(url, {
+        const res = await this._fetchWithTimeout(url, {   // v207: ruime upload-timeout
             method: 'POST',
             headers: {
                 'Authorization': 'Basic ' + auth,
@@ -220,7 +244,7 @@ const RobawsAPI = {
                 // Geen Content-Type — browser zet multipart boundary automatisch
             },
             body: formData,
-        });
+        }, this._TIMEOUT_UPLOAD_MS);
         // BUG-fix: zelfde JSON-parse safety als bij put().
         const txt = await res.text();
         try {
