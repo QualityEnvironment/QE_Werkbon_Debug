@@ -1441,23 +1441,35 @@ const app = {
             console.log('Sync overgeslagen (offline?)');
         }
 
-        // Verwerk offline werkbonnen als we online zijn
-        if (navigator.onLine) {
-            this.processOfflineQueue();
-        }
+        // v206: altijd aanroepen — processOfflineQueue checkt zelf online/offline
+        // en toont offline alleen hoeveel werkbonnen er wachten.
+        this.processOfflineQueue();
     },
 
     async processOfflineQueue() {
         try {
+            // v206: eerst tellen — lege wachtrij = stil blijven
+            const cRes = await fetch('api/werkbon-queue.php?action=count');
+            const c = await cRes.json();
+            if (!c || !c.count) return;
+            if (!navigator.onLine) {
+                this.toast(`${c.count} werkbon(nen) wachten op internetverbinding`);
+                return;
+            }
             const res = await fetch('api/werkbon-queue.php?action=process', { method: 'POST' });
             const data = await res.json();
             if (data.processed > 0) {
-                this.toast(`${data.processed} werkbon(nen) uit wachtrij verstuurd`);
+                this.toast(`${data.processed} offline werkbon(nen) alsnog verstuurd`);
+                // hasWerkbon is veranderd → planning verversen indien zichtbaar
+                if (this.currentScreen === 'screenPlanning') this.loadPlanning();
             }
             if (data.failed > 0) {
+                // v206: falen is zichtbaar (rode toast) — entries blijven staan
+                // en worden bij de volgende sync opnieuw geprobeerd.
+                this.toast(`${data.failed} werkbon(nen) in wachtrij konden niet verstuurd worden — nieuwe poging bij volgende sync`, true);
                 console.warn('Werkbon queue fouten:', data.errors);
             }
-        } catch (e) { /* skip */ }
+        } catch (e) { console.warn('[Queue] verwerken mislukt:', e && e.message); }
     },
 
     // ========================================
@@ -4902,31 +4914,27 @@ const app = {
         }
     },
 
-    async queueWerkbonOffline(data) {
+    async queueWerkbonOffline(data, extra) {
+        // v206: gebruikt de CANONIEKE payload (_buildWerkbonPayload — zelfde
+        // als online) + foto's, handtekening, betaalmethode en eenmalige
+        // artikels. Voorheen werd hier een afwijkende payload gebouwd
+        // (zonder onderhoud/timeAndMaterial/isCustom-filter, zonder foto's of
+        // handtekening) én gooide de bridge alles weg met een fake-succes →
+        // offline werkbonnen waren definitief verloren.
         try {
-            const payload = {
-                workOrderId: this.currentWO.salesOrderId || null,
-                salesOrderId: this.currentWO.salesOrderId || null,
-                planningItemId: this.currentWO.id,
-                clientId: this.currentWO.clientId,
-                installationIds: this.currentWO.installationIds || [],
-                employeeId: this.currentUser.robawsEmployeeId,
-                userId: this.currentUser.robawsUserId,
-                clientName: (this.currentWO.client && this.currentWO.client.name) || '',
-                summary: this.currentWO.summary || 'Werkbon via QE App',
-                date: this._localDateStr(this.currentDate),
-                materials: data.materials.map(m => ({
-                    articleId: m.id,
-                    name: m.name,
-                    quantity: m.quantity,
-                    unitPrice: m.salePrice ?? m.unitPrice ?? 0,
-                    costPrice: m.costPrice || 0,
-                })),
-                hours: this._roundHoursForSubmit(data.hours),
-                notes: data.notes,
-                uurcode: this.selectedUurcode,
-                verplaatsingCode: this.verplaatsingCode,
-            };
+            const payload = this._buildWerkbonPayload(data);
+            // Eenmalige artikels apart meegeven — de queue-verwerking zet ze
+            // als line-item op de werkbon (zelfde v93-afhandeling als online).
+            payload.customArticles = (data.materials || [])
+                .filter(m => m.isCustom)
+                .map(m => ({ name: m.name, quantity: m.quantity,
+                             salePrice: m.salePrice ?? m.unitPrice ?? 0 }));
+            payload.photos = (data.photos || []).map(p => ({ data: p.data, name: p.name }));
+            if (extra && extra.signatureData) {
+                payload.signatureData = extra.signatureData;
+                payload.signatureName = extra.signatureName || '';
+            }
+            if (extra && ('paymentMethod' in extra)) payload.paymentMethod = extra.paymentMethod;
 
             const res = await fetch('api/werkbon-queue.php?action=add', {
                 method: 'POST',
@@ -4935,18 +4943,21 @@ const app = {
             });
             const result = await res.json();
 
-            if (result.success) {
-                this.toast('Werkbon in wachtrij geplaatst (wordt verstuurd bij verbinding)');
-                const woId = this.currentWO.id;
-                this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
-                this.submittedWOs.push(String(woId));
+            if (result.success && result.queued) {
+                if (result.photosDropped) {
+                    this.toast('Werkbon in wachtrij, maar de foto\'s pasten niet in de offline-opslag — voeg ze na verzending opnieuw toe', true);
+                } else {
+                    this.toast('Geen internet — werkbon staat in de wachtrij en wordt automatisch verstuurd');
+                }
+                this._markWOSubmitted(data);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
             } else {
-                this.toast('Kon werkbon niet in wachtrij plaatsen');
+                // v206: GEEN fake-succes — de invoer blijft in woData bewaard.
+                this.toast('Kon werkbon niet in wachtrij plaatsen: ' + ((result && result.error) || 'onbekend') + ' — je invoer blijft bewaard', true);
             }
         } catch (e) {
-            this.toast('Werkbon kon niet opgeslagen worden');
+            this.toast('Werkbon kon niet offline bewaard worden — je invoer blijft op dit toestel staan', true);
         }
     },
 
@@ -5323,6 +5334,10 @@ const app = {
         btn.disabled = true;
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Verwerken...';
 
+        // v206: zodra de werkbon in Robaws staat mag een fout NIET meer tot
+        // requeue leiden — de queue zou anders een tweede werkbon aanmaken.
+        let createdWorkOrderId = null;
+
         // v205: vlag pas ná validaties en knop-setup, als állerlaatste vóór de
         // try — de finally hieronder reset hem dus gegarandeerd altijd.
         this._submitInProgress = true;
@@ -5353,6 +5368,7 @@ const app = {
             }
 
             const workOrderId = werkbonResult.workOrderId;
+            createdWorkOrderId = workOrderId;  // v206: vanaf hier nooit requeuen
 
             // v93/v94: Eenmalige artikels → toevoegen als line-item op WERKBON (zonder articleId)
             // + taak voor Felicity (userId 6) zodat zij het echte artikel in Robaws aanmaakt.
@@ -5645,10 +5661,15 @@ const app = {
             }
 
         } catch (err) {
-            if (!navigator.onLine) {
-                await this.queueWerkbonOffline(data);
+            if (!navigator.onLine && !createdWorkOrderId) {
+                // v206: foto's, handtekening en betaalmethode mee de wachtrij in
+                await this.queueWerkbonOffline(data, { signatureName, signatureData, paymentMethod });
+            } else if (!navigator.onLine) {
+                // v206: werkbon staat al in Robaws — requeuen zou een duplicaat
+                // maken. Eerlijk melden wat er nog ontbreekt.
+                this.toast('Werkbon staat al in Robaws, maar factuur/foto\'s konden niet verwerkt worden (verbinding weg). NIET opnieuw versturen — meld dit aan bureel.', true);
             } else {
-                this.toast('Fout: ' + err.message);
+                this.toast('Fout: ' + err.message, true);
             }
         } finally {
             this._submitInProgress = false;
@@ -5694,6 +5715,9 @@ const app = {
         const btn = document.getElementById('btnSubmitWerkbon');
         btn.disabled = true;
         btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;margin:0 auto"></div> Versturen...';
+
+        // v206: zelfde requeue-beveiliging als executeSubmitFlow.
+        let createdWorkOrderId = null;
 
         // v205: vlag als állerlaatste vóór de try — finally reset hem altijd.
         this._submitInProgress = true;
@@ -5743,6 +5767,7 @@ const app = {
 
             // Foto's uploaden als er zijn
             const workOrderId = werkbonResult.workOrderId;
+            createdWorkOrderId = workOrderId;  // v206: vanaf hier nooit requeuen
             if (data.photos.length > 0 && workOrderId) {
                 try {
                     await fetch('api/upload-photo.php', {
@@ -5770,10 +5795,14 @@ const app = {
             this.screenHistory = [];
             this.loadPlanning();
         } catch (err) {
-            if (!navigator.onLine) {
-                await this.queueWerkbonOffline(data);
+            if (!navigator.onLine && !createdWorkOrderId) {
+                // v206: monteur heeft geen handtekening/factuur; betaalmethode
+                // expliciet op null zodat geen oude selectie meelekt.
+                await this.queueWerkbonOffline(data, { paymentMethod: null });
+            } else if (!navigator.onLine) {
+                this.toast('Werkbon staat al in Robaws, maar foto\'s konden niet verstuurd worden (verbinding weg). NIET opnieuw versturen.', true);
             } else {
-                this.toast('Fout: ' + err.message);
+                this.toast('Fout: ' + err.message, true);
             }
         } finally {
             this._submitInProgress = false;

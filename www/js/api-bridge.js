@@ -504,6 +504,12 @@ const APIBridge = {
         body.userId = user.robawsUserId;
 
         const result = await RobawsAPI.submitWerkbon(body);
+        // v206: stond ditzelfde planning-item nog in de offline-wachtrij,
+        // dan vervangt deze live submit die entry (anders zou de queue hem
+        // later alsnog versturen → dubbele werkbon).
+        if (result && result.success) {
+            this._dropQueuedWerkbon(body.planningItemId, body.date);
+        }
         return this.jsonResponse(result);
     },
 
@@ -520,18 +526,175 @@ const APIBridge = {
     },
 
     // =============================================
-    // WERKBON QUEUE (simplified for standalone)
+    // WERKBON QUEUE — v206: ECHTE offline-wachtrij
+    // ---------------------------------------------
+    // Voorheen deed 'add' niets met de payload maar gaf wél {success:true}
+    // terug → de app toonde "in wachtrij geplaatst" en wiste de invoer,
+    // terwijl de werkbon definitief verloren was (audit-bevinding K20).
+    // Nu: 'add' bewaart de volledige payload (incl. foto's, handtekening en
+    // eenmalige artikels) in localStorage; 'process' verstuurt ze zodra er
+    // verbinding is: werkbon → foto's → handtekening → custom line-items →
+    // bureel-taak ("factuur nog aanmaken"). Entries worden NOOIT stil
+    // gedropt; bij falen blijven ze staan met attempts/lastError.
     // =============================================
+    _QUEUE_KEY: 'qe_werkbon_queue_v2',
+    _queueProcessing: false,
+
+    _readWerkbonQueue() {
+        try {
+            const a = JSON.parse(localStorage.getItem(this._QUEUE_KEY) || '[]');
+            return Array.isArray(a) ? a : [];
+        } catch (_) { return []; }
+    },
+    _writeWerkbonQueue(q) {
+        localStorage.setItem(this._QUEUE_KEY, JSON.stringify(q));
+    },
+    /** v206: queue-entry voor dit planning-item verwijderen (na live submit
+     *  vervangt de live werkbon de gequeue'de versie → geen duplicaat). */
+    _dropQueuedWerkbon(planningItemId, date) {
+        try {
+            const q = this._readWerkbonQueue();
+            const left = q.filter(e => {
+                const p = e.payload || {};
+                return !(String(p.planningItemId) === String(planningItemId) &&
+                         (!date || p.date === date));
+            });
+            if (left.length !== q.length) this._writeWerkbonQueue(left);
+        } catch (_) {}
+    },
+
     async handleWerkbonQueue(params, options) {
         const action = params.action || '';
-        if (action === 'process') {
-            return this.jsonResponse({ success: true, processed: 0, message: 'Geen queue in standalone modus' });
-        }
+
         if (action === 'add') {
-            // In standalone modus: direct indienen (geen queue)
             const body = await this.parseBody(options);
-            return this.jsonResponse({ success: true, queued: false, message: 'Direct verwerkt' });
+            if (!body || !body.planningItemId) {
+                return this.jsonResponse({ success: false, queued: false, error: 'Ongeldige werkbon-payload' }, 400);
+            }
+            const key = String(body.planningItemId) + '|' + (body.date || '');
+            // Dedup: zelfde planning-item + datum → nieuwste versie wint
+            const filtered = this._readWerkbonQueue().filter(e => e.key !== key);
+            const entry = { key, queuedAt: Date.now(), attempts: 0, lastError: null, payload: body };
+            filtered.push(entry);
+            let photosDropped = false;
+            try {
+                this._writeWerkbonQueue(filtered);
+            } catch (e) {
+                // localStorage vol (foto's zijn groot): bewaar zonder foto's,
+                // maar meld dat EERLIJK aan de app i.p.v. stil te slikken.
+                try {
+                    entry.payload = Object.assign({}, body, { photos: [] });
+                    entry.photosDropped = true;
+                    photosDropped = true;
+                    this._writeWerkbonQueue(filtered);
+                } catch (e2) {
+                    return this.jsonResponse({ success: false, queued: false,
+                        error: 'Offline-opslag vol — werkbon kon niet bewaard worden' }, 507);
+                }
+            }
+            return this.jsonResponse({ success: true, queued: true, photosDropped, count: filtered.length });
         }
+
+        if (action === 'process') {
+            if (!navigator.onLine) {
+                return this.jsonResponse({ success: true, processed: 0, failed: 0,
+                    remaining: this._readWerkbonQueue().length, offline: true });
+            }
+            if (this._queueProcessing) {
+                return this.jsonResponse({ success: true, processed: 0, failed: 0, busy: true,
+                    remaining: this._readWerkbonQueue().length });
+            }
+            this._queueProcessing = true;
+            let processed = 0, failed = 0;
+            const errors = [];
+            try {
+                const snapshot = this._readWerkbonQueue();
+                for (const entry of snapshot) {
+                    try {
+                        const p = Object.assign({}, entry.payload || {});
+                        // User-info aanvullen zoals handleWerkbon dat doet
+                        const user = RobawsAPI.getLoggedInUser();
+                        if (user) {
+                            if (!p.employeeId) p.employeeId = user.robawsEmployeeId;
+                            if (!p.userId) p.userId = user.robawsUserId;
+                        }
+                        const photos = p.photos || [];
+                        const signatureData = p.signatureData || null;
+                        const signatureName = p.signatureName || '';
+                        const customArticles = p.customArticles || [];
+                        delete p.photos; delete p.signatureData;
+                        delete p.signatureName; delete p.customArticles;
+
+                        const result = await RobawsAPI.submitWerkbon(p);
+                        if (!result || !result.success || !result.workOrderId) {
+                            throw new Error((result && result.error) || 'submitWerkbon faalde');
+                        }
+                        const workOrderId = result.workOrderId;
+
+                        // Bijlagen: best-effort. De werkbon staat al in Robaws —
+                        // opnieuw proberen zou een duplicaat maken, dus fouten
+                        // hier gaan mee in de bureel-taak i.p.v. de entry te
+                        // laten staan.
+                        const naFouten = [];
+                        if (photos.length) {
+                            try { await RobawsAPI.uploadPhotos(workOrderId, photos); }
+                            catch (e) { naFouten.push('foto\'s: ' + (e && e.message)); }
+                        }
+                        if (signatureData) {
+                            try { await RobawsAPI.uploadSignature({ workOrderId, signatureName, signatureData }); }
+                            catch (e) { naFouten.push('handtekening: ' + (e && e.message)); }
+                        }
+                        for (const m of customArticles) {
+                            try {
+                                await RobawsAPI.post('work-orders/' + workOrderId + '/line-items', {
+                                    type: 'LINE',
+                                    description: m.name || 'Eenmalig artikel',
+                                    quantity: parseFloat(m.quantity || 1),
+                                    price: parseFloat(m.salePrice ?? m.unitPrice ?? 0),
+                                });
+                            } catch (e) { naFouten.push('eenmalig artikel "' + (m.name || '?') + '": ' + (e && e.message)); }
+                        }
+                        // Bureel-taak: offline werkbonnen krijgen geen factuur in
+                        // de automatische verwerking → bureel moet opvolgen.
+                        try {
+                            await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                                title: 'Offline werkbon verwerkt - factuur nog aanmaken',
+                                description: 'Deze werkbon is offline ingevuld en automatisch verstuurd ' +
+                                    'zodra er terug verbinding was. Er is GEEN factuur aangemaakt.' +
+                                    (customArticles.length ? ' Er zijn ook eenmalige artikels die in Robaws aangemaakt moeten worden.' : '') +
+                                    (naFouten.length ? '\n\nNiet gelukt bij automatische verwerking: ' + naFouten.join('; ') : '') +
+                                    '\n\nGelieve op te volgen.',
+                                assignedUserId: 5,
+                            });
+                        } catch (e) { console.warn('[Queue] bureel-taak mislukt:', e && e.message); }
+
+                        // Entry pas verwijderen NA geslaagde submit
+                        this._writeWerkbonQueue(this._readWerkbonQueue().filter(x => x.key !== entry.key));
+                        processed++;
+                    } catch (e) {
+                        failed++;
+                        const naam = (entry.payload && entry.payload.clientName) || entry.key;
+                        errors.push(naam + ': ' + (e && e.message));
+                        const q2 = this._readWerkbonQueue();
+                        const it = q2.find(x => x.key === entry.key);
+                        if (it) {
+                            it.attempts = (it.attempts || 0) + 1;
+                            it.lastError = String((e && e.message) || e);
+                            this._writeWerkbonQueue(q2);
+                        }
+                    }
+                }
+            } finally {
+                this._queueProcessing = false;
+            }
+            return this.jsonResponse({ success: true, processed, failed,
+                remaining: this._readWerkbonQueue().length, errors });
+        }
+
+        if (action === 'count') {
+            return this.jsonResponse({ success: true, count: this._readWerkbonQueue().length });
+        }
+
         return this.jsonResponse({ success: true });
     },
 
