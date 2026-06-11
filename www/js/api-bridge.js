@@ -622,8 +622,10 @@ const APIBridge = {
                         const signatureData = p.signatureData || null;
                         const signatureName = p.signatureName || '';
                         const customArticles = p.customArticles || [];
+                        const noInvoice = !!p.noInvoice;  // v208: garantie/monteur-flow
                         delete p.photos; delete p.signatureData;
                         delete p.signatureName; delete p.customArticles;
+                        delete p.noInvoice;
 
                         const result = await RobawsAPI.submitWerkbon(p);
                         if (!result || !result.success || !result.workOrderId) {
@@ -654,13 +656,19 @@ const APIBridge = {
                                 });
                             } catch (e) { naFouten.push('eenmalig artikel "' + (m.name || '?') + '": ' + (e && e.message)); }
                         }
-                        // Bureel-taak: offline werkbonnen krijgen geen factuur in
-                        // de automatische verwerking → bureel moet opvolgen.
+                        // Bureel-taak. v208: tekst hangt af van de flow —
+                        // garantie/monteur-werkbonnen (noInvoice) horen géén
+                        // "factuur aanmaken"-opdracht te genereren.
                         try {
                             await RobawsAPI.createTaskForWorkOrder(workOrderId, {
-                                title: 'Offline werkbon verwerkt - factuur nog aanmaken',
+                                title: noInvoice
+                                    ? 'Offline werkbon verwerkt (geen factuur-flow)'
+                                    : 'Offline werkbon verwerkt - factuur nog aanmaken',
                                 description: 'Deze werkbon is offline ingevuld en automatisch verstuurd ' +
-                                    'zodra er terug verbinding was. Er is GEEN factuur aangemaakt.' +
+                                    'zodra er terug verbinding was.' +
+                                    (noInvoice
+                                        ? ' Dit is een werkbon zonder factuur-stap (garantie/terugkomwerk of monteur-flow).'
+                                        : ' Er is GEEN factuur aangemaakt.') +
                                     (customArticles.length ? ' Er zijn ook eenmalige artikels die in Robaws aangemaakt moeten worden.' : '') +
                                     (naFouten.length ? '\n\nNiet gelukt bij automatische verwerking: ' + naFouten.join('; ') : '') +
                                     '\n\nGelieve op te volgen.',

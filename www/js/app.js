@@ -3334,16 +3334,23 @@ const app = {
         document.getElementById('caCancel').addEventListener('click', () => m.remove());
     },
 
-    // Veelgebruikte materialen bijhouden in localStorage
+    // Veelgebruikte materialen bijhouden in localStorage.
+    // v209: favorieten zijn ALLEEN navigatie ({id, name, count}) — de prijs
+    // wordt bij elk gebruik live uit Robaws gehaald via addMaterialLive.
+    // Voorheen werd de prijs bevroren op het moment van eerste gebruik en
+    // nooit meer ververst → maandenlang oude prijzen op facturen.
     _trackFavoriteMaterial(article) {
         try {
+            // Eenmalige artikels hebben geen Robaws-id → geen favoriet
+            if (!article || article.isCustom || String(article.id).startsWith('__custom')) return;
             const key = 'qe_fav_materials';
             const stored = JSON.parse(localStorage.getItem(key) || '[]');
             const existing = stored.find(a => String(a.id) === String(article.id));
             if (existing) {
                 existing.count = (existing.count || 1) + 1;
+                if (article.name) existing.name = article.name;  // weergave verversen
             } else {
-                stored.push({ id: article.id, name: article.name, salePrice: article.salePrice, unitPrice: article.unitPrice, unit: article.unit || 'stuk', count: 1 });
+                stored.push({ id: article.id, name: article.name, count: 1 });
             }
             // Bewaar max 20
             stored.sort((a, b) => (b.count || 0) - (a.count || 0));
@@ -3359,14 +3366,59 @@ const app = {
             const stored = JSON.parse(localStorage.getItem('qe_fav_materials') || '[]');
             const top10 = stored.sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 10);
             if (top10.length === 0) { wrapper.style.display = 'none'; return; }
-            container.innerHTML = top10.map(a => `
-                <button class="btn btn-outline btn-sm" onclick='app.addMaterial(${JSON.stringify(a).replace(/'/g, "&#39;")})'
+            // v209: alleen het (gesaneerde) id in de onclick — prijs komt live
+            container.innerHTML = top10.map(a => {
+                const safeId = String(a.id).replace(/[^\w-]/g, '');
+                return `
+                <button class="btn btn-outline btn-sm" onclick="app.addMaterialLive('${safeId}', 'favoriet')"
                     style="padding:5px 10px;font-size:12px;white-space:nowrap">
                     ${this.escapeHtml((a.name || '').substring(0, 25))}${(a.name || '').length > 25 ? '...' : ''}
-                </button>
-            `).join('');
+                </button>`;
+            }).join('');
             wrapper.style.display = '';
         } catch (e) { wrapper.style.display = 'none'; }
+    },
+
+    /** v209: HET centrale toevoegpad op artikel-id — prijs en naam komen
+     *  ALTIJD live uit Robaws (resolveArticle), nooit uit favorieten,
+     *  snapshot of catalogus. bron: 'favoriet' | 'groep'. */
+    async addMaterialLive(articleId, bron) {
+        if (this._addLiveBusy) return;  // dubbeltik-guard
+        this._addLiveBusy = true;
+        try {
+            const res = await RobawsAPI.resolveArticle(articleId);
+            if (res.ok) {
+                const a = res.article;
+                if (a.salePrice == null) {
+                    this.toast('Artikel "' + (a.name || articleId) + '" heeft geen verkoopprijs in Robaws — meld aan bureel', true);
+                    return;
+                }
+                if (Number(a.salePrice) === 0) {
+                    this.toast('Let op: dit artikel heeft prijs €0 in Robaws');
+                }
+                this.addMaterial({ id: a.id, name: a.name, salePrice: a.salePrice, unitPrice: a.unitPrice, unit: a.unit });
+            } else if (res.notFound) {
+                if (bron === 'favoriet') {
+                    this.toast('Dit artikel bestaat niet meer in Robaws — favoriet verwijderd', true);
+                    this._removeFavoriteMaterial(articleId);
+                } else {
+                    this.toast('Dit artikel bestaat niet meer in Robaws — meld aan bureel', true);
+                }
+            } else {
+                this.toast('Kon actuele prijs niet ophalen — artikel NIET toegevoegd (' + (res.error || 'netwerkfout') + ')', true);
+            }
+        } finally {
+            this._addLiveBusy = false;
+        }
+    },
+
+    _removeFavoriteMaterial(id) {
+        try {
+            const f = JSON.parse(localStorage.getItem('qe_fav_materials') || '[]')
+                .filter(x => String(x.id) !== String(id));
+            localStorage.setItem('qe_fav_materials', JSON.stringify(f));
+            this.renderFavoriteMaterials();
+        } catch (_) {}
     },
 
     updateMaterialQty(articleId, delta) {
@@ -3694,6 +3746,7 @@ const app = {
                 `<br><span class="monteur-hide">Prijs: <span id="onderhoudResultPrice">${size.price ? this.formatPrice(size.price) : '…'}</span></span>`;
             document.getElementById('onderhoudStep2').style.display = 'none';
             document.getElementById('onderhoudResult').style.display = '';
+            this._ohLiveOk = null;  // v209: status resetten per selectie
             this._ohPricePromise = this._ohApplyLivePrice(size.price);
             return;
         }
@@ -3775,6 +3828,7 @@ const app = {
             `<br><span class="monteur-hide">Prijs: <span id="onderhoudResultPrice">${zoneData.price ? this.formatPrice(zoneData.price) : '…'}</span></span>`;
         document.getElementById('onderhoudStep3').style.display = 'none';
         document.getElementById('onderhoudResult').style.display = '';
+        this._ohLiveOk = null;  // v209: status resetten per selectie
         this._ohPricePromise = this._ohApplyLivePrice(zoneData.price);
     },
 
@@ -3788,36 +3842,76 @@ const app = {
 
     async onderhoudAddToMaterials() {
         if (!this._ohArticle || !this.currentWO) return;
-        // v199: wacht op de live prijs uit Robaws zodat de ACTUELE prijs wordt toegevoegd
-        try { if (this._ohPricePromise) await this._ohPricePromise; } catch (e) {}
-        this.addMaterial(this._ohArticle);
+        if (this._ohAdding) return;  // v209: dubbeltik-guard tijdens de await
+        this._ohAdding = true;
+        try {
+            const art = this._ohArticle;  // v209: vastpakken vóór de await
+            // v199: wacht op de live prijs uit Robaws
+            try { if (this._ohPricePromise) await this._ohPricePromise; } catch (e) {}
+            // Tijdens de await op "terug" getikt? Dan niets toevoegen.
+            if (!this._ohArticle || String(this._ohArticle.id) !== String(art.id)) return;
 
-        // Verplaatsingskosten worden NIET apart toegevoegd bij onderhoud —
-        // de verplaatsing zit al verrekend in de onderhoudsprijs (zone-gebaseerd).
+            // v209: zonder bevestigde live prijs niet zomaar toevoegen.
+            // Dood artikel-id → blokkeren (de factuurlijn zou in Robaws falen).
+            // Netwerkfout → catalogusprijs mag, maar mét expliciete waarschuwing.
+            if (this._ohLiveOk === false) {
+                if (this._ohLiveNotFound) {
+                    this.toast(this._ohLiveError, true);
+                    return;
+                }
+                this.toast('Let op: prijslijst-prijs gebruikt — ' + (this._ohLiveError || 'kon niet verversen'), true);
+            }
 
-        // Reset naar stap 1
-        this.initOnderhoudPicker();
+            this.addMaterial(this._ohArticle);
+
+            // Verplaatsingskosten worden NIET apart toegevoegd bij onderhoud —
+            // de verplaatsing zit al verrekend in de onderhoudsprijs (zone-gebaseerd).
+
+            // Reset naar stap 1
+            this.initOnderhoudPicker();
+        } finally {
+            this._ohAdding = false;
+        }
     },
 
-    // v199: haalt de ACTUELE onderhoudsprijs op uit Robaws (op artikel-id) i.p.v. de
-    // opgeslagen statische prijs. Werkt async: werkt het scherm bij zodra de prijs binnen is.
+    // v209: haalt de ACTUELE onderhoudsprijs én -naam op via resolveArticle
+    // (de prijs-autoriteit). De oude v199-versie slikte fouten stil weg en
+    // viel terug op de prijslijst-2023 — zo werd doorstromer €102 i.p.v. €120
+    // gefactureerd zonder dat iemand het zag. Nu wordt de status bewaard
+    // (_ohLiveOk/-Error/-NotFound) zodat onderhoudAddToMaterials kan
+    // blokkeren of expliciet waarschuwen.
     async _ohApplyLivePrice(fallback) {
         const art = this._ohArticle;
         if (!art || art.id == null) return;
-        let price = fallback;
-        try {
-            if (window.RobawsAPI && RobawsAPI.get) {
-                const r = await RobawsAPI.get('articles/' + art.id);
-                const a = (r && r.data) ? r.data : null;
-                const p = a ? (a.salePrice != null ? a.salePrice : a.unitPrice) : null;
-                if (p != null) price = p;
+        const res = await RobawsAPI.resolveArticle(art.id);
+        // Stale-guard: ondertussen een ander artikel gekozen? Niets toepassen.
+        if (!this._ohArticle || String(this._ohArticle.id) !== String(art.id)) return;
+        const el = document.getElementById('onderhoudResultPrice');
+        if (res.ok && res.article.salePrice != null && Number(res.article.salePrice) > 0) {
+            this._ohLiveOk = true;
+            this._ohLiveError = null;
+            this._ohLiveNotFound = false;
+            this._ohArticle.salePrice = res.article.salePrice;
+            this._ohArticle.unitPrice = res.article.salePrice;
+            // Robaws-naam is de waarheid (maakt verkeerde id-mappings zichtbaar)
+            if (res.article.name) this._ohArticle.name = res.article.name;
+            if (el) el.textContent = this.formatPrice(res.article.salePrice);
+        } else {
+            this._ohLiveOk = false;
+            this._ohLiveNotFound = !!res.notFound;
+            if (res.notFound) {
+                this._ohLiveError = 'Dit artikel (id ' + art.id + ') bestaat niet meer in Robaws — meld aan bureel';
+            } else if (res.ok) {
+                this._ohLiveError = 'Artikel heeft geen verkoopprijs in Robaws — meld aan bureel';
+            } else if (res.network) {
+                this._ohLiveError = 'Geen verbinding — actuele prijs kon niet bevestigd worden';
+            } else {
+                this._ohLiveError = 'Kon actuele prijs niet ophalen (' + (res.error || '?') + ')';
             }
-        } catch (e) {}
-        if (this._ohArticle && String(this._ohArticle.id) === String(art.id)) {
-            this._ohArticle.salePrice = price;
-            this._ohArticle.unitPrice = price;
-            const el = document.getElementById('onderhoudResultPrice');
-            if (el) el.textContent = this.formatPrice(price);
+            if (el) {
+                el.innerHTML = this.escapeHtml(this.formatPrice(fallback)) +
+                    ' <span style="color:var(--qe-red);font-size:12px;font-weight:600">niet bevestigd</span>';
+            }
         }
     },
 
@@ -3870,22 +3964,52 @@ const app = {
         container.style.display = 'block';
     },
 
-    verplSelectZone(zone) {
+    async verplSelectZone(zone) {
+        // v209: prijs én naam LIVE uit Robaws (voorheen altijd de hardcoded
+        // prijslijst-2023, zonder enige live check). Geen fake fallback-id's
+        // meer (`verpl-zone-X`) — die gaven factuurlijnen zonder
+        // artikelkoppeling.
         if (!this.currentWO || !window.ONDERHOUD_DATA) return;
-        const price = ONDERHOUD_DATA.ZONE_VERPLAATSING[zone] || 0;
-        const articleData = (ONDERHOUD_DATA.VERPLAATSING_ARTICLES && ONDERHOUD_DATA.VERPLAATSING_ARTICLES[zone]) || {};
-        const articleId = articleData.id || `verpl-zone-${zone}`;
-
-        const article = {
-            id: articleId,
-            name: `Verplaatsingskosten Zone ${zone}`,
-            salePrice: price,
-            unitPrice: price,
-            unit: 'stuk'
-        };
-        this.addMaterial(article);
-        // Reset picker
-        this.initVerplaatsingPicker();
+        if (this._verplBusy) return;  // dubbeltik-guard
+        this._verplBusy = true;
+        try {
+            const articleData = (ONDERHOUD_DATA.VERPLAATSING_ARTICLES && ONDERHOUD_DATA.VERPLAATSING_ARTICLES[zone]) || null;
+            const fallbackPrice = ONDERHOUD_DATA.ZONE_VERPLAATSING[zone];
+            if (!articleData || !articleData.id || fallbackPrice == null) {
+                this.toast('Geen verplaatsingsartikel bekend voor zone ' + zone + ' — meld aan bureel', true);
+                return;
+            }
+            const res = await RobawsAPI.resolveArticle(articleData.id);
+            let article;
+            if (res.ok && res.article.salePrice != null && Number(res.article.salePrice) > 0) {
+                article = {
+                    id: res.article.id,
+                    name: res.article.name || `Verplaatsingskosten Zone ${zone}`,
+                    salePrice: res.article.salePrice,
+                    unitPrice: res.article.salePrice,
+                    unit: res.article.unit || 'stuk',
+                };
+            } else if (res.notFound) {
+                this.toast('Verplaatsingsartikel zone ' + zone + ' (id ' + articleData.id + ') bestaat niet meer in Robaws — meld aan bureel', true);
+                return;
+            } else {
+                // Netwerkfout (of geen prijs in Robaws): catalogusprijs mag,
+                // maar mét expliciete waarschuwing — nooit meer stil.
+                article = {
+                    id: articleData.id,
+                    name: `Verplaatsingskosten Zone ${zone}`,
+                    salePrice: fallbackPrice,
+                    unitPrice: fallbackPrice,
+                    unit: 'stuk',
+                };
+                this.toast('Let op: prijslijst-prijs voor verplaatsing gebruikt — kon Robaws niet bereiken', true);
+            }
+            this.addMaterial(article);
+            // Reset picker
+            this.initVerplaatsingPicker();
+        } finally {
+            this._verplBusy = false;
+        }
     },
 
     // ========================================
@@ -4107,16 +4231,13 @@ const app = {
             ? this.groupBreadcrumb[this.groupBreadcrumb.length - 1].name : '';
         const { icon: groupIcon } = this.getGroupIcon(currentGroupName);
 
+        // v209: bij toevoegen wordt de prijs LIVE opgehaald (addMaterialLive)
+        // — de lijst hieronder toont nog de snapshot-prijs (navigatie), maar
+        // wat in de materialenlijst en op de factuur belandt komt uit Robaws.
         container.innerHTML = articles.map(art => {
+            const safeId = String(art.id).replace(/[^\w-]/g, '');
             return `
-            <div class="card card-clickable" style="padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;border-left:3px solid var(--qe-orange)" onclick='app.addMaterial(${JSON.stringify({
-                id: art.id,
-                name: art.name,
-                salePrice: art.salePrice,
-                costPrice: art.costPrice,
-                unitPrice: art.salePrice,
-                unit: art.unitType || 'stuk',
-            }).replace(/'/g, "&#39;")})'>
+            <div class="card card-clickable" style="padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;border-left:3px solid var(--qe-orange)" onclick="app.addMaterialLive('${safeId}', 'groep')">
                 <div style="width:40px;height:40px;border-radius:8px;background:#f5f5f5;margin-right:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${groupIcon}</div>
                 <div style="flex:1;min-width:0">
                     <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${this.escapeHtml(art.name)}</div>
@@ -4912,12 +5033,9 @@ const app = {
                 this.toast('Fout: ' + (result.error || 'Onbekende fout'));
             }
         } catch (err) {
-            // Offline? Zet in wachtrij!
-            if (!navigator.onLine) {
-                await this.queueWerkbonOffline(data);
-            } else {
-                this.toast('Versturen mislukt — controleer je verbinding');
-            }
+            // v208: legacy-pad — geen wachtrij meer voor technieker-werkbonnen
+            // (de klant moet kunnen betalen); invoer blijft bewaard.
+            this.toast('Versturen mislukt — controleer je verbinding en probeer opnieuw', true);
         }
     },
 
@@ -4942,6 +5060,7 @@ const app = {
                 payload.signatureName = extra.signatureName || '';
             }
             if (extra && ('paymentMethod' in extra)) payload.paymentMethod = extra.paymentMethod;
+            if (extra && extra.noInvoice) payload.noInvoice = true;  // v208
 
             const res = await fetch('api/werkbon-queue.php?action=add', {
                 method: 'POST',
@@ -5677,8 +5796,21 @@ const app = {
             const isNetworkError = !navigator.onLine ||
                 /failed to fetch|net::err|networkerror|timeout/i.test(msg);
             if (isNetworkError && !createdWorkOrderId) {
-                // v206: foto's, handtekening en betaalmethode mee de wachtrij in
-                await this.queueWerkbonOffline(data, { signatureName, signatureData, paymentMethod });
+                // v208: de technieker-werkbon eindigt bij de klant in factuur +
+                // betaling — offline versturen mag dus NIET (de klant moet
+                // kunnen betalen). Enige uitzondering: "Geen factuur maken"
+                // (garantie/terugkomwerk) — daar is geen betaalmoment, die mag
+                // wél de wachtrij in. De monteur-flow heeft zijn eigen catch.
+                const noInvoice = !!(document.getElementById('wbNoInvoice') &&
+                                     document.getElementById('wbNoInvoice').checked);
+                if (noInvoice) {
+                    await this.queueWerkbonOffline(data, {
+                        signatureName, signatureData,
+                        paymentMethod: null, noInvoice: true,
+                    });
+                } else {
+                    this.toast('Geen internet — werkbon NIET verstuurd: de klant moet kunnen betalen. Probeer opnieuw zodra er verbinding is; je invoer blijft bewaard.', true);
+                }
             } else if (isNetworkError) {
                 // v206: werkbon staat al in Robaws — requeuen zou een duplicaat
                 // maken. Eerlijk melden wat er nog ontbreekt.
@@ -5818,7 +5950,8 @@ const app = {
             if (isNetworkError && !createdWorkOrderId) {
                 // v206: monteur heeft geen handtekening/factuur; betaalmethode
                 // expliciet op null zodat geen oude selectie meelekt.
-                await this.queueWerkbonOffline(data, { paymentMethod: null });
+                // v208: noInvoice-vlag → bureel-taak zegt niet "factuur aanmaken".
+                await this.queueWerkbonOffline(data, { paymentMethod: null, noInvoice: true });
             } else if (isNetworkError) {
                 this.toast('Werkbon staat al in Robaws, maar foto\'s konden niet verstuurd worden (verbinding weg). NIET opnieuw versturen.', true);
             } else {

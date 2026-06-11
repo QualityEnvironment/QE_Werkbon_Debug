@@ -1844,6 +1844,46 @@ const RobawsAPI = {
     },
 
     // Live verkoopprijs uit de artikel-cache op id (0 extra API-calls).
+    /** v209: DE prijs-autoriteit. Haalt een artikel LIVE uit Robaws op
+     *  (60-min TTL-cache via get() dempt het verkeer). Aanleiding: het
+     *  onderhoud-snelmenu factureerde €102 i.p.v. €120 (doorstromer) omdat
+     *  de oude live-patch fouten stil wegslikte en terugviel op de
+     *  prijslijst-2023. Retourneert:
+     *    { ok:true, article:{id,name,salePrice,unitPrice,unit} }
+     *    { ok:false, notFound:true, error }   → artikel-id bestaat niet (meer)
+     *    { ok:false, network:true,  error }   → geen verbinding/timeout
+     *    { ok:false, error }                  → andere fout (HTTP-code)
+     *  Callers mogen bij ok:false NOOIT stil een oude prijs gebruiken. */
+    async resolveArticle(articleId) {
+        if (articleId == null || articleId === '') {
+            return { ok: false, error: 'geen artikel-id' };
+        }
+        try {
+            const r = await this.get('articles/' + articleId);
+            if (r && r.code === 200 && r.data && r.data.id != null) {
+                const a = r.data;
+                return {
+                    ok: true,
+                    article: {
+                        id: a.id,
+                        name: a.name || ('Artikel ' + a.id),
+                        salePrice: (a.salePrice != null) ? a.salePrice : (a.unitPrice != null ? a.unitPrice : null),
+                        unitPrice: (a.unitPrice != null) ? a.unitPrice : (a.salePrice != null ? a.salePrice : null),
+                        unit: a.unitType || a.unit || 'stuk',
+                    },
+                };
+            }
+            if (r && r.code === 404) {
+                return { ok: false, notFound: true, error: 'Artikel ' + articleId + ' bestaat niet (meer) in Robaws' };
+            }
+            return { ok: false, error: 'HTTP ' + (r && r.code) };
+        } catch (e) {
+            const msg = String((e && e.message) || e || '');
+            const network = /failed to fetch|net::err|networkerror|timeout/i.test(msg);
+            return { ok: false, network, error: msg };
+        }
+    },
+
     getCachedArticlePrice(id) {
         if (!this._articleCache || id == null) return null;
         const a = this._articleCache.find(x => String(x.id) === String(id));
@@ -2420,7 +2460,7 @@ const RobawsAPI = {
             while (this._articleCacheLoading) {
                 await new Promise(r => setTimeout(r, 200));
             }
-            return this._articleCache;
+            return this._articleCache || [];  // v209: null-safe
         }
 
         this._articleCacheLoading = true;
@@ -2433,9 +2473,21 @@ const RobawsAPI = {
                 const snap = await snapRes.json();
                 const snapItems = Array.isArray(snap) ? snap : (snap.items || snap.articles || []);
                 if (Array.isArray(snapItems) && snapItems.length > 0) {
-                    this._articleCache = snapItems;
+                    // v209: snapshot dedupliceren op id — het meegeleverde
+                    // bestand bleek dezelfde artikelen tientallen keren te
+                    // bevatten (kapotte export), wat dubbele regels in de
+                    // groep-browser gaf.
+                    const seenSnap = new Set();
+                    const deduped = [];
+                    for (const a of snapItems) {
+                        const k = String(a && a.id);
+                        if (seenSnap.has(k)) continue;
+                        seenSnap.add(k);
+                        deduped.push(a);
+                    }
+                    this._articleCache = deduped;
                     this._articleCacheLoading = false;
-                    if (onProgress) onProgress(snapItems.length, snapItems.length);
+                    if (onProgress) onProgress(deduped.length, deduped.length);
                     return this._articleCache;
                 }
             }
@@ -2469,12 +2521,14 @@ const RobawsAPI = {
                 if (items.length < LIMIT) break; // laatste pagina
             }
 
-            this._articleCache = allArticles;
+            // v209: een LEGE lijst niet cachen — anders bleef de catalogus na
+            // één mislukte eerste pagina de hele sessie leeg zonder retry.
+            this._articleCache = allArticles.length > 0 ? allArticles : null;
         } finally {
             this._articleCacheLoading = false;
         }
 
-        return this._articleCache;
+        return this._articleCache || [];
     },
 
     // =============================================
