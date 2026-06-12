@@ -3954,7 +3954,15 @@ const RobawsAPI = {
 
         // Stap 3: bouw merged body — bestaande velden behouden, onze velden toevoegen
         const dateLabel = this._formatDateLabel(dateStr);
-        woFull.title = `Tijdsregistratie ${employeeName || ''} - ${dateLabel}`.trim();
+        let trTitle = `Tijdsregistratie ${employeeName || ''} - ${dateLabel}`.trim();
+        // v221: bij een afwezigheid het type achter de titel — zo zie je in
+        // de Robaws-lijst meteen "... - Ziek" / "... - Verlof" zonder de
+        // registratie te moeten openen. Gewone klok-registraties (Op tijd /
+        // Te laat) blijven ongewijzigd.
+        if (tijdLabel && this.ABSENCE_TIJD.includes(String(tijdLabel).trim())) {
+            trTitle += ' - ' + String(tijdLabel).trim();
+        }
+        woFull.title = trTitle;
         woFull.date = dateStr;
         woFull.status = 'Tijdsregistratie';
         woFull.timeAndMaterial = false;
