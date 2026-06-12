@@ -5342,6 +5342,7 @@ const app = {
                 unitPrice: m.salePrice ?? m.unitPrice ?? 0,
             })),
             hours: this._roundHoursForSubmit(data.hours),
+            hoursPrerounded: true,  // v212: billable niet nóg eens per entry opronden
             notes: data.notes,
             uurcode: this.selectedUurcode,
             verplaatsingCode: this.verplaatsingCode,
@@ -5626,13 +5627,19 @@ const app = {
                 })),
                 // Uren meesturen voor facturatie — alleen 'klant' uren factureren!
                 // Bij onderhoud: werkuren worden NIET gefactureerd (verkoopprijs = 0)
-                // Verplaatsingsuren en pauze worden NOOIT gefactureerd
-                hours: data.onderhoud ? [] : data.hours.filter(h => h.duration > 0 && h.type === 'klant').map(h => ({
+                // Verplaatsingsuren en pauze worden NOOIT gefactureerd.
+                // v212: ZELFDE afgeronde bron als de werkbon en de preview
+                // (_roundHoursForSubmit, incl. wacht=60min-regel). Voorheen
+                // gingen RAUWE uren naar de factuur die daar enkel per 30 min
+                // werden afgerond → wachturen: preview 2,0u maar factuur 1,5u.
+                hours: data.onderhoud ? [] : this._roundHoursForSubmit(data.hours)
+                    .filter(h => h.duration > 0 && h.type === 'klant').map(h => ({
                     type: 'klant',
                     duration: h.duration,
                     articleId: h.articleId || (this.selectedUurcode ? this.selectedUurcode.id : null),
                     salePrice: h.salePrice || (this.selectedUurcode ? this.selectedUurcode.salePrice : 0),
                 })),
+                hoursPrerounded: true,  // v212: createInvoice rondt niet dubbel
                 onderhoud: data.onderhoud || false,
             };
 
@@ -6057,6 +6064,7 @@ const app = {
                         unitPrice: m.salePrice ?? m.unitPrice ?? 0,
                     })),
                     hours: this._roundHoursForSubmit(data.hours),
+                    hoursPrerounded: true,  // v212
                     notes: data.notes || '',
                     uurcode: this.selectedUurcode,
                     verplaatsingCode: this.verplaatsingCode,
@@ -6820,42 +6828,122 @@ const app = {
     },
 
     /** Laad team aanwezigheid vandaag (admin, uit Robaws) */
+    // v217: Team-aanwezigheid — echte lijst (per werknemer: ingeklokt,
+    // verwacht, status) + handmatig in-/uitklokken door bureel (telefoon
+    // vergeten of plat). Robaws is leidend: de telefoon van de werknemer
+    // pikt een handmatige actie bij de volgende sync vanzelf op.
     async loadClockAdmin() {
         const list = document.getElementById('clockAdminList');
         if (!list) return;
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || user.role !== 'bureel') { list.innerHTML = ''; return; }  // dubbele gating
         list.innerHTML = '<div class="spinner"></div>';
 
         try {
             const attendance = await QEClock.getAllAttendanceToday();
+            this._attendance = {};
             if (attendance.length === 0) {
-                list.innerHTML = '<p class="text-grey text-sm text-center">Geen registraties vandaag</p>';
+                list.innerHTML = '<p class="text-grey text-sm text-center">Geen werknemers gevonden</p>';
                 return;
             }
+            const now = await QEClock._getNow();
+            const nowMin = now.getHours() * 60 + now.getMinutes();
+            const toMin = (t) => { const m = String(t || '').match(/^(\d{1,2}):(\d{1,2})/); return m ? (+m[1]) * 60 + (+m[2]) : null; };
+            const fmtDur = (mins) => {
+                const h = Math.floor(Math.abs(mins) / 60), m = Math.abs(mins) % 60;
+                return h > 0 ? (h + 'u' + (m ? String(m).padStart(2, '0') : '')) : (m + ' min');
+            };
 
             list.innerHTML = attendance.map(a => {
-                const icon = a.isLate ? '⚠️' : (a.clockTime ? '✅' : '⏳');
-                const bg = a.isLate ? '#fff8e1' : (a.clockTime ? '#f1f8e9' : '#fff');
-                const timeText = a.clockTime
-                    ? `<span style="font-weight:600">${a.clockTime}</span> <span style="font-size:11px;color:var(--qe-grey)">${a.type || ''}</span>`
-                    : '<span style="color:var(--qe-grey)">—</span>';
-                const extraInfo = [];
-                if (a.ladenLossen > 0) extraInfo.push(`📦 ${a.ladenLossen}x L&L`);
-                if (a.extraUren > 0) extraInfo.push(`🔄 ${a.extraUren}x extra`);
-                const extraHtml = extraInfo.length > 0 ? `<div style="font-size:11px;color:var(--qe-orange)">${extraInfo.join(' · ')}</div>` : '';
-
-                return `<div class="card" style="padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;background:${bg}">
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span>${icon}</span>
-                        <div>
-                            <div style="font-size:14px;font-weight:500">${a.name}</div>
-                            ${extraHtml}
+                this._attendance[a.email] = a;
+                const safeEmail = String(a.email).replace(/[^\w@.-]/g, '');
+                let statusHtml = '', btnHtml = '';
+                if (a.uitgeklokt) {
+                    statusHtml = `<span style="color:var(--qe-grey)">uitgeklokt om ${this.escapeHtml(a.uitgeklokt)}</span>`;
+                } else if (a.ingeklokt) {
+                    const inMin = toMin(a.ingeklokt);
+                    const worked = (inMin != null) ? Math.max(0, nowMin - inMin) : null;
+                    statusHtml = `<span style="color:var(--qe-green);font-weight:600">is al ${worked != null ? fmtDur(worked) : '?'} aan het werk</span>`;
+                    btnHtml = `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px;flex-shrink:0" onclick="app._manualClockPrompt('${safeEmail}','out')">Uitklokken</button>`;
+                } else {
+                    const expMin = toMin(a.startuur);
+                    if (expMin != null && nowMin < expMin) {
+                        statusHtml = `<span style="color:var(--qe-grey)">wordt verwacht binnen ${fmtDur(expMin - nowMin)}</span>`;
+                    } else if (expMin != null) {
+                        statusHtml = `<span style="color:var(--qe-red);font-weight:600">${fmtDur(nowMin - expMin)} te laat</span>`;
+                    } else {
+                        statusHtml = `<span style="color:var(--qe-grey)">nog niet ingeklokt</span>`;
+                    }
+                    btnHtml = `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px;flex-shrink:0" onclick="app._manualClockPrompt('${safeEmail}','in')">Inklokken</button>`;
+                }
+                return `
+                <div class="card" style="padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px">
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:14px;font-weight:600">${this.escapeHtml(a.name)}</div>
+                        <div style="font-size:12px;color:var(--qe-grey);margin-top:1px">
+                            ${a.ingeklokt ? 'in: <b>' + this.escapeHtml(a.ingeklokt) + '</b> · ' : ''}verwacht: ${this.escapeHtml(a.startuur)}
                         </div>
+                        <div style="font-size:12px;margin-top:2px">${statusHtml}</div>
                     </div>
-                    <div style="text-align:right">${timeText}</div>
+                    ${btnHtml}
                 </div>`;
             }).join('');
         } catch (e) {
-            list.innerHTML = `<p class="text-grey text-sm text-center">Fout: ${e.message}</p>`;
+            console.warn('[App] Team-aanwezigheid laden faalde:', e && e.message);
+            list.innerHTML = '<p class="text-grey text-sm text-center">Laden mislukt — tik op vernieuwen om opnieuw te proberen</p>';
+        }
+    },
+
+    /** v217: tijd-modal voor handmatig in-/uitklokken (alleen bureel). */
+    _manualClockPrompt(email, mode) {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || user.role !== 'bureel') return;
+        const a = (this._attendance || {})[email];
+        if (!a) return;
+        this._manualCtx = { email, mode };
+        const nu = new Date();
+        const defTime = String(nu.getHours()).padStart(2, '0') + ':' + String(nu.getMinutes()).padStart(2, '0');
+        this.showModal(`
+            <h3>${mode === 'in' ? 'Inklokken' : 'Uitklokken'}: ${this.escapeHtml(a.name)}</h3>
+            <p style="font-size:13px;color:var(--qe-grey);margin:6px 0 12px">
+                ${mode === 'in'
+                    ? 'Maakt de tijdsregistratie in Robaws aan — de telefoon van ' + this.escapeHtml(a.name) + ' pikt dit vanzelf op.'
+                    : 'Sluit de dag af met de normale regels (kwartierafronding, pauze, 8u-aanvulling, weekend).'}
+            </p>
+            <label style="font-size:13px;font-weight:600">Tijd</label>
+            <input type="time" id="manualClockTime" value="${defTime}"
+                style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:16px;box-sizing:border-box;margin:6px 0 14px">
+            <button class="btn btn-primary btn-full" onclick="app._manualClockConfirm()" style="margin-bottom:8px">
+                ${mode === 'in' ? 'Inklokken' : 'Uitklokken'}
+            </button>
+            <button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>
+        `);
+    },
+
+    async _manualClockConfirm() {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || user.role !== 'bureel') return;
+        const ctx = this._manualCtx;
+        if (!ctx) return;
+        const a = (this._attendance || {})[ctx.email];
+        const timeVal = document.getElementById('manualClockTime')?.value || '';
+        if (!a || !/^\d{2}:\d{2}$/.test(timeVal)) {
+            this.toast('Geef een geldige tijd (UU:MM)', true);
+            return;
+        }
+        if (this._manualClockBusy) return;  // dubbeltik-guard
+        this._manualClockBusy = true;
+        try {
+            this.closeModal();
+            this.toast((ctx.mode === 'in' ? 'Inklokken' : 'Uitklokken') + ' van ' + a.name + '...');
+            const res = (ctx.mode === 'in')
+                ? await QEClock.manualClockIn(a, timeVal, user.name || 'bureel')
+                : await QEClock.manualClockOut(a, timeVal, user.name || 'bureel');
+            this.toast(res.message, !res.ok);
+            this.loadClockAdmin();
+        } finally {
+            this._manualClockBusy = false;
+            this._manualCtx = null;
         }
     },
 
@@ -9197,10 +9285,29 @@ const app = {
         const uurId = String(this.selectedUurcode?.id || '');
         const verplId = String(this.verplaatsingCode?.id || '');
 
+        // v213: ZONDER geldige uurcode geen correctie — voorheen werd uurId ''
+        // en kregen álle bestaande uren delta −oud (stil gewist) terwijl de
+        // preview ±0 toonde.
+        if (!uurId) {
+            this.toast('Uurcodes konden niet geladen worden — correctie niet mogelijk. Controleer je verbinding en probeer opnieuw.', true);
+            return;
+        }
+
         // Splits cumulatieve uren in klant vs verplaatsing op basis van articleId
         const hpa = p.cumulatief.hoursPerArticle || {};
         const klantUurOrig = parseFloat(hpa[uurId] || 0);
         const verplUurOrig = parseFloat(hpa[verplId] || 0);
+
+        // v213: het origineel kan uren bevatten op een ANDERE uurcode dan de
+        // huidige (bv. monteur-artikel of een andere rol). De delta-berekening
+        // zou die stil wegboeken of verschuiven — blokkeren en naar bureel
+        // verwijzen is het enige veilige pad.
+        const vreemdeIds = Object.keys(hpa).filter(aId =>
+            aId !== uurId && aId !== verplId && parseFloat(hpa[aId] || 0) !== 0);
+        if (vreemdeIds.length > 0) {
+            this.toast('Deze werkbon bevat uren op een andere uurcode (artikel ' + vreemdeIds.join(', ') + ') — correctie kan enkel via bureel.', true);
+            return;
+        }
 
         // State voor het correctie-scherm
         this.correctieState = {
@@ -9326,7 +9433,9 @@ const app = {
         if (!this.correctieState) return;
         const m = this.correctieState.materials[idx];
         if (!m) return;
-        m.quantity = Math.round((parseFloat(m.quantity) + delta) * 100) / 100;
+        // v213: clamp op 0 — onder nul betekende "meer crediteren dan ooit
+        // geleverd" (delta = -1 - oud).
+        m.quantity = Math.max(0, Math.round((parseFloat(m.quantity) + delta) * 100) / 100);
         this.renderCorrectie();
     },
 
@@ -9334,7 +9443,7 @@ const app = {
         if (!this.correctieState) return;
         const m = this.correctieState.materials[idx];
         if (!m) return;
-        m.quantity = parseFloat(val) || 0;
+        m.quantity = Math.max(0, parseFloat(val) || 0);  // v213: clamp op 0
     },
 
     removeCorrectieMaterial(idx) {
@@ -9498,9 +9607,19 @@ const app = {
                 const dh = (result.deltaHours || []).map(d => `${d.deltaHours > 0 ? '+' : ''}${d.deltaHours}u`).join(', ') || '–';
                 const dm = (result.deltaMats || []).map(d => `${d.quantity > 0 ? '+' : ''}${d.quantity}× ${d.description}`).join(', ') || '–';
                 alert(`Correctie verstuurd!\n\nWerkbon ID: ${result.workOrderId}\nUren delta: ${dh}\nMaterialen delta: ${dm}\nUren OK: ${result.timeSuccess}/${(result.timeSuccess || 0) + (result.timeErrors?.length || 0)}\nMat OK: ${result.materialSuccess}/${(result.materialSuccess || 0) + (result.materialErrors?.length || 0)}`);
+                // v213: deel-fouten zichtbaar maken — entries die Robaws
+                // weigerde betekenen dat de correctie ONVOLLEDIG is.
+                const partial = (result.timeErrors?.length || 0) + (result.materialErrors?.length || 0);
+                if (partial > 0) {
+                    this.toast('Let op: ' + partial + ' correctie-regel(s) geweigerd door Robaws — meld dit aan bureel', true);
+                }
                 this.correctieState = null;
                 this.navigate('screenUitgevoerd');
                 this.loadUitgevoerd();
+            } else {
+                // v213: rollback-pad uit submitWerkbonCorrectie — er is niets
+                // gewijzigd; invoer blijft staan zodat opnieuw proberen kan.
+                this.toast('Correctie mislukt: ' + (result.error || 'onbekende fout'), true);
             }
         } catch (err) {
             alert('Fout bij correctie: ' + err.message);

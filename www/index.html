@@ -756,6 +756,21 @@
         <p class="text-grey text-sm text-center">Laden...</p>
     </div>
 
+    <!-- v217: Team aanwezigheid BOVEN NFC-tags (alleen voor kantoor) -->
+    <div id="clockAdminSection" style="display:none">
+        <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+            <h3 style="font-size:14px">Team aanwezigheid vandaag</h3>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-outline btn-sm" onclick="app.loadClockAdmin()" style="font-size:12px;padding:4px 10px">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+                </button>
+            </div>
+        </div>
+        <div id="clockAdminList" class="mb-16">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
     <!-- NFC Tag beheer (alleen voor kantoor) -->
     <div id="clockTagAdmin" style="display:none">
         <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
@@ -771,21 +786,6 @@
             <div style="font-size:11px;color:var(--qe-grey);margin-top:8px;text-align:center">
                 Kies een locatie en druk op <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M11 18h2"/></svg> Scan om een tag toe te wijzen
             </div>
-        </div>
-    </div>
-
-    <!-- Admin: overzicht alle werknemers (alleen voor kantoor) -->
-    <div id="clockAdminSection" style="display:none">
-        <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
-            <h3 style="font-size:14px">Team aanwezigheid vandaag</h3>
-            <div style="display:flex;gap:6px">
-                <button class="btn btn-outline btn-sm" onclick="app.loadClockAdmin()" style="font-size:12px;padding:4px 10px">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
-                </button>
-            </div>
-        </div>
-        <div id="clockAdminList">
-            <div class="spinner"></div>
         </div>
     </div>
 </div>

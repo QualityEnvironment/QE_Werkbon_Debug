@@ -1204,6 +1204,37 @@ const RobawsAPI = {
         });
     },
 
+    /** v217: alle tijdsregistratie-WERKBONNEN van vandaag (alle werknemers) —
+     *  voor de Team-aanwezigheid van bureel. Registraties worden altijd op de
+     *  dag zelf aangemaakt, dus de createdAt-stop maakt dit 1 pagina werk. */
+    async getTeamTimeRegistrationsToday() {
+        const today = this._localDateStr();
+        const out = [];
+        const seen = new Set();
+        for (let p = 0; p < 10; p++) {
+            const res = await this.get(`work-orders?limit=100&offset=${p * 100}&sort=createdAt:desc`);
+            if (res.code !== 200) break;
+            const items = (res.data && res.data.items) || [];
+            if (items.length === 0) break;
+            let stop = false;
+            for (const wo of items) {
+                const k = String(wo.id);
+                if (seen.has(k)) continue;
+                seen.add(k);
+                const created = ((wo.createdAt || wo.date || '') + '').split('T')[0];
+                if (created && created < today) { stop = true; break; }
+                const d = ((wo.date || '') + '').split('T')[0];
+                if (d !== today) continue;
+                const isTR = String(wo.status || '').toLowerCase() === 'tijdsregistratie' ||
+                             /^tijdsregistratie/i.test(String(wo.title || ''));
+                if (!isTR) continue;
+                out.push(wo);
+            }
+            if (stop || items.length < 100) break;
+        }
+        return out;
+    },
+
     /**
      * Haal NFC tag configuratie op.
      * Tags komen van werknemer 1 (gedeeld), startuur van de ingelogde werknemer.
@@ -1675,8 +1706,14 @@ const RobawsAPI = {
                         seenWoIds.add(String(wo.id));
                     }
                     added++;
+                    // v213: stop op createdAt (waarop gesorteerd wordt) — een
+                    // teruggedateerde recente werkbon stopte de lus voorheen
+                    // te vroeg → hasWerkbon vals-negatief → planning-item
+                    // bleef "open" en kon dubbel ingediend worden.
+                    const woCreated = ((wo.createdAt || wo.date || '') + '').split('T')[0];
+                    if (woCreated && woCreated < sinceDate) { stop = true; break; }
                     const woDate = wo.date || '';
-                    if (woDate && woDate < sinceDate) { stop = true; break; }
+                    if (woDate && woDate < sinceDate) continue;  // oud: overslaan, niet stoppen
                     if (wo.planningItemId) {
                         // Als we een currentUserId hebben, alleen werkbonnen van deze gebruiker tellen
                         if (currentUserId) {
@@ -2063,6 +2100,12 @@ const RobawsAPI = {
         }
 
         // Stap 2: POST elke time-entry naar /work-orders/{id}/time-entries
+        // v212: als de app de uren al op totaalniveau heeft afgerond
+        // (hoursPrerounded via _roundHoursForSubmit), dan ronden we billable
+        // hier NIET nog eens per entry op. Voorheen stapelde dat: 25+35 min
+        // (totaal al afgerond op 60) werd per entry 0,5u + 1,0u = 1,5u
+        // billable voor 1,0u werk.
+        const prerounded = !!data.hoursPrerounded;
         let timeSuccess = 0;
         const timeErrors = [];
         const timeRequests = [];
@@ -2077,7 +2120,9 @@ const RobawsAPI = {
             const te = {
                 employeeId: entryEmployeeId,
                 hours: hrs,
-                billableHours: (onderhoud && isKlant) ? 0 : this._roundUpHalfHour(hrs),
+                // v212: klant-uren met prerounded vlag = exact overnemen
+                billableHours: (onderhoud && isKlant) ? 0
+                    : ((prerounded && isKlant) ? hrs : this._roundUpHalfHour(hrs)),
             };
             if (code && code.id) te.articleId = toStr(code.id);
             // v108: Robaws v2 wil 'breakMinutes' (was 'breakDuration' — die werd
@@ -2223,12 +2268,21 @@ const RobawsAPI = {
             ...Object.keys(newHoursPerArticle),
             ...Object.keys(oldHoursPerArticle),
         ]);
-        const deltaHours = []; // [{articleId, deltaHours}]
+        const deltaHours = []; // [{articleId, deltaHours, billableDelta}]
         for (const aId of allArticleIds) {
             const oldH = parseFloat(oldHoursPerArticle[aId] || 0);
             const newH = parseFloat(newHoursPerArticle[aId] || 0);
             const diff = Math.round((newH - oldH) * 100) / 100;
-            if (diff !== 0) deltaHours.push({ articleId: aId, deltaHours: diff });
+            // v213: billable-delta = verschil van de AFGERONDE totalen.
+            // Voorheen werd de delta zélf opgerond: -0,25u werd billable -0,0
+            // (ceil richting nul) → een correctie omlaag verlaagde de
+            // factureerbare uren nooit; en kleine plus-delta's bliezen op.
+            const billableDelta = Math.round(
+                (this._roundUpHalfHour(newH) - this._roundUpHalfHour(oldH)) * 100
+            ) / 100;
+            if (diff !== 0 || billableDelta !== 0) {
+                deltaHours.push({ articleId: aId, deltaHours: diff, billableDelta });
+            }
         }
 
         // 2) Bereken delta materialen per (articleId|description)
@@ -2356,7 +2410,22 @@ const RobawsAPI = {
         }
         const putResult = await this.put(`work-orders/${workOrderId}`, putBody);
         if (putResult.code !== 200 && putResult.code !== 201 && putResult.code !== 204) {
-            log.push('PUT correctie fout: ' + putResult.code);
+            // v213: voorheen ging de flow gewoon door en kwamen de delta-
+            // entries op een ANONIEME werkbon terecht (geen titel/klant/datum):
+            // niet herkenbaar als correctie en buiten het cumulatief, waardoor
+            // een volgende correctie de delta verdubbelde. Nu: opruimen + fout.
+            log.push('PUT correctie fout: ' + putResult.code + ' — rollback');
+            try {
+                const delRes = await this.del(`work-orders/${workOrderId}`);
+                log.push('Rollback correctie-werkbon: DELETE → ' + (delRes && delRes.code));
+            } catch (e) {
+                log.push('Rollback mislukt: ' + (e && e.message));
+            }
+            return {
+                success: false,
+                error: 'Correctie-werkbon kon niet weggeschreven worden (code ' + putResult.code + ') — er is niets gecorrigeerd, probeer opnieuw',
+                log,
+            };
         }
 
         // 6) Delta uren posten
@@ -2366,7 +2435,8 @@ const RobawsAPI = {
             const te = {
                 employeeId: toStr(employeeId),
                 hours: dh.deltaHours,
-                billableHours: this._roundUpHalfHour(dh.deltaHours),
+                // v213: verschil-van-totalen (zie hierboven), niet de delta opronden
+                billableHours: dh.billableDelta,
             };
             if (dh.articleId) te.articleId = toStr(dh.articleId);
             const r = await this.post(`work-orders/${workOrderId}/time-entries`, te);
@@ -2723,8 +2793,23 @@ const RobawsAPI = {
                     if (seenWoIds.has(String(wo.id))) continue;
                     seenWoIds.add(String(wo.id));
                 }
+                // v213: stop-criterium op createdAt — de lijst is op createdAt
+                // gesorteerd; stoppen op wo.date brak de lus af bij één
+                // teruggedateerde recente werkbon → het cumulatief viel te
+                // laag uit en een correctie kon reeds gefactureerde uren
+                // OPNIEUW toevoegen (dubbele facturatie).
+                const created = ((wo.createdAt || wo.date || '') + '').split('T')[0];
+                if (created && created < sinceDate) { stop = true; break; }
+                // v213: oude werkbon (op datum) overslaan zonder te stoppen
                 const d = wo.date || '';
-                if (d && d < sinceDate) { stop = true; break; }
+                if (d && d < sinceDate) continue;
+                // v213: alleen werkbonnen van DEZE gebruiker — voorheen telde
+                // het cumulatief ook collega's op hetzelfde planning-item mee,
+                // waardoor een correctie van tech A de uren van tech B wegboekte.
+                if (userId != null && String(userId) !== '') {
+                    const woUser = wo.assignedUserId != null ? String(wo.assignedUserId) : null;
+                    if (woUser !== String(userId)) continue;
+                }
                 if (!wo.planningItemId) continue;
                 const key = String(wo.planningItemId);
                 if (!werkbonsPerPlanning[key]) werkbonsPerPlanning[key] = [];
@@ -2931,7 +3016,7 @@ const RobawsAPI = {
     async createInvoice({ workOrderId, paymentConditionId = '9', vatTariffId = null,
         clientId: passedClientId = null, companyId: passedCompanyId = null,
         salesOrderId = null, paymentMethod = null, notes = '',
-        materials = [], hours = [], onderhoud = false,
+        materials = [], hours = [], onderhoud = false, hoursPrerounded = false,
         userId = null, installationIds = [] }) {
 
         const toStr = v => (v == null || v === '') ? null : String(v);
@@ -3188,10 +3273,14 @@ const RobawsAPI = {
                 if (!hoursByArticle[artKey]) hoursByArticle[artKey] = { totalMinutes: 0, salePrice, articleId: h.articleId };
                 hoursByArticle[artKey].totalMinutes += dur;
             }
-            // Eén factuurregel per articleId, afgerond op totaal
+            // Eén factuurregel per articleId, afgerond op totaal.
+            // v212: als de app al afgerond aanlevert (hoursPrerounded — zelfde
+            // bron als werkbon en preview, incl. wacht=60min-regel) ronden we
+            // hier NIET nog eens — anders kon de factuur afwijken van wat de
+            // klant in de preview zag en tekende.
             for (const [artKey, group] of Object.entries(hoursByArticle)) {
                 const rawHrs = Math.round(group.totalMinutes / 60 * 100) / 100;
-                const billableHrs = this._roundUpHalfHour(rawHrs);
+                const billableHrs = hoursPrerounded ? rawHrs : this._roundUpHalfHour(rawHrs);
                 const desc = 'Werkuren';
                 const lineData = {
                     type: 'LINE',
@@ -3708,9 +3797,15 @@ const RobawsAPI = {
     },
 
     _weekendHourTypesLoaded: false,
+    _weekendHourTypesLoading: false,
     async _loadWeekendHourTypeIds() {
-        if (this._weekendHourTypesLoaded) return;
-        this._weekendHourTypesLoaded = true;   // markeer direct om re-tries te vermijden
+        if (this._weekendHourTypesLoaded || this._weekendHourTypesLoading) return;
+        // v214: de loaded-vlag stond voorheen direct op true, óók bij een
+        // mislukte fetch — één hapering bij opstart en zaterdag-/zondaguren
+        // werden de hele sessie stil als weekdag geboekt. Nu: pas markeren
+        // ná een geslaagde load, zodat het bij de volgende klok-actie
+        // gewoon opnieuw geprobeerd wordt.
+        this._weekendHourTypesLoading = true;
         try {
             const res = await this.get('hour-types?limit=50');
             if (res.code !== 200) {
@@ -3728,8 +3823,11 @@ const RobawsAPI = {
             if (byName['overuren zaterdag']) this.HOUR_TYPE_IDS.overurenZaterdag = byName['overuren zaterdag'];
             if (byName['overuren zondag'])   this.HOUR_TYPE_IDS.overurenZondag   = byName['overuren zondag'];
             console.log('[RobawsAPI] weekend hourTypes:', this.HOUR_TYPE_IDS);
+            this._weekendHourTypesLoaded = true;  // v214: enkel bij succes
         } catch(e) {
             console.warn('[RobawsAPI] hour-types lookup faalde:', e && e.message);
+        } finally {
+            this._weekendHourTypesLoading = false;
         }
     },
 
@@ -3814,6 +3912,14 @@ const RobawsAPI = {
      */
     async createTimeRegistrationWorkOrder(opts) {
         const { employeeId, employeeName, userId, dateStr, ingeklokt, tijdLabel, opmerking } = opts;
+
+        // v214: zonder userId géén tijdsregistratie aanmaken — zo'n werkbon
+        // zonder verantwoordelijke is onvindbaar voor getTodaysOpen... (dus
+        // dubbele inklok bij de volgende scan) en lekt in het dagoverzicht
+        // van álle gebruikers.
+        if (userId == null || String(userId) === '') {
+            throw new Error('Geen Robaws-gebruikers-id gekend — log opnieuw in (met internet) en probeer dan te klokken');
+        }
 
         // Stap 1: lege werkbon aanmaken
         const woRes = await this.post('work-orders', {});
@@ -4427,7 +4533,9 @@ const RobawsAPI = {
             console.warn('[RobawsAPI] Meer dan 1 tijdsregistratie-werkbon vandaag voor user',
                 userId, '- nieuwste eerste; IDs:', items.map(i => i.id).join(','));
         }
-        items.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+        // v214: numeriek sorteren — de string-sort koos rond een id-lengte-
+        // wissel ('9999' vs '10001') de verkeerde werkbon als "nieuwste".
+        items.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
         return items[0];
     },
 
