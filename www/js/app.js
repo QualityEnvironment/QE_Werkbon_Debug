@@ -9818,6 +9818,66 @@ const app = {
         this.openModal();
     },
 
+    // v220: weekend-muziekje bij de laatste uitklok op vrijdag.
+    // Speelt Levi's eigen mp3 (www/assets/sounds/weekend.mp3); ontbreekt die
+    // of blokkeert het toestel de weergave, dan valt het terug op een korte
+    // gesynthetiseerde fanfare. Mag NOOIT de uitklok-flow breken.
+    _playWeekendJingle() {
+        try { if (navigator.vibrate) navigator.vibrate([90, 60, 90, 60, 240]); } catch (_) {}
+        try {
+            const audio = new Audio('assets/sounds/weekend.mp3');
+            audio.volume = 1.0;
+            const p = audio.play();
+            if (p && p.catch) {
+                p.catch(() => { try { this._playWeekendJingleSynth(); } catch (_) {} });
+            }
+            // Veiligheidsstop na 15 s (mocht de mp3 lang zijn)
+            setTimeout(() => { try { audio.pause(); } catch (_) {} }, 15000);
+        } catch (_) {
+            try { this._playWeekendJingleSynth(); } catch (_) {}
+        }
+    },
+
+    /** v220: fallback-fanfare via Web Audio (origineel deuntje, ±2,4 s) —
+     *  gebruikt wanneer de mp3 ontbreekt of niet mag afspelen. */
+    _playWeekendJingleSynth() {
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            const ctx = new Ctx();
+            if (ctx.state === 'suspended') { try { ctx.resume(); } catch (_) {} }
+            const t0 = ctx.currentTime + 0.05;
+            const note = (freq, start, dur, type, vol) => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.type = type || 'triangle';
+                o.frequency.value = freq;
+                g.gain.setValueAtTime(0.0001, t0 + start);
+                g.gain.exponentialRampToValueAtTime(vol || 0.18, t0 + start + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, t0 + start + dur);
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.start(t0 + start);
+                o.stop(t0 + start + dur + 0.05);
+            };
+            // Vrolijke fanfare, ±2,4 s
+            note(659.25, 0.00, 0.14);              // E5
+            note(659.25, 0.16, 0.14);              // E5
+            note(739.99, 0.32, 0.14);              // F#5
+            note(783.99, 0.48, 0.20);              // G5
+            note(659.25, 0.70, 0.14);              // E5
+            note(783.99, 0.86, 0.26);              // G5
+            note(880.00, 1.14, 0.14);              // A5
+            note(987.77, 1.30, 0.40);              // B5
+            // Slotakkoord (G-majeur)
+            note(392.00, 1.74, 0.65, 'sine', 0.12);     // G4
+            note(493.88, 1.74, 0.65, 'sine', 0.10);     // B4
+            note(587.33, 1.74, 0.65, 'sine', 0.10);     // D5
+            note(783.99, 1.74, 0.65, 'triangle', 0.14); // G5
+            setTimeout(() => { try { ctx.close(); } catch (_) {} }, 3200);
+        } catch (_) { /* stil — een deuntje is nooit kritiek */ }
+    },
+
     /** v205: toast(message, isError) — tweede parameter werd door ±15
      *  call-sites al meegegeven maar voorheen stil genegeerd, waardoor
      *  foutmeldingen er identiek uitzagen als succes. isError=true →

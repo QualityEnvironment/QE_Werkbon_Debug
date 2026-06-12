@@ -1223,11 +1223,25 @@ window.QEClock = {
         });
         this._saveSession(session);
 
+        // v220: vrijdag vanaf de middag uitklokken = weekend! Fanfare +
+        // trilpatroon. Alleen bij een echte eigen uitklok (niet bij de
+        // automatische middernacht-afsluiting); best effort — een deuntje
+        // mag de uitklok nooit breken.
+        const isFridayParty = (ruleDay === 5) && !opts2.forcedEndTime && (entryEndMin >= 12 * 60);
+        if (isFridayParty) {
+            try {
+                if (window.app && typeof app._playWeekendJingle === 'function') {
+                    app._playWeekendJingle();
+                }
+            } catch (_) {}
+        }
+
         return {
             ok: true,
             message: 'Uitgeklokt om ' + entryEnd + '\n' +
                 'Uren: ' + entryStart + ' - ' + entryEnd +
-                ' (' + pauseMinutes + 'min pauze)' + uitklokNote + openLLNote,
+                ' (' + pauseMinutes + 'min pauze)' + uitklokNote + openLLNote +
+                (isFridayParty ? '\n\u{1F389} Fijn weekend!' : ''),
             refresh: true,
             // v83: vraag de monteur om kilometers in te geven na clock-out.
             // v215: niet bij de automatische gisteren-afsluiting.

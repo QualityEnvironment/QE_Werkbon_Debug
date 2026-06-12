@@ -1,0 +1,6 @@
+Plaats hier het weekend-muziekje als:  weekend.mp3
+
+- Wordt afgespeeld bij de eigen uitklok op vrijdag vanaf 12:00.
+- Ontbreekt het bestand, dan speelt de app een korte ingebouwde fanfare.
+- Tip: hou het kort (5-10 s); de app stopt het afspelen sowieso na 15 s.
+- Dit tekstbestand mag blijven staan (zorgt dat de map in git bestaat).
