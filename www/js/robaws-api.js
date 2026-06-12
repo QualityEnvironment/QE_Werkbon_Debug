@@ -3697,6 +3697,34 @@ const RobawsAPI = {
      *  Worker en de app dezelfde betaling allebei kunnen registreren
      *  (factuur 2× betaald). true = zeker voldaan, false = nog open,
      *  null = niet te bepalen (caller beslist zelf). */
+    /** v229: zet ALLEEN de status van een factuur ('betaald'/'opmaak'…).
+     *  Volledige GET→PUT (full replace) zodat geen velden verloren gaan;
+     *  het openstaande bedrag blijft onaangeroerd — er wordt géén betaling
+     *  geregistreerd. Gebruikt door overschrijving-ter-plaatse. */
+    async setInvoiceStatus(invoiceId, status) {
+        try {
+            const cur = await this.get(`sales-invoices/${invoiceId}`, { bypassCache: true });
+            if (cur.code !== 200 || !cur.data) {
+                return { ok: false, error: 'factuur niet leesbaar (code ' + cur.code + ')' };
+            }
+            const body = Object.assign({}, cur.data, { status: status });
+            // Robaws genereert deze velden zelf — niet meesturen in PUT
+            delete body.id;
+            delete body.createdAt;
+            delete body.updatedAt;
+            delete body.createdBy;
+            delete body.updatedBy;
+            delete body.logicId;
+            const put = await this.put(`sales-invoices/${invoiceId}`, body);
+            if (put.code !== 200 && put.code !== 204) {
+                return { ok: false, error: 'status-PUT faalde (code ' + put.code + ')' };
+            }
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: (e && e.message) || String(e) };
+        }
+    },
+
     async isInvoiceSettled(invoiceId) {
         try {
             const r = await this.get(`sales-invoices/${invoiceId}`, { bypassCache: true });

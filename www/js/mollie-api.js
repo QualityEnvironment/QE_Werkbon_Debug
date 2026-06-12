@@ -152,6 +152,36 @@ const MollieAPI = {
         }
     },
 
+    /** v229: Maak een Mollie-BETAALLINK aan via de Worker; de app toont de
+     *  link-URL als QR. description MOET het factuurnummer zijn — daarop
+     *  matchen de webhook, de KV-status en de automatische Robaws-boeking
+     *  (betaallinks ondersteunen geen metadata).
+     *  @returns {paymentLinkId, paymentLinkUrl, expiresAt} */
+    async createPaymentLink({ amountCents, description, invoiceId }) {
+        const value = (Math.round(amountCents) / 100).toFixed(2);
+        const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 20000) : null;
+        try {
+            const res = await fetch(this.WEBHOOK_URL + '/create-payment-link', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    amountValue: value,
+                    description: String(description || '').slice(0, 255),
+                    invoiceId: invoiceId || null,
+                }),
+                signal: controller ? controller.signal : undefined,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || data.error) {
+                throw new Error((data && data.error) || ('betaallink aanmaken faalde (HTTP ' + res.status + ')'));
+            }
+            return data;
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    },
+
     /** Map de Mollie Tap intent return naar een UI-bericht. */
     statusToMessage(result) {
         if (!result) return 'Onbekend';
