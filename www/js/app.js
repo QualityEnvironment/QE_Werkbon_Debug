@@ -6355,9 +6355,14 @@ const app = {
                     </button>
                 </div>`;
         }
+        // v226: betalingsbewijs-blok onder het QR-scherm
+        this._renderOvsBewijsBlok(invoiceResult, container);
+        // v227: Bancontact-QR (Mollie) bovenaan — betaling met dírecte bevestiging
+        this._renderMollieQrIntro(invoiceResult, container);
     },
 
     closePaymentScreen() {
+        this._stopMollieQrPoll();
         this.navigate('screenPlanning', false);
         this.screenHistory = [];
         this.loadPlanning();
@@ -6380,6 +6385,322 @@ const app = {
             }
         } catch (e) {
             this.toast('Kon betaalscherm niet openen');
+        }
+    },
+
+    // ========================================
+    // v226: BETALINGSBEWIJS BIJ OVERSCHRIJVING TER PLAATSE
+    // De app zet de factuur bij een overschrijving bewust NIET op betaald
+    // (het geld staat pas later op de rekening; de bank-import boekt de
+    // betaling — zelf boeken zou dubbel zijn). Wat wél kan: een foto van het
+    // bevestigingsscherm in de bank-app van de klant als bewijs op de
+    // werkbon zetten + een taak voor de boekhouding zodat er geen aanmaning
+    // vertrekt terwijl het geld onderweg is.
+    // ========================================
+
+    /** Render de bewijs-knop (of de klaar-status) onder het overschrijving-scherm. */
+    _renderOvsBewijsBlok(invoiceResult, container) {
+        if (!container) return;
+        const old = document.getElementById('ovsBewijsBlok');
+        if (old) old.remove();
+        const inv = (invoiceResult && invoiceResult.invoice) || {};
+        const invoiceId = inv.id || (invoiceResult && invoiceResult.invoiceId) || null;
+        const dedupKey = 'qe_ovs_bewijs_' + (invoiceId || inv.logicId || 'onbekend');
+        const div = document.createElement('div');
+        div.id = 'ovsBewijsBlok';
+        div.style.cssText = 'margin:16px 12px 28px;text-align:center';
+        if (localStorage.getItem(dedupKey)) {
+            div.innerHTML = '<p style="color:#2e7d32;font-weight:600;font-size:15px">' +
+                '✓ Betalingsbewijs vastgelegd — boekhouding is verwittigd</p>';
+        } else {
+            div.innerHTML =
+                '<button class="btn btn-full" style="padding:14px;background:#2e7d32;color:#fff;' +
+                    'border:none;border-radius:8px;font-size:16px;font-weight:600" ' +
+                    'onclick="app.captureOvsBewijs()">📷 Klant heeft betaald — bewijs vastleggen</button>' +
+                '<p style="font-size:12.5px;color:#666;margin:8px 4px 0">Maak een foto van het ' +
+                    'bevestigingsscherm in de bank-app van de klant. De foto komt bij de werkbon ' +
+                    'en de boekhouding wordt verwittigd zodat er geen aanmaning vertrekt.</p>' +
+                '<button style="margin-top:6px;background:none;border:none;color:#1565c0;' +
+                    'text-decoration:underline;font-size:13px" ' +
+                    'onclick="app.confirmOvsZonderFoto()">Foto niet mogelijk? Alleen boekhouding verwittigen</button>' +
+                '<input type="file" id="ovsBewijsInput" accept="image/*" capture="environment" ' +
+                    'style="display:none" onchange="app._onOvsBewijsPicked(this.files && this.files[0])">';
+        }
+        container.appendChild(div);
+        this._ovsBewijsCtx = invoiceResult || null;
+    },
+
+    // ========================================
+    // v227: BANCONTACT-QR (MOLLIE) — overschrijving mét directe bevestiging
+    // De app vraagt de Worker een Bancontact-betaling met QR aan (de Mollie
+    // API-key blijft op de Worker). Klant scant met de bank-app → Mollie
+    // pingt de webhook → de Worker boekt de betaling in Robaws (zelfde pad
+    // als Tap-to-Pay, incl. idempotency) → de app pollt /status en toont
+    // live "✓ Betaald". Geen foto's, geen aanmaningen, geen onzekerheid.
+    // ========================================
+
+    /** Groene aanrader-knop bovenaan het overschrijving-scherm. */
+    _renderMollieQrIntro(invoiceResult, container) {
+        if (!container) return;
+        const old = document.getElementById('mollieQrIntro');
+        if (old) old.remove();
+        const div = document.createElement('div');
+        div.id = 'mollieQrIntro';
+        div.style.cssText = 'margin:4px 12px 18px;text-align:center';
+        div.innerHTML =
+            '<button class="btn btn-full" style="padding:15px;background:#005498;color:#fff;' +
+                'border:none;border-radius:8px;font-size:16.5px;font-weight:700" ' +
+                'onclick="app.startMollieQr()">⚡ Bancontact-QR — meteen bevestigd</button>' +
+            '<p style="font-size:12.5px;color:#666;margin:7px 4px 0">Klant scant met de bank-app en ' +
+                'betaalt — de app ziet binnen enkele seconden dat het gelukt is en Robaws wordt ' +
+                'automatisch bijgewerkt. <b>Aangeraden</b> boven de gewone overschrijving hieronder.</p>';
+        container.insertBefore(div, container.firstChild);
+        this._mollieQrCtx = invoiceResult || null;
+    },
+
+    _stopMollieQrPoll() {
+        if (this._qrPollTimer) { clearInterval(this._qrPollTimer); this._qrPollTimer = null; }
+    },
+
+    async startMollieQr() {
+        if (this._qrStartBusy) return;
+        this._qrStartBusy = true;
+        const container = document.getElementById('overschrijvingContent');
+        const invoiceResult = this._mollieQrCtx || {};
+        const inv = invoiceResult.invoice || {};
+        const pay = invoiceResult.payment || {};
+        try {
+            const bedrag = parseFloat(pay.amount || inv.totalInclVat || 0);
+            if (!(bedrag > 0)) throw new Error('geen geldig bedrag gevonden');
+            if (!inv.logicId && !inv.id) throw new Error('geen factuur gevonden');
+            if (container) {
+                container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
+                    'Bancontact-QR aanmaken…</div>';
+            }
+            const qr = await MollieAPI.createQrPayment({
+                amountCents: Math.round(bedrag * 100),
+                description: inv.logicId || ('Factuur ' + inv.id),
+                invoiceId: inv.id || null,
+                workOrderId: invoiceResult.workOrderId || null,
+            });
+            this._renderMollieQrScreen(qr, bedrag, invoiceResult);
+            this._beginMollieQrPoll(qr, invoiceResult);
+        } catch (e) {
+            console.error('[MollieQR] start mislukt:', e);
+            this.toast('Bancontact-QR niet beschikbaar: ' + ((e && e.message) || e), true);
+            // Terug naar het gewone overschrijving-scherm
+            this.showOverschrijvingScreen(invoiceResult);
+        } finally {
+            this._qrStartBusy = false;
+        }
+    },
+
+    _renderMollieQrScreen(qr, bedrag, invoiceResult) {
+        const container = document.getElementById('overschrijvingContent');
+        if (!container) return;
+        const inv = invoiceResult.invoice || {};
+        let qrHtml;
+        const qrStyle = 'style="width:260px;height:260px;max-width:80vw;border:1px solid #ddd;' +
+            'border-radius:12px;background:#fff;padding:8px"';
+        if (qr.qrSrc) {
+            // Mollie's eigen QR-afbeelding (Bancontact)
+            qrHtml = '<img src="' + qr.qrSrc + '" alt="Bancontact QR" ' + qrStyle + '>';
+        } else if (qr.checkoutUrl) {
+            // Fallback: QR van de checkout-URL via dezelfde dienst als de EPC-QR
+            const fb = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&ecc=M&data=' +
+                encodeURIComponent(qr.checkoutUrl);
+            qrHtml = '<img src="' + fb + '" alt="Betaal QR" ' + qrStyle + '>';
+        } else {
+            qrHtml = '<p style="color:#c62828">Geen QR ontvangen — probeer opnieuw of gebruik ' +
+                'de gewone overschrijving.</p>';
+        }
+        container.innerHTML =
+            '<div style="text-align:center;padding:16px 12px 28px">' +
+                '<h2 style="margin:4px 0 2px">Bancontact</h2>' +
+                '<p style="font-size:26px;font-weight:700;margin:4px 0 14px">€ ' + bedrag.toFixed(2) + '</p>' +
+                qrHtml +
+                '<p style="font-size:14px;color:#444;margin:14px 6px 4px">Laat de klant deze code ' +
+                    'scannen met de <b>bank-app of Payconiq</b>.</p>' +
+                '<p id="mollieQrStatus" style="font-weight:600;color:#1565c0;margin:10px 0 18px">' +
+                    'Wachten op betaling…</p>' +
+                '<button class="btn" style="background:none;border:1px solid #bbb;border-radius:8px;' +
+                    'padding:10px 18px;color:#444" onclick="app.cancelMollieQr()">Annuleren — terug</button>' +
+            '</div>';
+    },
+
+    cancelMollieQr() {
+        this._stopMollieQrPoll();
+        this.showOverschrijvingScreen(this._mollieQrCtx || {});
+    },
+
+    _beginMollieQrPoll(qr, invoiceResult) {
+        this._stopMollieQrPoll();
+        const inv = invoiceResult.invoice || {};
+        const startedAt = Date.now();
+        const MAX_MS = 15 * 60 * 1000;
+        this._qrPollTimer = setInterval(async () => {
+            // Scherm verlaten → stoppen (geen lekkende timers)
+            if (this.currentScreen !== 'screenOverschrijving') { this._stopMollieQrPoll(); return; }
+            if (Date.now() - startedAt > MAX_MS) {
+                this._stopMollieQrPoll();
+                const st = document.getElementById('mollieQrStatus');
+                if (st) { st.textContent = 'QR verlopen — start een nieuwe betaling.'; st.style.color = '#c62828'; }
+                return;
+            }
+            let s = null;
+            try {
+                s = await MollieAPI.fetchPaymentStatus({
+                    referenceId: qr.referenceId,
+                    description: inv.logicId || '',
+                });
+            } catch (e) { /* tijdelijke netwerkfout — volgende tick */ }
+            if (!s || !s.found) return;
+            if (s.status === 'paid') {
+                this._stopMollieQrPoll();
+                this._onMollieQrPaid(s, invoiceResult);
+            } else if (s.status === 'failed' || s.status === 'canceled' || s.status === 'expired') {
+                this._stopMollieQrPoll();
+                const st = document.getElementById('mollieQrStatus');
+                if (st) {
+                    st.textContent = s.status === 'expired' ? 'QR verlopen — start een nieuwe betaling.'
+                        : 'Betaling ' + (s.status === 'canceled' ? 'geannuleerd' : 'mislukt') +
+                          (s.failureMessage ? ' (' + s.failureMessage + ')' : '') + ' — probeer opnieuw.';
+                    st.style.color = '#c62828';
+                }
+            }
+        }, 3000);
+    },
+
+    async _onMollieQrPaid(status, invoiceResult) {
+        const container = document.getElementById('overschrijvingContent');
+        if (container) {
+            container.innerHTML =
+                '<div style="text-align:center;padding:60px 20px">' +
+                    '<div style="font-size:64px">✅</div>' +
+                    '<h2 style="color:#2e7d32;margin:10px 0 4px">Betaald!</h2>' +
+                    '<p style="color:#444">€ ' + (status.amount || '') + ' via Bancontact — ' +
+                        'automatisch geboekt in Robaws.</p>' +
+                    '<button class="btn btn-primary btn-full" style="margin-top:24px;padding:14px" ' +
+                        'onclick="app.closePaymentScreen()">✓ Klaar — terug naar planning</button>' +
+                '</div>';
+        }
+        this.toast('Betaling gelukt — automatisch geboekt');
+        // Best effort: Betaling-veld op de docs bijwerken + context sluiten.
+        // (De boeking zelf deed de Worker al — de app boekt hier bewust NIETS.)
+        try {
+            let ctx = {};
+            try { ctx = JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}'); } catch (e) {}
+            const inv = invoiceResult.invoice || {};
+            const ids = {
+                workOrderId: invoiceResult.workOrderId || ctx.workOrderId,
+                salesOrderId: invoiceResult.salesOrderId || ctx.salesOrderId,
+                invoiceId: inv.id || ctx.invoiceId,
+            };
+            if (ids.workOrderId || ids.invoiceId) {
+                await RobawsAPI.setBetalingOnAllDocs(ids, 'Bancontact QR');
+                ctx.paymentMethod = 'Bancontact QR';
+                ctx.timestamp = Date.now();
+                localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+            }
+        } catch (e) {
+            console.warn('[MollieQR] Betaling-veld bijwerken faalde (niet erg):', e && e.message);
+        }
+    },
+
+    captureOvsBewijs() {
+        const input = document.getElementById('ovsBewijsInput');
+        if (input) input.click();
+    },
+
+    async _onOvsBewijsPicked(file) {
+        if (!file) return;
+        await this._submitOvsBewijs(file);
+    },
+
+    async confirmOvsZonderFoto() {
+        await this._submitOvsBewijs(null);
+    },
+
+    /** Upload (optioneel) de bewijsfoto naar de werkbon en maak de Els-taak. */
+    async _submitOvsBewijs(file) {
+        if (this._ovsBewijsBusy) return;
+        this._ovsBewijsBusy = true;
+        const blok = document.getElementById('ovsBewijsBlok');
+        try {
+            const invoiceResult = this._ovsBewijsCtx || {};
+            const inv = invoiceResult.invoice || {};
+            const pay = invoiceResult.payment || {};
+            let ctx = {};
+            try { ctx = JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}'); } catch (e) {}
+            const invoiceId = inv.id || invoiceResult.invoiceId || ctx.invoiceId || null;
+            const workOrderId = invoiceResult.workOrderId || ctx.workOrderId || null;
+            const dedupKey = 'qe_ovs_bewijs_' + (invoiceId || inv.logicId || 'onbekend');
+            if (localStorage.getItem(dedupKey)) { this._ovsBewijsBusy = false; return; }
+            if (blok) blok.innerHTML = '<p style="color:#666">Bewijs opslaan…</p>';
+
+            // 1) Foto uploaden (indien meegegeven)
+            let fotoOk = false;
+            if (file) {
+                const d = new Date();
+                const stamp = d.toLocaleDateString('nl-BE') + ' ' +
+                    String(d.getHours()).padStart(2, '0') + 'u' + String(d.getMinutes()).padStart(2, '0');
+                const fileName = 'Betalingsbewijs overschrijving ' + (inv.logicId || invoiceId || '') +
+                    ' - ' + stamp.replace(/\//g, '-') + '.jpg';
+                let upload = null;
+                if (workOrderId) {
+                    upload = await RobawsAPI.uploadFile('work-orders/' + workOrderId + '/documents', file, fileName);
+                }
+                if ((!upload || (upload.code !== 200 && upload.code !== 201)) && invoiceId) {
+                    // Fallback: rechtstreeks op de factuur
+                    upload = await RobawsAPI.uploadFile('sales-invoices/' + invoiceId + '/documents', file, fileName);
+                }
+                fotoOk = !!(upload && (upload.code === 200 || upload.code === 201));
+                if (!fotoOk) throw new Error('foto-upload mislukt');
+            }
+
+            // 2) Taak voor de boekhouding (geen aanmaning, betaling matchen)
+            const bedrag = parseFloat(pay.amount || inv.totalInclVat || ctx.amount || 0).toFixed(2);
+            const ogm = pay.formattedOgm || inv.formattedOgm ||
+                (inv.paymentInstruction ? this._formatOgm(inv.paymentInstruction) : '') || ctx.ogm || '?';
+            const klant = invoiceResult.clientName || inv.clientName ||
+                (invoiceResult.client && invoiceResult.client.name) || ctx.clientName || '?';
+            const naam = (this.currentUser && this.currentUser.name) || '?';
+            const taak = await RobawsAPI.post('tasks', {
+                title: 'Overschrijving ter plaatse BETAALD - betaling matchen (geen aanmaning)',
+                description: 'Klant: ' + klant +
+                    '\nFactuur: ' + (inv.logicId || invoiceId || '?') +
+                    '\nBedrag: € ' + bedrag +
+                    '\nOGM: ' + ogm +
+                    '\nTechnieker: ' + naam + ' — bevestiging gezien op ' +
+                    new Date().toLocaleString('nl-BE') +
+                    (file
+                        ? '\n\nFoto van het bevestigingsscherm staat bij de documenten van de werkbon.'
+                        : '\n\nGeen foto beschikbaar (kon/mocht niet ter plaatse).') +
+                    '\n\nDe klant heeft de overschrijving ter plaatse uitgevoerd. Gelieve de ' +
+                    'betaling te matchen zodra ze op de rekening staat en GEEN aanmaning te sturen.',
+                status: 'Te doen',
+                assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // Els
+            });
+            const taakOk = taak && (taak.code === 200 || taak.code === 201);
+
+            if (!taakOk && !fotoOk) throw new Error('taak aanmaken mislukt');
+            localStorage.setItem(dedupKey, String(Date.now()));
+            if (blok) {
+                blok.innerHTML = '<p style="color:#2e7d32;font-weight:600;font-size:15px">' +
+                    '✓ Betalingsbewijs vastgelegd — boekhouding is verwittigd</p>' +
+                    (!taakOk ? '<p style="color:#c62828;font-size:13px">Let op: de taak voor de ' +
+                        'boekhouding kon niet aangemaakt worden — geef het zelf even door.</p>' : '');
+            }
+            this.toast(fotoOk ? 'Bewijs opgeslagen — boekhouding verwittigd'
+                              : 'Boekhouding verwittigd');
+        } catch (e) {
+            console.error('[OvsBewijs] mislukt:', e);
+            this.toast('Bewijs opslaan mislukt: ' + ((e && e.message) || e) + ' — probeer opnieuw', true);
+            // Knop terugzetten zodat de technieker het opnieuw kan proberen
+            const container = document.getElementById('overschrijvingContent');
+            if (container) this._renderOvsBewijsBlok(this._ovsBewijsCtx, container);
+        } finally {
+            this._ovsBewijsBusy = false;
         }
     },
 
