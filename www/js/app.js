@@ -843,36 +843,67 @@ const app = {
     },
     // === EINDE DEBUG NFC TESTER ===
 
-    checkForUpdate() {
+    // v218: volledig herschreven. De oude knop pollde QEBridge.getAppVersion
+    // 30 s lang — maar bij een gevonden update KILLT de native installer het
+    // proces (de poll kon dus nooit "bijgewerkt" tonen), zonder update wachtte
+    // je 30 s op "geen update", en een mislukte download meldde óók "geen
+    // update". Nu vergelijkt de app zélf de versie met GitHub (zelfde bron als
+    // de native updater) en is er in élk pad directe, eerlijke feedback.
+    async checkForUpdate() {
         const btn = document.getElementById('btnCheckUpdate');
         const status = document.getElementById('updateStatus');
+        const setStatus = (txt, color) => {
+            if (status) { status.style.display = 'block'; status.style.color = color || 'var(--qe-grey)'; status.textContent = txt; }
+        };
+        const reEnable = () => { if (btn) { btn.disabled = false; btn.textContent = 'Controleren'; } };
         if (btn) { btn.disabled = true; btn.textContent = 'Zoeken...'; }
-        if (status) { status.style.display = 'block'; status.style.color = 'var(--qe-grey)'; status.textContent = 'Controleren op updates...'; }
+        setStatus('Controleren op updates...');
 
-        if (window.QEBridge && QEBridge.checkForUpdate) {
-            QEBridge.checkForUpdate();
-            // Poll elke seconde of de versie veranderd is
-            const startVersion = QEBridge.getAppVersion ? QEBridge.getAppVersion() : 0;
-            let checks = 0;
-            const poll = setInterval(() => {
-                checks++;
-                const newVersion = QEBridge.getAppVersion ? QEBridge.getAppVersion() : 0;
-                if (newVersion > startVersion) {
-                    clearInterval(poll);
-                    if (status) { status.style.color = 'var(--qe-green)'; status.textContent = ` Bijgewerkt naar versie ${newVersion}!`; }
-                    if (btn) { btn.disabled = false; btn.textContent = 'Controleren'; }
-                    const versionEl = document.getElementById('appVersionInfo');
-                    if (versionEl) versionEl.textContent = `Huidige versie: ${newVersion}`;
-                } else if (checks >= 30) {
-                    clearInterval(poll);
-                    if (status) { status.style.color = 'var(--qe-grey)'; status.textContent = 'Geen update beschikbaar'; }
-                    if (btn) { btn.disabled = false; btn.textContent = 'Controleren'; }
+        try {
+            // 1. Lokale versie (van de draaiende www)
+            let localVer = 0;
+            try {
+                const lr = await fetch('version.json?_=' + Date.now());
+                localVer = Number((await lr.json()).version) || 0;
+            } catch (_) {}
+
+            // 2. Remote versie — juiste repo per app-variant (debug/productie),
+            //    zelfde bron als AppUpdater.java
+            const apkName = (window.QEBridge && QEBridge.getApkVersionName)
+                ? String(QEBridge.getApkVersionName() || '') : '';
+            const repo = apkName.toLowerCase().includes('debug') ? 'QE_Werkbon_Debug' : 'QE_Werkbon';
+            const url = 'https://raw.githubusercontent.com/QualityEnvironment/' + repo +
+                        '/main/www/version.json?t=' + Date.now();
+            const rr = await RobawsAPI._fetchWithTimeout(url, { cache: 'no-store' }, 10000);
+            if (!rr.ok) throw new Error('GitHub gaf ' + rr.status);
+            const remoteVer = Number((await rr.json()).version) || 0;
+
+            // 3. Vergelijken + eerlijke feedback
+            if (remoteVer > localVer) {
+                if (window.QEBridge && QEBridge.checkForUpdate) {
+                    setStatus('Update v' + remoteVer + ' gevonden — downloaden... De app herstart zo dadelijk vanzelf.', 'var(--qe-green)');
+                    QEBridge.checkForUpdate();
+                    // Vangnet: als de app na 60 s nog leeft, is de native
+                    // install blijven hangen — zeg dat eerlijk.
+                    setTimeout(() => {
+                        setStatus('Installeren lukte niet automatisch — sluit de app volledig (force stop) en open opnieuw.', '#c62828');
+                        reEnable();
+                    }, 60000);
+                    return;  // knop bewust uitgeschakeld laten tot herstart/vangnet
                 }
-            }, 1000);
-        } else {
-            if (status) { status.style.color = '#c62828'; status.textContent = 'Updates niet beschikbaar in deze versie'; }
-            if (btn) { btn.disabled = false; btn.textContent = 'Controleren'; }
+                setStatus('Update v' + remoteVer + ' beschikbaar — herstart de app om te installeren.', 'var(--qe-green)');
+            } else if (remoteVer === localVer && remoteVer > 0) {
+                setStatus('Je hebt de nieuwste versie (v' + localVer + ').', 'var(--qe-green)');
+            } else if (remoteVer > 0 && remoteVer < localVer) {
+                // Handig voor wie zelf releaset: lokaal loopt vóór op de repo
+                setStatus('Lokale versie (v' + localVer + ') is nieuwer dan de repo (v' + remoteVer + ') — nog niet gepusht?');
+            } else {
+                setStatus('Kon de versies niet vergelijken — probeer later opnieuw.', '#c62828');
+            }
+        } catch (e) {
+            setStatus('Controleren mislukt: ' + ((e && e.message) || 'geen verbinding met GitHub'), '#c62828');
         }
+        reEnable();
     },
 
     profilePickPhoto(source) {
@@ -1516,6 +1547,7 @@ const app = {
             screenAanpassing: 'Aanpassing aanvragen',
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
+            screenAfwezigheid: 'Afwezigheid melden',  // v219
         };
         document.getElementById('headerTitle').textContent = titles[screenId] || '';
 
@@ -6858,7 +6890,13 @@ const app = {
                 this._attendance[a.email] = a;
                 const safeEmail = String(a.email).replace(/[^\w@.-]/g, '');
                 let statusHtml = '', btnHtml = '';
-                if (a.uitgeklokt) {
+                const isAbsent = a.tijd && Array.isArray(RobawsAPI.ABSENCE_TIJD) &&
+                                 RobawsAPI.ABSENCE_TIJD.includes(a.tijd);
+                if (isAbsent) {
+                    // v219: afwezigheid gemeld (ziek/verlof/...) — geen knoppen;
+                    // komt de werknemer toch, dan werkt de gewone scan gewoon.
+                    statusHtml = `<span style="color:var(--qe-orange);font-weight:600">${this.escapeHtml(a.tijd)}</span>`;
+                } else if (a.uitgeklokt) {
                     statusHtml = `<span style="color:var(--qe-grey)">uitgeklokt om ${this.escapeHtml(a.uitgeklokt)}</span>`;
                 } else if (a.ingeklokt) {
                     const inMin = toMin(a.ingeklokt);
@@ -6892,6 +6930,114 @@ const app = {
             console.warn('[App] Team-aanwezigheid laden faalde:', e && e.message);
             list.innerHTML = '<p class="text-grey text-sm text-center">Laden mislukt — tik op vernieuwen om opnieuw te proberen</p>';
         }
+    },
+
+    // ========================================
+    // v219: AFWEZIGHEID MELDEN (alleen bureel)
+    // Maakt tijdsregistratie-werkbonnen aan met Tijd = Ziek/Verlof/... —
+    // zonder time-entries (er zijn geen gepresteerde uren). Za/zo worden
+    // overgeslagen. Dankzij de absence-filter in getTodaysOpen... telt zo'n
+    // registratie NIET als open klok-sessie op de telefoon van de werknemer.
+    // ========================================
+    openAfwezigheid() {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || user.role !== 'bureel') return;
+        const vanEl = document.getElementById('afwVan');
+        const totEl = document.getElementById('afwTot');
+        if (vanEl && !vanEl.value) vanEl.value = this._localDateStr();
+        if (totEl) totEl.value = '';
+        const cont = document.getElementById('afwWerknemers');
+        if (cont) {
+            cont.innerHTML = Object.entries(RobawsAPI.EMPLOYEES).map(([email, emp]) => {
+                const safe = String(email).replace(/[^\w@.-]/g, '');
+                return `
+                <label style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f0f0f0;font-size:14px">
+                    <input type="checkbox" class="afw-emp" value="${safe}" style="width:18px;height:18px">
+                    <span>${this.escapeHtml(emp.name)} <span style="font-size:11px;color:var(--qe-grey)">(${this.escapeHtml(emp.role)})</span></span>
+                </label>`;
+            }).join('');
+        }
+        const res = document.getElementById('afwResult');
+        if (res) res.style.display = 'none';
+        this.navigate('screenAfwezigheid');
+    },
+
+    afwToggleAll() {
+        const boxes = document.querySelectorAll('.afw-emp');
+        const anyOff = Array.from(boxes).some(b => !b.checked);
+        boxes.forEach(b => { b.checked = anyOff; });
+    },
+
+    async submitAfwezigheid() {
+        const user = RobawsAPI.getLoggedInUser();
+        if (!user || user.role !== 'bureel') return;
+        if (this._afwBusy) return;
+        const type = document.getElementById('afwType')?.value || '';
+        const van = document.getElementById('afwVan')?.value || '';
+        const tot = document.getElementById('afwTot')?.value || van;
+        const emails = Array.from(document.querySelectorAll('.afw-emp:checked')).map(b => b.value);
+        const resEl = document.getElementById('afwResult');
+        const show = (html) => { if (resEl) { resEl.style.display = 'block'; resEl.style.padding = '12px'; resEl.innerHTML = html; } };
+
+        if (!type || !van) { this.toast('Kies een type en een datum', true); return; }
+        if (emails.length === 0) { this.toast('Selecteer minstens één werknemer', true); return; }
+        if (tot < van) { this.toast('"Tot en met" ligt vóór "Van"', true); return; }
+
+        // Werkdagen opbouwen (za/zo overslaan), veiligheidscap 31 dagen
+        const dagen = [];
+        const d = new Date(van + 'T12:00:00');
+        const end = new Date(tot + 'T12:00:00');
+        while (d <= end && dagen.length < 31) {
+            const dow = d.getDay();
+            if (dow !== 0 && dow !== 6) {
+                dagen.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+            }
+            d.setDate(d.getDate() + 1);
+        }
+        if (dagen.length === 0) { this.toast('Geen werkdagen in de gekozen periode (za/zo worden overgeslagen)', true); return; }
+
+        const totaal = dagen.length * emails.length;
+        if (!confirm(type + ' registreren voor ' + emails.length + ' werknemer(s) × ' + dagen.length + ' werkdag(en) = ' + totaal + ' registratie(s)?')) return;
+
+        this._afwBusy = true;
+        const btn = document.getElementById('btnAfwSubmit');
+        if (btn) { btn.disabled = true; btn.textContent = 'Bezig...'; }
+        let ok = 0;
+        const fouten = [];
+        try {
+            show('Bezig: 0/' + totaal + '...');
+            for (const email of emails) {
+                const emp = RobawsAPI.EMPLOYEES[email];
+                if (!emp) { fouten.push(email + ': onbekende werknemer'); continue; }
+                for (const dag of dagen) {
+                    try {
+                        // Géén ingeklokt-tijd en géén time-entries: afwezigheid
+                        // heeft geen gepresteerde uren. Tijd-veld = het type.
+                        await RobawsAPI.createTimeRegistrationWorkOrder({
+                            employeeId: emp.employeeId,
+                            employeeName: emp.name,
+                            userId: emp.userId,
+                            dateStr: dag,
+                            ingeklokt: '',
+                            tijdLabel: type,
+                            opmerking: 'Afwezigheid: ' + type + ' — geregistreerd door ' + (user.name || 'bureel'),
+                        });
+                        ok++;
+                    } catch (e) {
+                        fouten.push(emp.name + ' ' + dag + ': ' + String((e && e.message) || '?').slice(0, 80));
+                    }
+                    show('Bezig: ' + (ok + fouten.length) + '/' + totaal + '...');
+                }
+            }
+        } finally {
+            this._afwBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Registraties aanmaken'; }
+        }
+        show('<b>' + ok + '/' + totaal + ' registratie(s) aangemaakt (' + this.escapeHtml(type) + ')</b>' +
+            (fouten.length ? '<br><span style="color:var(--qe-red)">Mislukt:<br>' +
+                fouten.map(f => this.escapeHtml(f)).join('<br>') + '</span>' : ''));
+        this.toast(ok + ' afwezigheids-registratie(s) aangemaakt' + (fouten.length ? ' — ' + fouten.length + ' mislukt' : ''), fouten.length > 0);
+        if (ok > 0) this.loadClockAdmin();
     },
 
     /** v217: tijd-modal voor handmatig in-/uitklokken (alleen bureel). */

@@ -45,6 +45,10 @@ const RobawsAPI = {
         'els@qe.be':                 { employeeId: 23, userId: 3,     name: 'Els',        role: 'bureel' },
     },
 
+    // v219: Tijd-types die een AFWEZIGHEID zijn (de Robaws-keuzelijst minus
+    // "Op tijd"/"Te laat"). Eén bron voor klok, aanwezigheid en dagoverzicht.
+    ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof'],
+
     // === AUTH HEADERS ===
     getHeaders() {
         const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
@@ -4521,6 +4525,12 @@ const RobawsAPI = {
             if ((wo.date || '').substring(0, 10) !== today) return false;
             const itemUserId = wo.assignedUserId || (wo.assignedUser && wo.assignedUser.id);
             if (!itemUserId || String(itemUserId) !== String(userId)) return false;
+            // v219: afwezigheids-registraties (Ziek/Verlof/...) zijn GEEN
+            // klok-sessies — anders toonde de telefoon van een ziekgemelde
+            // werknemer "ingeklokt" en blokkeerde inklokken bij latere komst.
+            const tijdVal = String((wo.extraFields && wo.extraFields.Tijd &&
+                (wo.extraFields.Tijd.stringValue || '')) || '').trim();
+            if (this.ABSENCE_TIJD.includes(tijdVal)) return false;
             if (onlyOpen) {
                 const uitg = (wo.extraFields && wo.extraFields.Uitgeklokt
                     && wo.extraFields.Uitgeklokt.stringValue || '').trim();

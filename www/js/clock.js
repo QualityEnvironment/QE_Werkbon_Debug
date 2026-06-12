@@ -2005,8 +2005,9 @@ window.QEClock = {
                 return fd ? String(fd.stringValue ?? fd.value ?? '').trim() : '';
             } catch (_) { return ''; }
         };
-        const entries = Object.entries(RobawsAPI.EMPLOYEES)
-            .filter(([, emp]) => emp.role !== 'bureel');  // bureel klokt niet
+        // v219: ÁL het personeel tonen — bureel ziet van elkaar wie er is
+        // (was: bureel uitgefilterd).
+        const entries = Object.entries(RobawsAPI.EMPLOYEES);
         const out = await Promise.all(entries.map(async ([email, emp]) => {
             const wo = byUser[String(emp.userId)] || null;
             let startuur = '', pauze = null;
@@ -2035,6 +2036,7 @@ window.QEClock = {
                 workOrderId: wo ? wo.id : null,
                 ingeklokt: wo ? ex(wo, 'Ingeklokt') : '',
                 uitgeklokt: wo ? ex(wo, 'Uitgeklokt') : '',
+                tijd: wo ? ex(wo, 'Tijd') : '',  // v219: voor afwezigheids-status
             };
         }));
         out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
