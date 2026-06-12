@@ -119,7 +119,7 @@ const MollieAPI = {
      *  omschrijving (factuur-logicId!) en referenceId. De webhook boekt de
      *  betaling daarna automatisch in Robaws, identiek aan Tap-to-Pay.
      *  @returns {paymentId, status, qrSrc, checkoutUrl, expiresAt, referenceId} */
-    async createQrPayment({ amountCents, description, invoiceId, workOrderId }) {
+    async createQrPayment({ amountCents, description, invoiceId, workOrderId, method }) {
         const value = (Math.round(amountCents) / 100).toFixed(2);
         const referenceId = invoiceId
             ? ('inv_' + invoiceId + '_' + Date.now())
@@ -135,6 +135,9 @@ const MollieAPI = {
                     description: String(description || '').slice(0, 255),
                     referenceId: referenceId,
                     invoiceId: invoiceId || null,
+                    // v228: 'bancontact' (QR voor de bank-app) of 'any'
+                    // (betaallink: Mollie-checkout, klant kiest de methode)
+                    method: method === 'any' ? 'any' : 'bancontact',
                 }),
                 signal: controller ? controller.signal : undefined,
             });

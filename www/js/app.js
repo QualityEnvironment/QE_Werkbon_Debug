@@ -6336,7 +6336,21 @@ const app = {
         try { localStorage.setItem('qe_last_overschrijving', JSON.stringify(invoiceResult)); } catch(e){}
         this.navigate('screenOverschrijving', false);
         this.screenHistory = [];
+        this._mollieQrCtx = invoiceResult || null;
+        // v228: de Bancontact-QR (Mollie) IS het scherm — direct starten.
+        // Lukt dat niet (Worker onbereikbaar, Mollie weigert), dan valt
+        // startMollieQr automatisch terug op de klassieke bank-QR.
+        this.startMollieQr();
+    },
+
+    /** v228: de klassieke EPC/bank-QR — als terugvaloptie onder de
+     *  Bancontact-QR en als automatische fallback bij Mollie-fouten. */
+    showKlassiekeOverschrijving() {
+        this._stopMollieQrPoll();
+        const invoiceResult = this._mollieQrCtx ||
+            (() => { try { return JSON.parse(localStorage.getItem('qe_last_overschrijving') || '{}'); } catch (e) { return {}; } })();
         const container = document.getElementById('overschrijvingContent');
+        if (!container) return;
         if (window.EPCQR) {
             EPCQR.showPaymentScreen(invoiceResult, container);
         } else {
@@ -6355,10 +6369,16 @@ const app = {
                     </button>
                 </div>`;
         }
-        // v226: betalingsbewijs-blok onder het QR-scherm
+        // v226: betalingsbewijs-blok onder het bank-QR-scherm
         this._renderOvsBewijsBlok(invoiceResult, container);
-        // v227: Bancontact-QR (Mollie) bovenaan — betaling met dírecte bevestiging
-        this._renderMollieQrIntro(invoiceResult, container);
+        // v228: snel terug naar de Bancontact-QR kunnen
+        const sw = document.createElement('div');
+        sw.style.cssText = 'margin:4px 12px 14px;text-align:center';
+        sw.innerHTML =
+            '<button class="btn btn-full" style="padding:13px;background:#005498;color:#fff;' +
+                'border:none;border-radius:8px;font-size:15px;font-weight:600" ' +
+                'onclick="app.startMollieQr()">⚡ Bancontact-QR tonen (meteen bevestigd)</button>';
+        container.insertBefore(sw, container.firstChild);
     },
 
     closePaymentScreen() {
@@ -6439,32 +6459,17 @@ const app = {
     // live "✓ Betaald". Geen foto's, geen aanmaningen, geen onzekerheid.
     // ========================================
 
-    /** Groene aanrader-knop bovenaan het overschrijving-scherm. */
-    _renderMollieQrIntro(invoiceResult, container) {
-        if (!container) return;
-        const old = document.getElementById('mollieQrIntro');
-        if (old) old.remove();
-        const div = document.createElement('div');
-        div.id = 'mollieQrIntro';
-        div.style.cssText = 'margin:4px 12px 18px;text-align:center';
-        div.innerHTML =
-            '<button class="btn btn-full" style="padding:15px;background:#005498;color:#fff;' +
-                'border:none;border-radius:8px;font-size:16.5px;font-weight:700" ' +
-                'onclick="app.startMollieQr()">⚡ Bancontact-QR — meteen bevestigd</button>' +
-            '<p style="font-size:12.5px;color:#666;margin:7px 4px 0">Klant scant met de bank-app en ' +
-                'betaalt — de app ziet binnen enkele seconden dat het gelukt is en Robaws wordt ' +
-                'automatisch bijgewerkt. <b>Aangeraden</b> boven de gewone overschrijving hieronder.</p>';
-        container.insertBefore(div, container.firstChild);
-        this._mollieQrCtx = invoiceResult || null;
-    },
-
     _stopMollieQrPoll() {
         if (this._qrPollTimer) { clearInterval(this._qrPollTimer); this._qrPollTimer = null; }
     },
 
-    async startMollieQr() {
+    /** @param mode 'bancontact' (default — scan met bank-app) of 'any'
+     *  (betaallink-QR: Mollie-checkout, klant kiest zelf de methode). */
+    async startMollieQr(mode) {
         if (this._qrStartBusy) return;
         this._qrStartBusy = true;
+        this._stopMollieQrPoll();
+        mode = mode === 'any' ? 'any' : 'bancontact';
         const container = document.getElementById('overschrijvingContent');
         const invoiceResult = this._mollieQrCtx || {};
         const inv = invoiceResult.invoice || {};
@@ -6475,62 +6480,79 @@ const app = {
             if (!inv.logicId && !inv.id) throw new Error('geen factuur gevonden');
             if (container) {
                 container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
-                    'Bancontact-QR aanmaken…</div>';
+                    (mode === 'any' ? 'Betaallink-QR aanmaken…' : 'Bancontact-QR aanmaken…') + '</div>';
             }
             const qr = await MollieAPI.createQrPayment({
                 amountCents: Math.round(bedrag * 100),
                 description: inv.logicId || ('Factuur ' + inv.id),
                 invoiceId: inv.id || null,
                 workOrderId: invoiceResult.workOrderId || null,
+                method: mode,
             });
-            this._renderMollieQrScreen(qr, bedrag, invoiceResult);
+            this._renderMollieQrScreen(qr, bedrag, invoiceResult, mode);
             this._beginMollieQrPoll(qr, invoiceResult);
         } catch (e) {
             console.error('[MollieQR] start mislukt:', e);
-            this.toast('Bancontact-QR niet beschikbaar: ' + ((e && e.message) || e), true);
-            // Terug naar het gewone overschrijving-scherm
-            this.showOverschrijvingScreen(invoiceResult);
+            this.toast('Mollie-QR niet beschikbaar: ' + ((e && e.message) || e) +
+                ' — bank-QR getoond', true);
+            // Automatische terugval op de klassieke bank-QR (géén
+            // showOverschrijvingScreen — dat zou de QR opnieuw starten).
+            this.showKlassiekeOverschrijving();
         } finally {
             this._qrStartBusy = false;
         }
     },
 
-    _renderMollieQrScreen(qr, bedrag, invoiceResult) {
+    _renderMollieQrScreen(qr, bedrag, invoiceResult, mode) {
         const container = document.getElementById('overschrijvingContent');
         if (!container) return;
-        const inv = invoiceResult.invoice || {};
+        const isAny = mode === 'any';
         let qrHtml;
         const qrStyle = 'style="width:260px;height:260px;max-width:80vw;border:1px solid #ddd;' +
             'border-radius:12px;background:#fff;padding:8px"';
-        if (qr.qrSrc) {
-            // Mollie's eigen QR-afbeelding (Bancontact)
+        if (qr.qrSrc && !isAny) {
+            // Mollie's eigen Bancontact-QR (scanbaar met bank-app/Payconiq)
             qrHtml = '<img src="' + qr.qrSrc + '" alt="Bancontact QR" ' + qrStyle + '>';
         } else if (qr.checkoutUrl) {
-            // Fallback: QR van de checkout-URL via dezelfde dienst als de EPC-QR
+            // Betaallink-QR: de Mollie-checkout-URL als QR (klant scant met
+            // de camera en kiest zelf de methode) — zelfde dienst als EPC-QR
             const fb = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&ecc=M&data=' +
                 encodeURIComponent(qr.checkoutUrl);
             qrHtml = '<img src="' + fb + '" alt="Betaal QR" ' + qrStyle + '>';
+        } else if (qr.qrSrc) {
+            qrHtml = '<img src="' + qr.qrSrc + '" alt="Betaal QR" ' + qrStyle + '>';
         } else {
             qrHtml = '<p style="color:#c62828">Geen QR ontvangen — probeer opnieuw of gebruik ' +
                 'de gewone overschrijving.</p>';
         }
+        const titel = isAny ? 'Betaallink' : 'Bancontact';
+        const scanTekst = isAny
+            ? 'Laat de klant deze code scannen met de <b>camera</b> — hij kiest zelf de ' +
+              'betaalmethode (Bancontact, kaart, Apple Pay…).'
+            : 'Laat de klant deze code scannen met de <b>bank-app of Payconiq</b>.';
+        const wisselKnop = isAny
+            ? '<button style="background:none;border:none;color:#005498;text-decoration:underline;' +
+                'font-size:13.5px;padding:6px" onclick="app.startMollieQr(\'bancontact\')">' +
+                '↺ Toon Bancontact-QR (bank-app)</button>'
+            : '<button style="background:none;border:none;color:#005498;text-decoration:underline;' +
+                'font-size:13.5px;padding:6px" onclick="app.startMollieQr(\'any\')">' +
+                'Andere methode? Toon betaallink-QR (kaart, Apple Pay…)</button>';
         container.innerHTML =
             '<div style="text-align:center;padding:16px 12px 28px">' +
-                '<h2 style="margin:4px 0 2px">Bancontact</h2>' +
+                '<h2 style="margin:4px 0 2px">' + titel + '</h2>' +
                 '<p style="font-size:26px;font-weight:700;margin:4px 0 14px">€ ' + bedrag.toFixed(2) + '</p>' +
                 qrHtml +
-                '<p style="font-size:14px;color:#444;margin:14px 6px 4px">Laat de klant deze code ' +
-                    'scannen met de <b>bank-app of Payconiq</b>.</p>' +
-                '<p id="mollieQrStatus" style="font-weight:600;color:#1565c0;margin:10px 0 18px">' +
+                '<p style="font-size:14px;color:#444;margin:14px 6px 4px">' + scanTekst + '</p>' +
+                '<p id="mollieQrStatus" style="font-weight:600;color:#1565c0;margin:10px 0 6px">' +
                     'Wachten op betaling…</p>' +
-                '<button class="btn" style="background:none;border:1px solid #bbb;border-radius:8px;' +
-                    'padding:10px 18px;color:#444" onclick="app.cancelMollieQr()">Annuleren — terug</button>' +
+                '<div style="margin:4px 0 14px">' + wisselKnop + '</div>' +
+                '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
+                    'padding:10px 16px;color:#444;font-size:13.5px;margin-right:8px" ' +
+                    'onclick="app.showKlassiekeOverschrijving()">Gewone overschrijving</button>' +
+                '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
+                    'padding:10px 16px;color:#444;font-size:13.5px" ' +
+                    'onclick="app.closePaymentScreen()">Terug naar planning</button>' +
             '</div>';
-    },
-
-    cancelMollieQr() {
-        this._stopMollieQrPoll();
-        this.showOverschrijvingScreen(this._mollieQrCtx || {});
     },
 
     _beginMollieQrPoll(qr, invoiceResult) {
