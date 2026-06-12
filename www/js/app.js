@@ -2404,8 +2404,11 @@ const app = {
 
     async _saveInstallation(installationId) {
         try {
-            // Haal actuele data op (PUT = FULL REPLACE in Robaws)
-            const result = await RobawsAPI.get(`installations/${installationId}`);
+            // Haal actuele data op (PUT = FULL REPLACE in Robaws).
+            // v223: bypassCache — de installations-cache (5 min TTL) kon hier
+            // een verouderd record aanleveren waardoor de full-replace-PUT
+            // tussentijdse kantoorwijzigingen stil terugdraaide.
+            const result = await RobawsAPI.get(`installations/${installationId}`, { bypassCache: true });
             if (result.code !== 200) throw new Error('Installatie niet gevonden');
             const data = result.data;
 
@@ -2414,7 +2417,18 @@ const app = {
             data.model = document.getElementById('editInstModel').value.trim();
             data.serialNumber = document.getElementById('editInstSerial').value.trim();
             const year = document.getElementById('editInstYear').value.trim();
-            if (year) data.bouwjaar = parseInt(year);
+            if (year) {
+                data.bouwjaar = parseInt(year, 10);
+                // v223: 'Bouwjaar' is in Robaws een EXTRA-veld — alleen het
+                // top-level veld zetten werd door Robaws stil genegeerd,
+                // waardoor de wijziging verloren ging ondanks de melding
+                // "Installatie bijgewerkt". We schrijven nu beide.
+                data.extraFields = data.extraFields || {};
+                const prevBouwjaar = data.extraFields['Bouwjaar'] || {};
+                data.extraFields['Bouwjaar'] = Object.assign({}, prevBouwjaar, {
+                    stringValue: String(parseInt(year, 10)),
+                });
+            }
 
             const putResult = await RobawsAPI.put(`installations/${installationId}`, data);
             if (putResult.code !== 200 && putResult.code !== 204) {
@@ -6524,6 +6538,23 @@ const app = {
             ctx.timestamp = Date.now();
             localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
 
+            // v223: transactiekost-lijn MEEVERHUIZEN. Kaartmethodes dragen
+            // 1,5%; wissel je wég van kaart dan moet die lijn van de factuur
+            // (anders betaalt de klant kaartkost zonder kaart), wissel je
+            // naar kaart dan moet hij erbij (anders draagt QE de Mollie-kost).
+            const _CARD = ['Mollie Tap', 'Viva wallet'];
+            const wasCard = _CARD.includes(cur);
+            const isCard = _CARD.includes(newMethod);
+            if (ctx.invoiceId && wasCard !== isCard) {
+                if (statusEl) statusEl.textContent = 'Transactiekost aanpassen…';
+                try {
+                    await this._migrateTransactionFee(ctx, isCard);
+                } catch (e) {
+                    console.warn('[Fee-migratie] faalde:', e && e.message);
+                    this.toast('Let op: transactiekost-lijn kon niet aangepast worden — controleer de factuur in Robaws', true);
+                }
+            }
+
             this.toast('Betaalmethode → ' + newMethod);
 
             // Open nieuw betaalscherm waar relevant — anders terug naar Uitgevoerd
@@ -6549,6 +6580,79 @@ const app = {
                 statusEl.textContent = 'Fout: ' + (e && e.message);
             }
         }
+    },
+
+    /** v223: 1,5%-transactiekost toevoegen of verwijderen na een wissel van
+     *  betaalmethode. Werkt op de factuur-line-items en ververst daarna de
+     *  context-totalen zodat het betaalscherm/Mollie het juiste bedrag pakt. */
+    async _migrateTransactionFee(ctx, addFee) {
+        const invoiceId = ctx.invoiceId;
+        if (!invoiceId) return;
+        const liRes = await RobawsAPI.get(`sales-invoices/${invoiceId}/line-items?limit=100`);
+        const items = (liRes.data && (liRes.data.items || liRes.data)) || [];
+        const feeLines = items.filter(li => /^Transactiekosten /.test(String(li.description || '')));
+
+        if (!addFee) {
+            // Wég van kaart → bestaande fee-lijn(en) verwijderen
+            for (const li of feeLines) {
+                const d = await RobawsAPI.del(`sales-invoices/${invoiceId}/line-items/${li.id}`);
+                if (d.code !== 200 && d.code !== 204) {
+                    throw new Error('fee-lijn verwijderen faalde (' + d.code + ')');
+                }
+            }
+            if (feeLines.length > 0) {
+                await this._refreshCtxInvoice(ctx);
+                this.toast('Transactiekost (1,5%) van de factuur gehaald');
+            }
+            return;
+        }
+
+        // Naar kaart → fee toevoegen als die er nog niet staat
+        if (feeLines.length > 0) return;
+        const inv = await RobawsAPI.get(`sales-invoices/${invoiceId}`, { bypassCache: true });
+        if (inv.code !== 200 || !inv.data) throw new Error('factuur niet leesbaar');
+        const totalIncl = parseFloat(inv.data.totalInclVat || 0);
+        if (!(totalIncl > 0)) return;
+        const FEE_RATE = 0.015;
+        const feeIncl = (totalIncl / (1 - FEE_RATE)) - totalIncl;
+        // BTW-tarief van de bestaande lijnen overnemen (meest gebruikte id)
+        const counts = {};
+        for (const li of items) {
+            const k = li.vatTariffId != null ? String(li.vatTariffId) : '';
+            if (k) counts[k] = (counts[k] || 0) + 1;
+        }
+        const vatTariffId = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || null;
+        let vatRate = 0;
+        try {
+            const vmap = await RobawsAPI.getVatTariffMap();
+            const pct = vatTariffId && vmap[vatTariffId] ? vmap[vatTariffId].percentage : null;
+            if (pct != null && !isNaN(Number(pct))) vatRate = Number(pct) / 100;
+        } catch (_) {}
+        const body = {
+            type: 'LINE',
+            description: 'Transactiekosten kaartbetaling (1,5%)',
+            quantity: 1,
+            price: Math.round((feeIncl / (1 + vatRate)) * 100) / 100,
+        };
+        if (vatTariffId) body.vatTariffId = String(vatTariffId);
+        if (ctx.salesOrderId) body.orderId = String(ctx.salesOrderId);
+        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, body);
+        if (r.code !== 200 && r.code !== 201) throw new Error('fee-lijn toevoegen faalde (' + r.code + ')');
+        await this._refreshCtxInvoice(ctx);
+        this.toast('Transactiekost (1,5%) toegevoegd aan de factuur');
+    },
+
+    /** v223: ververs de factuur-totalen in de betaalcontext (na fee-wissel). */
+    async _refreshCtxInvoice(ctx) {
+        try {
+            const r = await RobawsAPI.get(`sales-invoices/${ctx.invoiceId}`, { bypassCache: true });
+            if (r.code === 200 && r.data && ctx.invoiceResult && ctx.invoiceResult.invoice) {
+                for (const k of ['totalInclVat', 'totalExclVat', 'totalVat']) {
+                    if (r.data[k] !== undefined) ctx.invoiceResult.invoice[k] = r.data[k];
+                }
+                localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+            }
+        } catch (_) { /* totalen verversen is best effort */ }
     },
 
     // ========================================

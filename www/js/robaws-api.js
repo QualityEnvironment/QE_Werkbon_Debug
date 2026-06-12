@@ -700,7 +700,7 @@ const RobawsAPI = {
 
     // PIN opslaan in Robaws (extra veld "Pincode" op werknemer, type TEXT)
     async _savePinToRobaws(employeeId, pin) {
-        const empRes = await this.get(`employees/${employeeId}`);
+        const empRes = await this.get(`employees/${employeeId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (empRes.code !== 200 || !empRes.data) throw new Error('Werknemer niet gevonden');
         const empData = empRes.data;
         empData.extraFields = empData.extraFields || {};
@@ -1110,7 +1110,7 @@ const RobawsAPI = {
      */
     async updateTimeRegistration(id, updates) {
         // Haal eerst de volledige registratie op om niets te overschrijven
-        const existing = await this.get(`time-registrations/${id}`);
+        const existing = await this.get(`time-registrations/${id}`, { bypassCache: true });  // v223
         if (existing.code !== 200 || !existing.data) {
             throw new Error('Tijdsregistratie niet gevonden: ' + id);
         }
@@ -1385,7 +1385,7 @@ const RobawsAPI = {
      * @param {string} tagId - de NFC tag ID
      */
     async saveNfcTagId(fieldName, tagId) {
-        const empRes = await this.get('employees/1');
+        const empRes = await this.get('employees/1', { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (empRes.code !== 200 || !empRes.data) throw new Error('Kon werknemer niet ophalen');
         const empData = empRes.data;
         empData.extraFields = empData.extraFields || {};
@@ -3094,8 +3094,25 @@ const RobawsAPI = {
             const invFull = invGet.data;
             invFull.booked = false;
 
-            // Status "Technieker" — zodat kantoor facturen van de app kan nakijken
-            invFull.status = 'Technieker';
+            // v224: Oorsprong-extraveld i.p.v. status 'Technieker'.
+            // De status-aanpak blokkeerde de normale levenscyclus: de factuur
+            // kon nooit op 'betaald', dus klanten die ter plaatse betaalden
+            // kregen tóch aanmaningen zodra de vervaldatum verstreek. Nu
+            // blijft de status vrij voor de boekhouding en filtert Felicity
+            // de nakijklijst op Oorsprong = Technieker.
+            invFull.extraFields = invFull.extraFields || {};
+            const prevOorsprong = invFull.extraFields['Oorsprong'] || {};
+            invFull.extraFields['Oorsprong'] = Object.assign({}, prevOorsprong, {
+                stringValue: 'Technieker',
+            });
+            // v225: 'Nog te controleren'-vinkje standaard AAN — de
+            // boekhouding filtert hierop welke technieker-facturen nog
+            // nagekeken moeten worden, en vinkt het uit na controle.
+            // (Veldnaam exact zoals in Robaws — enkele l.)
+            const prevControle = invFull.extraFields['Nog te controleren'] || {};
+            invFull.extraFields['Nog te controleren'] = Object.assign({}, prevControle, {
+                booleanValue: true,
+            });
 
             // Verantwoordelijke = de ingelogde technieker (niet standaard Rolf).
             // Centrale helper gebruikt dezelfde fallback-strategie als submitWerkbon
@@ -3164,12 +3181,12 @@ const RobawsAPI = {
                     stringValue: paymentMethod,
                 };
             }
-            // v211: deze PUT was ongecontroleerd — faalde hij, dan had de
-            // factuur geen 'Technieker'-status en viel hij buiten de
-            // nakijklijst van bureel (werd dus nooit verstuurd).
+            // v211/v224: deze PUT was ongecontroleerd — faalde hij, dan had
+            // de factuur geen Oorsprong-veld en viel hij buiten Felicity's
+            // nakijkfilter (werd dus nooit gecontroleerd/verstuurd).
             const statusPut = await this.put(`sales-invoices/${invoiceId}`, invFull);
             if (statusPut.code !== 200 && statusPut.code !== 204) {
-                statusErrors.push('factuur-status/verantwoordelijke niet gezet (code ' + statusPut.code + ')');
+                statusErrors.push('factuur Oorsprong/verantwoordelijke niet gezet (code ' + statusPut.code + ')');
             }
         }
 
@@ -3552,7 +3569,7 @@ const RobawsAPI = {
         // Robaws niet accepteert in een PUT verwijderen we expliciet.
         if (signatureName) {
             try {
-                const cur = await this.get(`work-orders/${workOrderId}`);
+                const cur = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223
                 if (cur.code === 200 && cur.data) {
                     const body = { ...cur.data, signatureName };
                     // Robaws genereert deze velden zelf — niet meesturen in PUT
@@ -3974,7 +3991,7 @@ const RobawsAPI = {
         // Stap 2: GET de werkbon zodat we het volledige object kunnen mergen
         let woFull;
         try {
-            const getRes = await this.get(`work-orders/${workOrderId}`);
+            const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
             if (getRes.code === 200 && getRes.data) {
                 woFull = getRes.data;
             }
@@ -4030,7 +4047,7 @@ const RobawsAPI = {
      *      (gebruikt voor "klok-uit: ..." regel).
      */
     async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark) {
-        const getRes = await this.get(`work-orders/${workOrderId}`);
+        const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (getRes.code !== 200 || !getRes.data) {
             throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
         }
@@ -4049,7 +4066,7 @@ const RobawsAPI = {
 
     /** Update Tijd-keuze (bv. naar "Ziek"). v59: GET-then-PUT. */
     async setTimeRegistrationTijd(workOrderId, tijdLabel) {
-        const getRes = await this.get(`work-orders/${workOrderId}`);
+        const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (getRes.code !== 200 || !getRes.data) {
             throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
         }
@@ -4183,7 +4200,7 @@ const RobawsAPI = {
      */
     async updateBetalingField(resource, id, paymentMethod) {
         try {
-            const fullRes = await this.get(`${resource}/${id}`);
+            const fullRes = await this.get(`${resource}/${id}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
             if (fullRes.code !== 200 || !fullRes.data) {
                 return { ok: false, code: fullRes.code, error: 'GET faalde' };
             }
@@ -4238,6 +4255,9 @@ const RobawsAPI = {
      */
     async getLatestInvoiceForUser(userId, statusWhitelist) {
         if (!userId) return null;
+        // v224: app-facturen zijn voortaan herkenbaar aan het Oorsprong-
+        // extraveld (= 'Technieker'); de oude status-waarden blijven als
+        // fallback voor facturen van vóór de omschakeling.
         const whitelist = (statusWhitelist || ['Technieker', 'Gecontrolleerd']).map(s => s.toLowerCase());
         const LIMIT = 100;
         for (let p = 0; p < 5; p++) {
@@ -4247,10 +4267,12 @@ const RobawsAPI = {
             const items = (res.data && res.data.items) || [];
             if (!items.length) break;
             for (const inv of items) {
-                const st = String(inv.status || '').toLowerCase();
-                if (!whitelist.includes(st)) continue;
                 const aId = inv.assignedUserId || (inv.assignedUser && inv.assignedUser.id);
                 if (String(aId) !== String(userId)) continue;
+                const oorsprong = String((inv.extraFields && inv.extraFields.Oorsprong &&
+                    (inv.extraFields.Oorsprong.stringValue || '')) || '').toLowerCase();
+                const st = String(inv.status || '').toLowerCase();
+                if (oorsprong !== 'technieker' && !whitelist.includes(st)) continue;
                 return inv;
             }
             if (res.data.totalPages && p + 1 >= res.data.totalPages) break;
