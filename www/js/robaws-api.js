@@ -49,6 +49,15 @@ const RobawsAPI = {
     // "Op tijd"/"Te laat"). Eén bron voor klok, aanwezigheid en dagoverzicht.
     ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof'],
 
+    // v222b: vaste ontvangers voor automatische taken — één plek i.p.v.
+    // losse hardcoded id's. Facturen & betalingen → Els (boekhouding),
+    // werkbon-opvolging → Vince, artikel-aanmaak → Felicity.
+    TASK_USERS: {
+        FACTUREN:  '3',  // Els
+        OPVOLGING: '5',  // Vince
+        ARTIKELS:  '6',  // Felicity
+    },
+
     // === AUTH HEADERS ===
     getHeaders() {
         const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
@@ -3665,6 +3674,31 @@ const RobawsAPI = {
      *  Moet exact matchen met de naam in Robaws Instellingen → e-mailtemplates.
      *  Bij wijziging in Robaws ook hier aanpassen. */
     EMAIL_TEMPLATE_WERKBON: 'Werkbon naar klant',
+
+    /** v222: is deze factuur al (volledig) betaald geregistreerd? Wordt
+     *  gebruikt als PRE-CHECK vóór elke betalings-POST, omdat de webhook-
+     *  Worker en de app dezelfde betaling allebei kunnen registreren
+     *  (factuur 2× betaald). true = zeker voldaan, false = nog open,
+     *  null = niet te bepalen (caller beslist zelf). */
+    async isInvoiceSettled(invoiceId) {
+        try {
+            const r = await this.get(`sales-invoices/${invoiceId}`, { bypassCache: true });
+            if (r.code !== 200 || !r.data) return null;
+            const inv = r.data;
+            const due = inv.amountDue ?? inv.openAmount ?? inv.outstandingAmount ?? null;
+            if (due != null && !isNaN(Number(due))) return Number(due) <= 0.005;
+            const paid = inv.paidAmount ?? inv.amountPaid ?? null;
+            const tot = inv.totalInclVat ?? inv.amountInclVat ?? null;
+            if (paid != null && tot != null && !isNaN(Number(paid)) && !isNaN(Number(tot))) {
+                return Number(paid) >= Number(tot) - 0.005;
+            }
+            const st = String(inv.status || '').toLowerCase();
+            if (st.includes('betaald') || st.includes('paid')) return true;
+            return null;
+        } catch (_) {
+            return null;
+        }
+    },
 
     async registerInvoicePayment({ invoiceId, amount, date, paymentMethod, reference }) {
         if (!invoiceId) return { success: false, error: 'invoiceId verplicht' };

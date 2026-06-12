@@ -5573,7 +5573,7 @@ const app = {
                         title: 'Werkbon onvolledig weggeschreven - controleren',
                         description: 'Bij het versturen vanuit de app weigerde Robaws ' + _wbPartial.join(' en ') +
                             ' op deze werkbon. De factuurlijnen worden apart opgebouwd en kunnen dus wél volledig zijn — gelieve werkbon en factuur te vergelijken en aan te vullen.',
-                        assignedUserId: 5,
+                        assignedUserId: RobawsAPI.TASK_USERS.OPVOLGING,  // v222b: Vince
                     });
                 } catch (e) { console.warn('[App] partial-taak mislukt:', e && e.message); }
             }
@@ -5613,7 +5613,7 @@ const app = {
                     await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                         title: '✏️ Eenmalig artikel toevoegen aan Robaws',
                         description: desc,
-                        assignedUserId: 6, // Felicity
+                        assignedUserId: RobawsAPI.TASK_USERS.ARTIKELS,  // v222b: Felicity
                     });
                     console.log('[App] Felicity-taak aangemaakt voor', customArticles.length, 'eenmalige artikels');
                 } catch (e) {
@@ -5695,7 +5695,7 @@ const app = {
                         description: 'De app kon geen factuur aanmaken voor deze werkbon: ' +
                             (invoiceResult.error || 'onbekende fout') +
                             '. Gelieve handmatig te factureren en de betaling met de klant te regelen.',
-                        assignedUserId: 5,
+                        assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
                 this._markWOSubmitted(data);
@@ -5720,7 +5720,7 @@ const app = {
                             ' weigerde Robaws ' + invErrors.length + ' lijn(en) — het factuurbedrag is dus te laag. ' +
                             'Gelieve de factuur aan te vullen en de betaling met de klant te regelen. Details: ' +
                             invErrors.map(er => String((er && (er.error || er.step)) || JSON.stringify(er))).join(' | ').slice(0, 600),
-                        assignedUserId: 5,
+                        assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
                 this._markWOSubmitted(data);
@@ -5800,7 +5800,7 @@ const app = {
                                 customLineErrors.join(', ') + '. Factuur: ' +
                                 ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
                                 '. Gelieve aan te vullen en de betaling met de klant te regelen.',
-                            assignedUserId: 5,
+                            assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                         });
                     } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
                     this._markWOSubmitted(data);
@@ -5917,7 +5917,7 @@ const app = {
                             ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
                             ' faalden deze status-updates: ' + stErrors.join('; ') +
                             '. Gelieve werkbon/order/factuur-status manueel te zetten (anders risico op dubbele facturatie of een factuur buiten de nakijklijst).',
-                        assignedUserId: 5,
+                        assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] status-taak mislukt:', e && e.message); }
             }
@@ -7111,8 +7111,20 @@ const app = {
         // kon de factuur niet bewaren in de openstaande lijst, waardoor de
         // klant later niet meer kon betalen. We bewaren hier alle info die
         // nodig is voor een retry: invoiceId, bedrag, OGM en logicId.
+        // v222: veldnamen gelijkgetrokken met de lezers (banner + retry).
+        // Voorheen werden {amount, ogm, invoiceLogicId} bewaard terwijl de
+        // banner {totalInclVat, paymentInstruction, logicId, clientName}
+        // las → banner toonde "€ 0.00" en de retry startte met lege data.
         this._lastInvoiceForRetry = {
             invoiceId: inv.id,
+            logicId: inv.logicId || '',
+            totalInclVat: amount,
+            paymentInstruction: inv.paymentInstruction || '',
+            formattedOgm: inv.formattedOgm || this._formatOgm(inv.paymentInstruction || ''),
+            date: inv.date || '',
+            clientName: (this.currentWO && this.currentWO.client && this.currentWO.client.name) || '',
+            workOrderId: (this.currentWO && this.currentWO.id) || null,
+            // legacy-aliassen voor oudere lezers:
             amount: amount,
             ogm: inv.paymentInstruction || '',
             invoiceLogicId: inv.logicId || '',
@@ -7178,6 +7190,14 @@ const app = {
     showCashScreen(invoiceData) {
         const inv = (invoiceData && invoiceData.invoice) ? invoiceData.invoice : null;
         const amount = (inv && inv.totalInclVat != null) ? inv.totalInclVat : null;
+        // v222: context bewaren zodat finishCashPayment de betaling in
+        // Robaws kan registreren (cash komt nooit via de bank binnen, dus
+        // zonder registratie bleef de factuur eeuwig open → aanmaningen).
+        this._cashCtx = inv ? {
+            invoiceId: inv.id,
+            logicId: inv.logicId || '',
+            amount: amount,
+        } : null;
         if (amount == null) {
             // Geen factuurtotaal beschikbaar -> oude afhandeling
             this.toast('Werkbon verstuurd — contant');
@@ -7279,11 +7299,48 @@ const app = {
         }
     },
 
-    finishCashPayment() {
+    async finishCashPayment() {
+        // v222: cash REGISTREREN in Robaws — contant geld komt nooit via de
+        // bank-OGM-matching binnen, dus zonder registratie bleef de factuur
+        // open staan en kreeg de klant later een aanmaning. Met saldo-
+        // precheck (dubbel boeken uitgesloten) en bureel-taak als vangnet.
+        const ctx = this._cashCtx;
+        this._cashCtx = null;
         this.toast('Werkbon verstuurd — contant betaald');
         this.navigate('screenPlanning', false);
         this.screenHistory = [];
         this.loadPlanning();
+        if (!ctx || !ctx.invoiceId) return;
+        try {
+            const settled = await RobawsAPI.isInvoiceSettled(ctx.invoiceId);
+            if (settled === true) return;  // al geboekt
+            const res = await RobawsAPI.registerInvoicePayment({
+                invoiceId: ctx.invoiceId,
+                amount: ctx.amount,
+                paymentMethod: 'Cash',
+                reference: 'cash-' + Date.now(),
+            });
+            if (res && res.success) {
+                setTimeout(() => this.toast('Factuur ' + (ctx.logicId || ctx.invoiceId) + ' op betaald (cash)'), 1200);
+                return;
+            }
+            throw new Error((res && res.error) || 'registratie geweigerd');
+        } catch (e) {
+            console.warn('[Cash] registratie mislukt:', e && e.message);
+            try {
+                await RobawsAPI.post('tasks', {
+                    title: 'Cash ontvangen - betaling handmatig boeken',
+                    description: 'Contante betaling van €' + (ctx.amount || '?') + ' ontvangen voor factuur ' +
+                        (ctx.logicId || ctx.invoiceId) + ', maar de app kon de betaling niet registreren (' +
+                        ((e && e.message) || '?') + '). Gelieve handmatig op betaald te zetten.',
+                    status: 'Te doen',
+                    assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
+                });
+                setTimeout(() => this.toast('Cash genoteerd — bureel boekt de betaling (taak aangemaakt)', true), 1200);
+            } catch (e2) {
+                setTimeout(() => this.toast('Let op: cash-betaling NIET geregistreerd — meld aan bureel (factuur ' + (ctx.logicId || ctx.invoiceId) + ')', true), 1200);
+            }
+        }
     },
 
     async startTerminalPayment(invoiceId, amount, ogm, invoiceLogicId) {
@@ -7644,7 +7701,28 @@ const app = {
             // Idempotency-check: schrijf maar één keer naar Robaws per paymentId
             const dedupKey = 'qe_mollie_processed_' + paymentId;
             const already = (() => { try { return !!localStorage.getItem(dedupKey); } catch(_) { return false; } })();
-            if (!already && ctx.invoiceId && !skipAppRobaws) {
+            // v222: een MANUELE bevestiging is geen bewijs van betaling — er
+            // wordt dan NIETS in Robaws geregistreerd. In de plaats komt een
+            // bureel-taak: controleren in het Mollie-dashboard en zelf boeken.
+            // (Voorheen werd een betaling gepost die er mogelijk nooit was.)
+            const isManual = !!(result && result._manual);
+            if (isManual && ctx.invoiceId && !already) {
+                try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
+                (async () => {
+                    try {
+                        await RobawsAPI.post('tasks', {
+                            title: 'Mollie-betaling MANUEEL bevestigd - controleren',
+                            description: 'De technieker bevestigde handmatig dat de Tap-betaling voor factuur ' +
+                                (ctx.invoiceLogicId || ctx.invoiceId) + ' (±€' + (ctx.amount || '?') +
+                                ') gelukt is, maar er kwam geen resultaat van Mollie binnen. ' +
+                                'Controleer in het Mollie-dashboard en zet de factuur zelf op betaald.',
+                            status: 'Te doen',
+                            assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
+                        });
+                    } catch (e) { console.warn('[Mollie] manuele-check-taak mislukt:', e && e.message); }
+                })();
+                setTimeout(() => this.toast('Bevestiging genoteerd — bureel controleert in Mollie en boekt de betaling', true), 1200);
+            } else if (!already && ctx.invoiceId && !skipAppRobaws) {
                 if (fromWebhook && !workerMarked) {
                     console.log('[Mollie] Worker heeft Robaws niet kunnen markeren — app doet het alsnog', result.robawsError);
                 }
@@ -7921,6 +7999,21 @@ const app = {
             console.warn('[Mollie→Robaws] geen invoiceId — skip');
             return;
         }
+        // v222: WORKER-FIRST — de webhook-Worker registreert dezelfde
+        // betaling meestal ook (en vaak eerder). Geef hem even voorrang en
+        // check daarna het openstaande saldo; alleen als de factuur nog open
+        // staat registreren we zelf. Dit sluit de dubbele betalings-
+        // registratie (factuur 2× betaald in Robaws) uit.
+        await new Promise(r => setTimeout(r, 2500));
+        try {
+            const settled = await RobawsAPI.isInvoiceSettled(invoiceId);
+            if (settled === true) {
+                console.log('[Mollie→Robaws] factuur al voldaan (webhook was eerst) — skip');
+                try { localStorage.setItem(dedupKey, String(Date.now())); } catch(_) {}
+                setTimeout(() => this.toast('Factuur ' + (invoiceLogicId || invoiceId) + ' op betaald (via webhook)'), 1200);
+                return;
+            }
+        } catch (_) { /* precheck faalt → normaal registreren */ }
         console.log('[Mollie→Robaws] register payment', { invoiceId, amount, paymentId });
         try {
             const res = await RobawsAPI.registerInvoicePayment({
@@ -7981,12 +8074,39 @@ const app = {
         const remaining = [];
         for (const entry of list) {
             entry.attempts = (entry.attempts || 0) + 1;
-            // Geef op na 10 pogingen — admin moet dan handmatig in Robaws aanpassen
+            // v222: na 10 pogingen NIET meer stil droppen — bureel-taak
+            // aanmaken zodat iemand de betaling handmatig boekt.
             if (entry.attempts > 10) {
                 console.warn('[Mollie→Robaws] entry opgegeven na 10 pogingen:', entry.paymentId);
-                continue;
+                try {
+                    await RobawsAPI.post('tasks', {
+                        title: 'Mollie-betaling niet geboekt - handmatig op betaald zetten',
+                        description: 'De app kon na 10 pogingen de betaling niet registreren in Robaws. ' +
+                            'Factuur: ' + (entry.invoiceLogicId || entry.invoiceId) +
+                            ', bedrag: €' + (entry.amount || '?') +
+                            ', Mollie payment: ' + (entry.paymentId || entry.referenceId || '?') +
+                            '. Controleer in Mollie en zet de factuur op betaald.',
+                        status: 'Te doen',
+                        assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
+                    });
+                    continue;  // taak staat — entry mag weg
+                } catch (e) {
+                    console.warn('[Mollie→Robaws] bureel-taak mislukt — entry blijft:', e && e.message);
+                    remaining.push(entry);
+                    continue;
+                }
             }
             try {
+                // v222: saldo-precheck — als de Worker (of bureel) hem intussen
+                // boekte, entry gewoon afvoeren i.p.v. dubbel registreren.
+                const settled = await RobawsAPI.isInvoiceSettled(entry.invoiceId);
+                if (settled === true) {
+                    console.log('[Mollie→Robaws] retry overbodig — factuur al voldaan:', entry.invoiceId);
+                    if (entry.dedupKey) {
+                        try { localStorage.setItem(entry.dedupKey, String(Date.now())); } catch(_) {}
+                    }
+                    continue;
+                }
                 const res = await RobawsAPI.registerInvoicePayment({
                     invoiceId: entry.invoiceId,
                     amount: entry.amount,
@@ -9218,7 +9338,7 @@ const app = {
             await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                 title: `Uren aanpassing — ${user ? user.name : 'onbekend'}`,
                 description: description,
-                assignedUserId: '5', // Vince Van de Vliet (kantoor)
+                assignedUserId: RobawsAPI.TASK_USERS.OPVOLGING, // v222b: Vince (uren-aanpassing)
             });
 
             this.toast('Aanpassing ingediend bij Vince');

@@ -672,7 +672,11 @@ const APIBridge = {
                                     (customArticles.length ? ' Er zijn ook eenmalige artikels die in Robaws aangemaakt moeten worden.' : '') +
                                     (naFouten.length ? '\n\nNiet gelukt bij automatische verwerking: ' + naFouten.join('; ') : '') +
                                     '\n\nGelieve op te volgen.',
-                                assignedUserId: 5,
+                                // v222b: factuur-taken naar Els (boekhouding);
+                                // geen-factuur-opvolging naar Vince.
+                                assignedUserId: noInvoice
+                                    ? RobawsAPI.TASK_USERS.OPVOLGING
+                                    : RobawsAPI.TASK_USERS.FACTUREN,
                             });
                         } catch (e) { console.warn('[Queue] bureel-taak mislukt:', e && e.message); }
 
