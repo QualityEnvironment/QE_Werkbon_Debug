@@ -12,8 +12,50 @@ const RobawsAPI = {
     // === CACHE ===
     _articleCache: null,       // Alle artikelen (1x geladen)
     _articleCacheLoading: false,
-    API_KEY: 'KBM8UEKYPLHIXDHIQ1IL',
-    API_SECRET: 'xmFYgMmDi4xFLiPZy8qCslSKbCmSDIgIErmTWJZ5',
+    // ================================================================
+    // v232: KEYS ZITTEN NIET MEER IN DEZE JS.
+    // De Robaws API-keys leven uitsluitend in de native Android-laag
+    // (MainActivity.java, geïnjecteerd uit robaws-keys.json bij de build).
+    // JS vraagt enkel de kant-en-klare auth-header op bij QEBridge — de
+    // key zelf staat nooit in deze www/JS-laag, in Git of in een OTA-update.
+    // De per-werknemer keuze gebeurt native op basis van _activeEmail.
+    // ================================================================
+    _activeEmail: null,
+    setActiveCredentialsFor(email) {
+        this._activeEmail = String(email || '').toLowerCase().trim() || null;
+        console.log('[RobawsAPI] API-identiteit ingesteld voor:', this._activeEmail || '(geen — gedeelde key)');
+    },
+    clearActiveCredentials() {
+        this._activeEmail = null;
+    },
+    /** Basic-auth header uit de native laag (QEBridge). Keys staan NOOIT in
+     *  deze JS. Geen bridge (bv. browser) → lege header = fail-closed (401). */
+    _authHeader() {
+        try {
+            if (typeof QEBridge !== 'undefined' && QEBridge.getRobawsAuthHeader) {
+                const h = QEBridge.getRobawsAuthHeader(this._activeEmail || '');
+                if (h) return h;
+                console.error('[RobawsAPI] Native gaf geen credentials (key ingevuld in robaws-keys.json?).');
+                return '';
+            }
+        } catch (e) {
+            console.warn('[RobawsAPI] Native auth-header faalde:', e);
+        }
+        console.error('[RobawsAPI] Geen QEBridge — app buiten de APK? Geen Robaws-credentials.');
+        return '';
+    },
+    /** Compat-laag voor de paar plekken die losse key/secret gebruiken
+     *  (upload/download): pelt ze uit de native header. Staan dus niet in
+     *  de broncode; ze bestaan enkel vluchtig tijdens de call. */
+    _authPair() {
+        try {
+            const dec = atob(this._authHeader().replace(/^Basic\s+/i, ''));
+            const i = dec.indexOf(':');
+            return { key: dec.substring(0, i), secret: dec.substring(i + 1) };
+        } catch (e) {
+            return { key: '', secret: '' };
+        }
+    },
     TENANT: 'qualityenvironment',
 
     // === MEDEWERKERS MAPPING ===
@@ -60,9 +102,9 @@ const RobawsAPI = {
 
     // === AUTH HEADERS ===
     getHeaders() {
-        const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
+        // v232: auth-header komt uit de native laag (keys niet in JS).
         return {
-            'Authorization': 'Basic ' + auth,
+            'Authorization': this._authHeader(),
             'X-Tenant': this.TENANT,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -261,7 +303,8 @@ const RobawsAPI = {
 
     async uploadFile(endpoint, file, fileName) {
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
+        const _ap = this._authPair();  // v231: per-werknemer key indien aanwezig
+        const auth = btoa(_ap.key + ':' + _ap.secret);
 
         const formData = new FormData();
         formData.append('file', file, fileName);
@@ -292,7 +335,7 @@ const RobawsAPI = {
         if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
             try {
                 const result = QEBridge.downloadRobawsDocument(
-                    String(documentId), this.API_KEY, this.API_SECRET, this.TENANT
+                    String(documentId), this._authPair().key, this._authPair().secret, this.TENANT
                 );
                 if (result && result.length > 0) {
                     // Format: "contentType|base64data"
@@ -477,6 +520,9 @@ const RobawsAPI = {
         // Alles wordt opgehaald uit Robaws: werknemer, pincode, rol, gelinkte gebruiker.
         const emailLower = email.toLowerCase().trim();
         console.log('[RobawsAPI] Login poging voor:', emailLower);
+        // v232: gebruik meteen de eigen key van deze gebruiker voor de
+        // employee-lookup — geen aparte gedeelde bootstrap-key nodig.
+        this.setActiveCredentialsFor(emailLower);
 
         // Stap 1: Zoek de werknemer op email in Robaws.
         // v132: retry 1x bij transient failure + 3e fallback zonder status-filter
@@ -580,6 +626,26 @@ const RobawsAPI = {
         }
 
         console.log('[RobawsAPI] Werknemer gevonden:', employee.id, employee.firstName, employee.lastName);
+
+        // v231: werknemers met status "stopgezet" mogen NIET meer inloggen.
+        // De status kan top-level op de fiche staan of als extra-veld.
+        const _statusRaw = String(
+            employee.status ||
+            (employee.extraFields && employee.extraFields['Status'] &&
+                (employee.extraFields['Status'].stringValue ?? employee.extraFields['Status'].value)) ||
+            ''
+        ).toLowerCase();
+        if (_statusRaw.includes('stopgezet')) {
+            console.warn('[RobawsAPI] Login geweigerd — status stopgezet:', emailLower);
+            // Lokale login-sporen wissen zodat ook de offline-fallback
+            // (7-dagen grace) voor dit account niet meer werkt.
+            try {
+                localStorage.removeItem('qe_last_online_login_' + emailLower);
+                localStorage.removeItem('qe_emp_cache_' + emailLower);
+                localStorage.removeItem('qe_login_emp_cache_' + emailLower);
+            } catch (_) {}
+            return { success: false, error: 'Dit account is stopgezet. Neem contact op met kantoor.' };
+        }
 
         // PIN checken via extra veld "Pincode" (groep "QE Werkbon app", type TEXT).
         // v132: ook andere veld-naam-varianten + value-types proberen voor het geval
@@ -742,6 +808,110 @@ const RobawsAPI = {
         return { success: true };
     },
 
+    // ================================================================
+    // v233: ADMIN — werknemersbeheer (bureel-only; UI gate't in app.js).
+    // Alles via full-replace PUT /employees/{id}: vers ophalen → muteren → PUT
+    // (zoals _savePinToRobaws). LET OP: de Robaws LOGIN-gebruiker kan NIET via
+    // de API aangemaakt worden — dat blijft een handmatige stap in Robaws-web.
+    // ================================================================
+    ADMIN_ROLE_MAP: {
+        technieker: { employeeRoleId: '34', planningGroup: '1. Technieker' },
+        monteur:    { employeeRoleId: '1',  planningGroup: '3. Monteur' },
+        bureel:     { employeeRoleId: '42', planningGroup: '9. Bureel' },
+    },
+
+    /** Alle werknemers (incl. stopgezet) voor de admin-lijst. */
+    async adminListEmployees() {
+        const out = [];
+        let page = 0;
+        do {
+            const res = await this.get(`employees?limit=100&offset=${page * 100}`, { bypassCache: true });
+            const items = (res.data && res.data.items) || [];
+            if (items.length === 0) break;
+            for (const e of items) {
+                const ef = e.extraFields || {};
+                let hasPin = false;
+                for (const k of Object.keys(ef)) {
+                    if (!/pin/i.test(k)) continue;
+                    const pf = ef[k];
+                    const v = pf && (pf.stringValue ?? pf.intValue ?? pf.value ?? pf.numberValue);
+                    if (v != null && String(v).trim()) { hasPin = true; break; }
+                }
+                const status = String(e.status || (ef['Status'] && ef['Status'].stringValue) || '').trim();
+                out.push({
+                    id: e.id,
+                    name: [e.firstName, e.lastName].filter(Boolean).join(' ') || e.fullName || e.name || e.email || '(naamloos)',
+                    email: e.email || '',
+                    employeeRoleId: e.employeeRoleId != null ? String(e.employeeRoleId) : '',
+                    planningGroup: e.planningGroupName || e.planningGroup || '',
+                    status,
+                    stopgezet: status.toLowerCase().includes('stopgezet'),
+                    hasPin,
+                });
+            }
+            page++;
+            if (page >= ((res.data && res.data.totalPages) || 1)) break;
+        } while (page < 10);
+        out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        return out;
+    },
+
+    /** Vers ophalen → muteer → full-replace PUT. */
+    async _adminMutateEmployee(employeeId, mutate) {
+        const res = await this.get(`employees/${employeeId}`, { bypassCache: true });
+        if (res.code !== 200 || !res.data) throw new Error('Werknemer niet gevonden (' + res.code + ')');
+        const emp = res.data;
+        mutate(emp);
+        const put = await this.put(`employees/${employeeId}`, emp);
+        if (put.code !== 200 && put.code !== 204) throw new Error('Opslaan mislukt (' + put.code + ')');
+        return true;
+    },
+
+    /** PIN resetten: Pincode-veld leegmaken → werknemer stelt bij volgende login zelf in. */
+    async adminResetPin(employeeId) {
+        return this._adminMutateEmployee(employeeId, (emp) => {
+            emp.extraFields = emp.extraFields || {};
+            emp.extraFields['Pincode'] = { type: 'TEXT', group: 'QE Werkbon app', stringValue: '' };
+        });
+    },
+
+    /** Status: 'stopgezet' (blokkeert login) of 'actief'. */
+    async adminSetStatus(employeeId, status) {
+        const s = (status === 'stopgezet') ? 'stopgezet' : 'actief';
+        return this._adminMutateEmployee(employeeId, (emp) => {
+            emp.status = s;
+            if (emp.extraFields && emp.extraFields['Status']) emp.extraFields['Status'].stringValue = s;
+        });
+    },
+
+    /** Rol: zet employeeRoleId én planningGroup (login leest eerst employeeRoleId). */
+    async adminSetRole(employeeId, role) {
+        const m = this.ADMIN_ROLE_MAP[role];
+        if (!m) throw new Error('Onbekende rol: ' + role);
+        return this._adminMutateEmployee(employeeId, (emp) => {
+            emp.employeeRoleId = m.employeeRoleId;
+            emp.planningGroup = m.planningGroup;
+        });
+    },
+
+    /** Nieuwe werknemerfiche (POST minimaal → PUT volledig). LOGIN-gebruiker = handmatig in Robaws-web. */
+    async adminCreateEmployee({ firstName, lastName, email, role, pin }) {
+        const m = this.ADMIN_ROLE_MAP[role] || this.ADMIN_ROLE_MAP.monteur;
+        const createRes = await this.post('employees', { name: firstName || '', surname: lastName || '', email });
+        if (createRes.code !== 200 && createRes.code !== 201) throw new Error('Aanmaken mislukt (' + createRes.code + ')');
+        const newId = createRes.data && createRes.data.id;
+        if (!newId) throw new Error('Geen ID teruggekregen');
+        await this._adminMutateEmployee(newId, (emp) => {
+            emp.email = email;
+            emp.status = 'actief';
+            emp.employeeRoleId = m.employeeRoleId;
+            emp.planningGroup = m.planningGroup;
+            emp.extraFields = emp.extraFields || {};
+            if (pin) emp.extraFields['Pincode'] = { type: 'TEXT', group: 'QE Werkbon app', stringValue: String(pin) };
+        });
+        return { id: newId };
+    },
+
     // Fallback login als Robaws onbereikbaar is.
     // v118: strenger — vereist BEIDE:
     //   1. Geldige lokaal gecachte PIN-hash (afgeleid van een eerdere online
@@ -901,7 +1071,7 @@ const RobawsAPI = {
         if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
             try {
                 const result = QEBridge.downloadRobawsDocument(
-                    String(doc.id), this.API_KEY, this.API_SECRET, this.TENANT
+                    String(doc.id), this._authPair().key, this._authPair().secret, this.TENANT
                 );
                 if (result && result.length > 0) {
                     const pipeIdx = result.indexOf('|');
@@ -2738,7 +2908,8 @@ const RobawsAPI = {
     // Image URL helper
     getImageUrl(imageId) {
         if (!imageId) return null;
-        const auth = btoa(this.API_KEY + ':' + this.API_SECRET);
+        const _ap = this._authPair();  // v231: per-werknemer key indien aanwezig
+        const auth = btoa(_ap.key + ':' + _ap.secret);
         return `${this.BASE_URL}/images/${imageId}?tenant=${this.TENANT}`;
     },
 

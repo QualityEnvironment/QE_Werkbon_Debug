@@ -619,10 +619,21 @@ const app = {
         } catch(e) { console.warn('[logout] cleanup fout:', e); }
 
         this.currentUser = null;
+        // v231: terug naar de gedeelde API-key (volgende gebruiker krijgt
+        // zijn eigen key pas weer bij showApp).
+        try { if (window.RobawsAPI && RobawsAPI.clearActiveCredentials) RobawsAPI.clearActiveCredentials(); } catch (e) {}
         location.reload();
     },
 
     showApp() {
+        // v231: per-werknemer API-key activeren (bij login én bij het
+        // herstellen van een bestaande sessie na een herstart).
+        try {
+            if (this.currentUser && this.currentUser.email &&
+                window.RobawsAPI && RobawsAPI.setActiveCredentialsFor) {
+                RobawsAPI.setActiveCredentialsFor(this.currentUser.email);
+            }
+        } catch (e) { console.warn('[App] API-identiteit zetten faalde:', e); }
         document.getElementById('loginScreen').classList.add('hidden');
         const roleLabel = this.currentUser.roleName || (this.isMonteur() ? 'Monteur' : 'Technieker');
         document.getElementById('headerUser').textContent = `${this.currentUser.name} — ${roleLabel}`;
@@ -767,6 +778,13 @@ const app = {
 
         // v117: rol-switcher card vullen + tonen (alleen voor bureel/technieker)
         this.renderRoleSwitch();
+
+        // v233: Admin-knop enkel voor bureel
+        const adminCard = document.getElementById('adminCard');
+        if (adminCard) {
+            const _u = RobawsAPI.getLoggedInUser();
+            adminCard.style.display = (_u && _u.role === 'bureel') ? 'block' : 'none';
+        }
 
         // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
         // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
@@ -1548,6 +1566,7 @@ const app = {
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
+            screenAdmin: 'Beheer',  // v233
         };
         document.getElementById('headerTitle').textContent = titles[screenId] || '';
 
@@ -1562,6 +1581,7 @@ const app = {
         if (screenId === 'screenUitgevoerd') this.loadUitgevoerd();
         if (screenId === 'screenDagoverzicht') this.loadDagoverzicht(0);
         if (screenId === 'screenClock') this.onNavigateToClock();
+        if (screenId === 'screenAdmin') this.loadAdmin();
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -5407,7 +5427,8 @@ const app = {
      */
     async _uploadPhotosToInvoice(photos, invoiceId) {
         if (!photos || !photos.length || !invoiceId) return;
-        const auth = btoa(RobawsAPI.API_KEY + ':' + RobawsAPI.API_SECRET);
+        const _ap = RobawsAPI._authPair();  // v232: keys uit native laag, niet in JS
+        const auth = btoa(_ap.key + ':' + _ap.secret);
         const BASE = RobawsAPI.BASE_URL || 'https://app.robaws.com/api/v2';
         for (let i = 0; i < photos.length; i++) {
             const p = photos[i];
@@ -7231,6 +7252,170 @@ const app = {
     // verwacht, status) + handmatig in-/uitklokken door bureel (telefoon
     // vergeten of plat). Robaws is leidend: de telefoon van de werknemer
     // pikt een handmatige actie bij de volgende sync vanzelf op.
+    // ================================================================
+    // v233: ADMIN — werknemersbeheer (alleen bureel). Alles via Robaws-API.
+    // Dubbele gating: knop verborgen tenzij bureel + check bij elke write.
+    // ================================================================
+    _adminBusy: false,
+    _adminEmps: {},
+
+    _adminIsBureel() {
+        const u = RobawsAPI.getLoggedInUser();
+        return !!(u && u.role === 'bureel');
+    },
+
+    _adminGuard() {
+        if (!this._adminIsBureel()) { this.toast('Geen toegang', true); return false; }
+        if (this._adminBusy) { this.toast('Even geduld…', false); return false; }
+        return true;
+    },
+
+    _adminRoleKey(emp) {
+        const id = String(emp.employeeRoleId || '');
+        if (id === '1') return 'monteur';
+        if (id === '34') return 'technieker';
+        if (id === '42' || id === '35') return 'bureel';
+        const pg = String(emp.planningGroup || '').toLowerCase();
+        if (pg.includes('monteur')) return 'monteur';
+        if (pg.includes('bureel') || pg.includes('kantoor') || pg.includes('projectleider')) return 'bureel';
+        return 'technieker';
+    },
+
+    async loadAdmin() {
+        const list = document.getElementById('adminEmpList');
+        if (!list) return;
+        if (!this._adminIsBureel()) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen toegang.</p>'; return; }
+        list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const emps = await RobawsAPI.adminListEmployees();
+            this._adminEmps = {};
+            if (!emps.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen werknemers gevonden</p>'; return; }
+            list.innerHTML = emps.map(e => {
+                this._adminEmps[e.id] = e;
+                const role = this._adminRoleKey(e);
+                const roleColor = role === 'bureel' ? 'var(--qe-purple)' : (role === 'monteur' ? 'var(--qe-orange)' : 'var(--qe-darkblue)');
+                const statusBadge = e.stopgezet
+                    ? '<span style="color:var(--qe-red);font-weight:600">stopgezet</span>'
+                    : '<span style="color:var(--qe-green);font-weight:600">actief</span>';
+                const pinBadge = e.hasPin ? '' : ' · <span style="color:var(--qe-orange)">geen PIN</span>';
+                return `
+                <div class="card" style="padding:10px 12px;margin-bottom:8px">
+                    <div style="min-width:0">
+                        <div style="font-size:14px;font-weight:600">${this.escapeHtml(e.name)}</div>
+                        <div style="font-size:12px;color:var(--qe-grey);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(e.email || '—')}</div>
+                        <div style="font-size:12px;margin-top:3px"><span style="color:${roleColor};font-weight:600">${role}</span> · ${statusBadge}${pinBadge}</div>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+                        <button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px" onclick="app.adminResetPin('${e.id}')">PIN reset</button>
+                        <button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px" onclick="app.adminChangeRole('${e.id}')">Rol</button>
+                        <button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px;color:${e.stopgezet ? 'var(--qe-green)' : 'var(--qe-red)'}" onclick="app.adminToggleStatus('${e.id}')">${e.stopgezet ? 'Heractiveer' : 'Stopzet'}</button>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (err) {
+            console.warn('[Admin] laden faalde:', err && err.message);
+            list.innerHTML = '<p class="text-grey text-sm text-center">Laden mislukt — sleep omlaag om te vernieuwen</p>';
+        }
+    },
+
+    async adminResetPin(empId) {
+        if (!this._adminGuard()) return;
+        const e = this._adminEmps[empId];
+        if (!e) return;
+        if (!confirm('PIN van ' + e.name + ' resetten? Hij stelt bij de volgende login zelf een nieuwe in.')) return;
+        this._adminBusy = true;
+        try {
+            await RobawsAPI.adminResetPin(empId);
+            this.toast('PIN gereset', false);
+            this.loadAdmin();
+        } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
+        finally { this._adminBusy = false; }
+    },
+
+    async adminToggleStatus(empId) {
+        if (!this._adminGuard()) return;
+        const e = this._adminEmps[empId];
+        if (!e) return;
+        const target = e.stopgezet ? 'actief' : 'stopgezet';
+        const verb = e.stopgezet ? 'heractiveren' : 'stopzetten (login blokkeren)';
+        if (!confirm(e.name + ' ' + verb + '?')) return;
+        this._adminBusy = true;
+        try {
+            await RobawsAPI.adminSetStatus(empId, target);
+            this.toast(target === 'stopgezet' ? 'Stopgezet' : 'Geheractiveerd', false);
+            this.loadAdmin();
+        } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
+        finally { this._adminBusy = false; }
+    },
+
+    adminChangeRole(empId) {
+        if (!this._adminIsBureel()) { this.toast('Geen toegang', true); return; }
+        const e = this._adminEmps[empId];
+        if (!e) return;
+        const cur = this._adminRoleKey(e);
+        const opt = (val, label) => '<option value="' + val + '"' + (val === cur ? ' selected' : '') + '>' + label + '</option>';
+        this.showModal(
+            '<div style="font-size:16px;font-weight:600;margin-bottom:4px">Rol wijzigen</div>' +
+            '<div style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">' + this.escapeHtml(e.name) + '</div>' +
+            '<div class="form-group"><label>Rol</label><select class="form-input" id="adminRoleSelect">' +
+                opt('technieker', 'Technieker') + opt('monteur', 'Monteur') + opt('bureel', 'Bureel') + '</select></div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px">' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>' +
+                '<button class="btn btn-primary btn-full" onclick="app.adminSaveRole(\'' + e.id + '\')">Opslaan</button></div>'
+        );
+    },
+
+    async adminSaveRole(empId) {
+        if (!this._adminGuard()) return;
+        const sel = document.getElementById('adminRoleSelect');
+        const role = sel && sel.value;
+        if (!role) return;
+        this._adminBusy = true;
+        try {
+            await RobawsAPI.adminSetRole(empId, role);
+            this.closeModal();
+            this.toast('Rol gewijzigd', false);
+            this.loadAdmin();
+        } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
+        finally { this._adminBusy = false; }
+    },
+
+    openAdminCreate() {
+        if (!this._adminIsBureel()) { this.toast('Geen toegang', true); return; }
+        this.showModal(
+            '<div style="font-size:16px;font-weight:600;margin-bottom:4px">Nieuwe werknemer</div>' +
+            '<div style="font-size:12px;color:var(--qe-orange);margin-bottom:12px;line-height:1.4">Let op: dit maakt enkel de werknemerfiche. De login-gebruiker maak je daarna in Robaws-web (Instellingen → Gebruikers) en koppel je aan deze fiche.</div>' +
+            '<div class="form-group"><label>Voornaam</label><input class="form-input" id="adminNewFirst"></div>' +
+            '<div class="form-group"><label>Achternaam</label><input class="form-input" id="adminNewLast"></div>' +
+            '<div class="form-group"><label>E-mail</label><input class="form-input" id="adminNewEmail" type="email" placeholder="naam@qe.be"></div>' +
+            '<div class="form-group"><label>Rol</label><select class="form-input" id="adminNewRole"><option value="monteur">Monteur</option><option value="technieker">Technieker</option><option value="bureel">Bureel</option></select></div>' +
+            '<div class="form-group"><label>PIN (optioneel, 4–6 cijfers)</label><input class="form-input" id="adminNewPin" inputmode="numeric" maxlength="6" placeholder="leeg = bij 1e login"></div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px">' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>' +
+                '<button class="btn btn-primary btn-full" onclick="app.submitAdminCreate()">Aanmaken</button></div>'
+        );
+    },
+
+    async submitAdminCreate() {
+        if (!this._adminGuard()) return;
+        const g = (id) => (document.getElementById(id) || {}).value || '';
+        const firstName = g('adminNewFirst').trim();
+        const lastName = g('adminNewLast').trim();
+        const email = g('adminNewEmail').trim().toLowerCase();
+        const role = g('adminNewRole') || 'monteur';
+        const pin = g('adminNewPin').trim();
+        if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { this.toast('Geldig e-mailadres vereist', true); return; }
+        if (pin && !/^\d{4,6}$/.test(pin)) { this.toast('PIN = 4 tot 6 cijfers', true); return; }
+        this._adminBusy = true;
+        try {
+            await RobawsAPI.adminCreateEmployee({ firstName, lastName, email, role, pin });
+            this.closeModal();
+            this.toast('Werknemerfiche aangemaakt', false);
+            this.loadAdmin();
+        } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
+        finally { this._adminBusy = false; }
+    },
+
     async loadClockAdmin() {
         const list = document.getElementById('clockAdminList');
         if (!list) return;
