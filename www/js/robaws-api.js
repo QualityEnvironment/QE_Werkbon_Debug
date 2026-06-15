@@ -12,49 +12,27 @@ const RobawsAPI = {
     // === CACHE ===
     _articleCache: null,       // Alle artikelen (1x geladen)
     _articleCacheLoading: false,
-    // ================================================================
-    // v232: KEYS ZITTEN NIET MEER IN DEZE JS.
-    // De Robaws API-keys leven uitsluitend in de native Android-laag
-    // (MainActivity.java, geïnjecteerd uit robaws-keys.json bij de build).
-    // JS vraagt enkel de kant-en-klare auth-header op bij QEBridge — de
-    // key zelf staat nooit in deze www/JS-laag, in Git of in een OTA-update.
-    // De per-werknemer keuze gebeurt native op basis van _activeEmail.
-    // ================================================================
-    _activeEmail: null,
+    API_KEY: 'KBM8UEKYPLHIXDHIQ1IL',
+    API_SECRET: 'xmFYgMmDi4xFLiPZy8qCslSKbCmSDIgIErmTWJZ5',
+
+    // Eén gedeelde API-key voor de hele app (per-werknemer keys teruggedraaid).
+    USER_API_KEYS: {},
+    _activeKey: null,
+    _activeSecret: null,
     setActiveCredentialsFor(email) {
-        this._activeEmail = String(email || '').toLowerCase().trim() || null;
-        console.log('[RobawsAPI] API-identiteit ingesteld voor:', this._activeEmail || '(geen — gedeelde key)');
+        const c = this.USER_API_KEYS[String(email || '').toLowerCase().trim()] || null;
+        this._activeKey = (c && c.key) || null;
+        this._activeSecret = (c && c.secret) || null;
     },
     clearActiveCredentials() {
-        this._activeEmail = null;
+        this._activeKey = null;
+        this._activeSecret = null;
     },
-    /** Basic-auth header uit de native laag (QEBridge). Keys staan NOOIT in
-     *  deze JS. Geen bridge (bv. browser) → lege header = fail-closed (401). */
-    _authHeader() {
-        try {
-            if (typeof QEBridge !== 'undefined' && QEBridge.getRobawsAuthHeader) {
-                const h = QEBridge.getRobawsAuthHeader(this._activeEmail || '');
-                if (h) return h;
-                console.error('[RobawsAPI] Native gaf geen credentials (key ingevuld in robaws-keys.json?).');
-                return '';
-            }
-        } catch (e) {
-            console.warn('[RobawsAPI] Native auth-header faalde:', e);
-        }
-        console.error('[RobawsAPI] Geen QEBridge — app buiten de APK? Geen Robaws-credentials.');
-        return '';
-    },
-    /** Compat-laag voor de paar plekken die losse key/secret gebruiken
-     *  (upload/download): pelt ze uit de native header. Staan dus niet in
-     *  de broncode; ze bestaan enkel vluchtig tijdens de call. */
     _authPair() {
-        try {
-            const dec = atob(this._authHeader().replace(/^Basic\s+/i, ''));
-            const i = dec.indexOf(':');
-            return { key: dec.substring(0, i), secret: dec.substring(i + 1) };
-        } catch (e) {
-            return { key: '', secret: '' };
-        }
+        return {
+            key: this._activeKey || this.API_KEY,
+            secret: this._activeSecret || this.API_SECRET,
+        };
     },
     TENANT: 'qualityenvironment',
 
@@ -102,9 +80,10 @@ const RobawsAPI = {
 
     // === AUTH HEADERS ===
     getHeaders() {
-        // v232: auth-header komt uit de native laag (keys niet in JS).
+        const _ap = this._authPair();
+        const auth = btoa(_ap.key + ':' + _ap.secret);
         return {
-            'Authorization': this._authHeader(),
+            'Authorization': 'Basic ' + auth,
             'X-Tenant': this.TENANT,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -520,9 +499,6 @@ const RobawsAPI = {
         // Alles wordt opgehaald uit Robaws: werknemer, pincode, rol, gelinkte gebruiker.
         const emailLower = email.toLowerCase().trim();
         console.log('[RobawsAPI] Login poging voor:', emailLower);
-        // v232: gebruik meteen de eigen key van deze gebruiker voor de
-        // employee-lookup — geen aparte gedeelde bootstrap-key nodig.
-        this.setActiveCredentialsFor(emailLower);
 
         // Stap 1: Zoek de werknemer op email in Robaws.
         // v132: retry 1x bij transient failure + 3e fallback zonder status-filter
@@ -626,6 +602,21 @@ const RobawsAPI = {
         }
 
         console.log('[RobawsAPI] Werknemer gevonden:', employee.id, employee.firstName, employee.lastName);
+
+        // v232c: de zoek-/lijst-respons bevat soms de Werknemersrol
+        // (employeeRoleId) niet — dan viel de rol onterecht terug op de
+        // planning-groep (bv. Levi: rol Bureel, planning-groep "3. Monteur").
+        // Haal in dat geval de VOLLEDIGE fiche op zodat we de echte
+        // Werknemersrol lezen i.p.v. de planning-groep.
+        if (!employee.employeeRoleId && employee.id) {
+            try {
+                const _full = await this.get(`employees/${employee.id}`, { bypassCache: true });
+                if (_full.code === 200 && _full.data) {
+                    employee = _full.data;
+                    console.log('[RobawsAPI] Volledige fiche opgehaald — Werknemersrol-id:', employee.employeeRoleId);
+                }
+            } catch (_) {}
+        }
 
         // v231: werknemers met status "stopgezet" mogen NIET meer inloggen.
         // De status kan top-level op de fiche staan of als extra-veld.

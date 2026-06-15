@@ -5427,8 +5427,7 @@ const app = {
      */
     async _uploadPhotosToInvoice(photos, invoiceId) {
         if (!photos || !photos.length || !invoiceId) return;
-        const _ap = RobawsAPI._authPair();  // v232: keys uit native laag, niet in JS
-        const auth = btoa(_ap.key + ':' + _ap.secret);
+        const auth = btoa(RobawsAPI.API_KEY + ':' + RobawsAPI.API_SECRET);
         const BASE = RobawsAPI.BASE_URL || 'https://app.robaws.com/api/v2';
         for (let i = 0; i < photos.length; i++) {
             const p = photos[i];
