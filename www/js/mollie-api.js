@@ -1,21 +1,22 @@
 /* ============================================================
- * QE Werkbon — Mollie Tap-to-Pay (v142 — correcte app-to-app flow)
+ * QE Werkbon — Mollie Tap-to-Pay (app-to-app, per Mollie-spec)
  * ------------------------------------------------------------
  * Flow (per Mollie docs "Integrating Tap to Pay in Your Android App"):
- *   1. JS bouwt een PaymentRequest JSON (amount/description/refId/etc)
- *   2. JS roept QEBridge.openMollieTap(payloadJson) aan
- *   3. Java canonicaliseert + signeert met HMAC-SHA256 (secret in Java!)
- *   4. Java launcht Intent naar com.mollie.pos/MainActivity
- *   5. Mollie Tap voert NFC-betaling uit
- *   6. Result via onActivityResult → JS.app.onMollieTapResult(jsonObj)
+ *   1. JS bouwt een spec-conforme PaymentRequest: amount, appId,
+ *      description, referenceId, secretId, webhookUrl — GEEN extra velden.
+ *   2. JS roept QEBridge.openMollieTap(payloadJson) aan.
+ *   3. Java zet appId + secretId uit de ECHTE build, sorteert de keys
+ *      alfabetisch en tekent met HMAC-SHA256. De Secret-key blijft 100%
+ *      in Java — nooit in JS.
+ *   4. Java launcht de Intent naar com.mollie.pos/MainActivity.
+ *   5. Mollie Tap voert de NFC-kaartbetaling uit.
+ *   6. Resultaat via onActivityResult → app.onMollieTapResult(). Het
+ *      intent-result kan ontbreken (Mollie: "intent might not return");
+ *      de webhook + STATUS-polling bevestigen de definitieve status.
  *
- * BELANGRIJK: de POS Secret-key blijft 100% in Java. Hier alleen de
- * Secret-ID die in elke gesigneerde payload moet — die is niet geheim.
- *
- * webhookUrl: voorlopig null. Voor productie zou een server-side endpoint
- * Mollie's status-pushes oppikken voor late updates. Voor nu vertrouwen we
- * op het intent result (volgens Mollie docs is dat voldoende voor normaal
- * gebruik; webhook is voor "payment flow interrupted" edge-cases).
+ * Per omgeving: release-build (be.qe.werkbon) en debug-build
+ * (be.qe.werkbon.debug) gebruiken elk hun eigen Mollie-integratie;
+ * Java kiest op basis van de echte package-naam.
  * ============================================================ */
 
 const MollieAPI = {
@@ -46,67 +47,34 @@ const MollieAPI = {
         return '';
     },
 
+    /** appId = de bundle-id van deze build. Java overschrijft dit vóór het
+     *  tekenen met de ECHTE package-naam, dus dit is enkel een nette default. */
     getAppId() {
-        // v232f WORKAROUND: forceer de be.qe.werkbon.debug Mollie-integratie —
-        // óók op de release — omdat Mollie's be.qe.werkbon-integratie een foute
-        // secret heeft. ⚠️ Terugzetten zodra Mollie be.qe.werkbon herstelt
-        // (dan weer: versienaam met 'debug' → debug, anders release).
-        return this.APP_ID_DEBUG;
-        /* origineel:
         try {
             if (typeof QEBridge !== 'undefined' && QEBridge.getApkVersionName) {
-                const v = QEBridge.getApkVersionName() || '';
-                if (v.toLowerCase().includes('debug')) return this.APP_ID_DEBUG;
+                const v = (QEBridge.getApkVersionName() || '').toLowerCase();
+                if (v.includes('debug')) return this.APP_ID_DEBUG;
             }
         } catch(_) {}
         return this.APP_ID_RELEASE;
-        */
     },
 
-    /** Echte app-variant (release vs debug) o.b.v. de APK-versienaam — los van
-     *  de geforceerde Mollie-appId. Bepaalt het redirect-scheme, zodat de
-     *  release terugkeert naar qewerkbon:// en debug naar qewerkbondebug://. */
-    _realIsDebug() {
-        try {
-            if (typeof QEBridge !== 'undefined' && QEBridge.getApkVersionName) {
-                return (QEBridge.getApkVersionName() || '').toLowerCase().includes('debug');
-            }
-        } catch(_) {}
-        return false;
-    },
-
-    /** Bouw een PaymentRequest JSON-payload voor de intent.
-     *  Java zal de keys alfabetisch sorteren + signen voor verzending. */
+    /** Bouw een spec-conforme PaymentRequest (amount, appId, description,
+     *  referenceId, secretId, webhookUrl — géén extra velden). Java zet appId
+     *  en secretId definitief uit de echte build en tekent vóór verzending. */
     buildPaymentRequest({ amountCents, description, workOrderId, invoiceId }) {
         const value = (Math.round(amountCents) / 100).toFixed(2);
         const referenceId = invoiceId
             ? ('inv_' + invoiceId + '_' + Date.now())
             : ('qe_' + (workOrderId || 'unknown') + '_' + Date.now());
-        const appId = this.getAppId();
-        // v163: redirectUrl gebruikt onze eigen deep-link scheme zodat Mollie's
-        // post-payment "redirect" specifiek onze app aanroept.
-        // v232f: scheme volgt de ECHTE app (niet de geforceerde Mollie-appId),
-        // zodat de release op qewerkbon:// terugkeert ook al draait Mollie via
-        // de debug-integratie.
-        const redirectScheme = this._realIsDebug() ? 'qewerkbondebug' : 'qewerkbon';
-        const payload = {
+        return {
             amount: { currency: 'EUR', value },
-            appId: appId,
+            appId: this.getAppId(),
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
-            // v232h: redirectUrl WEG — staat NIET in Mollie's officiële
-            // PaymentRequest-spec, en hun parser weigert onbekende velden
-            // (ignoreUnknownKeys=false). Een nieuwere/striktere Tap-versie (o.a.
-            // op de Samsung A55/Android 16) wees de intent daardoor af → Tap
-            // opende niet. Spec-conforme payload werkt op álle Tap-versies. De
-            // terugkeer verloopt nu via het intent-result + Worker-polling.
-            // redirectUrl: redirectScheme + '://mollie-payment-complete',
             referenceId: referenceId.slice(0, 255),
             secretId: this.getPosId(),
-            // v144: webhook URL meegeven zodat Mollie de Robaws-connector pingt
-            // bij elke status-wijziging → factuur automatisch op betaald.
             webhookUrl: this.WEBHOOK_URL,
         };
-        return payload;
     },
 
     /** Check of de Mollie Tap app aanwezig is via de Java bridge. */
