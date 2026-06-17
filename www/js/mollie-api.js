@@ -47,6 +47,12 @@ const MollieAPI = {
     },
 
     getAppId() {
+        // v232f WORKAROUND: forceer de be.qe.werkbon.debug Mollie-integratie —
+        // óók op de release — omdat Mollie's be.qe.werkbon-integratie een foute
+        // secret heeft. ⚠️ Terugzetten zodra Mollie be.qe.werkbon herstelt
+        // (dan weer: versienaam met 'debug' → debug, anders release).
+        return this.APP_ID_DEBUG;
+        /* origineel:
         try {
             if (typeof QEBridge !== 'undefined' && QEBridge.getApkVersionName) {
                 const v = QEBridge.getApkVersionName() || '';
@@ -54,6 +60,19 @@ const MollieAPI = {
             }
         } catch(_) {}
         return this.APP_ID_RELEASE;
+        */
+    },
+
+    /** Echte app-variant (release vs debug) o.b.v. de APK-versienaam — los van
+     *  de geforceerde Mollie-appId. Bepaalt het redirect-scheme, zodat de
+     *  release terugkeert naar qewerkbon:// en debug naar qewerkbondebug://. */
+    _realIsDebug() {
+        try {
+            if (typeof QEBridge !== 'undefined' && QEBridge.getApkVersionName) {
+                return (QEBridge.getApkVersionName() || '').toLowerCase().includes('debug');
+            }
+        } catch(_) {}
+        return false;
     },
 
     /** Bouw een PaymentRequest JSON-payload voor de intent.
@@ -65,15 +84,22 @@ const MollieAPI = {
             : ('qe_' + (workOrderId || 'unknown') + '_' + Date.now());
         const appId = this.getAppId();
         // v163: redirectUrl gebruikt onze eigen deep-link scheme zodat Mollie's
-        // post-payment "redirect" specifiek onze app aanroept (geen
-        // disambiguation-dialog meer, geen duplicate task).
-        const isDebug = appId.endsWith('.debug');
-        const redirectScheme = isDebug ? 'qewerkbondebug' : 'qewerkbon';
+        // post-payment "redirect" specifiek onze app aanroept.
+        // v232f: scheme volgt de ECHTE app (niet de geforceerde Mollie-appId),
+        // zodat de release op qewerkbon:// terugkeert ook al draait Mollie via
+        // de debug-integratie.
+        const redirectScheme = this._realIsDebug() ? 'qewerkbondebug' : 'qewerkbon';
         const payload = {
             amount: { currency: 'EUR', value },
             appId: appId,
             description: String(description || 'QE Werkbon betaling').slice(0, 255),
-            redirectUrl: redirectScheme + '://mollie-payment-complete',
+            // v232h: redirectUrl WEG — staat NIET in Mollie's officiële
+            // PaymentRequest-spec, en hun parser weigert onbekende velden
+            // (ignoreUnknownKeys=false). Een nieuwere/striktere Tap-versie (o.a.
+            // op de Samsung A55/Android 16) wees de intent daardoor af → Tap
+            // opende niet. Spec-conforme payload werkt op álle Tap-versies. De
+            // terugkeer verloopt nu via het intent-result + Worker-polling.
+            // redirectUrl: redirectScheme + '://mollie-payment-complete',
             referenceId: referenceId.slice(0, 255),
             secretId: this.getPosId(),
             // v144: webhook URL meegeven zodat Mollie de Robaws-connector pingt
