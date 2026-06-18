@@ -1302,3 +1302,52 @@ body.dark-mode #detailHeader { background: #1A2332 !important; }
 body.dark-mode .wo-card h3 { color: #E8EDF2; }
 body.dark-mode .search-box { background: #1A2332; }
 body.dark-mode .qty-btn { background: #2A3444; color: #C0CCDA; border-color: #3A4A5E; }
+
+/* =========================================================
+   LOGIN — LIQUID-ACHTERGROND  (uit Claude Design "Animated Login")
+   Twee zwevende, vervaagde merk-blobs (oranje + paars) die traag driften
+   achter het loginscherm. Puur decoratief: pointer-events:none, achter de
+   inhoud (z-index 0), en uit bij prefers-reduced-motion. Login-logica
+   (e-mail + PIN) blijft volledig onaangeroerd.
+   ========================================================= */
+.login-screen { overflow: hidden; }
+.login-screen > .login-logo,
+.login-screen > .login-subtitle,
+.login-screen > .login-card { position: relative; z-index: 1; }
+
+.login-blob {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+}
+.login-blob-a {
+    width: 380px; height: 380px;
+    left: -120px; top: 60px;
+    background: radial-gradient(circle, var(--qe-orange), transparent 65%);
+    opacity: 0.14;
+    filter: blur(20px);
+    animation: qe-driftA 14s ease-in-out infinite;
+}
+.login-blob-b {
+    width: 420px; height: 420px;
+    right: -150px; bottom: -40px;
+    background: radial-gradient(circle, var(--qe-purple), transparent 65%);
+    opacity: 0.16;
+    filter: blur(22px);
+    animation: qe-driftB 17s ease-in-out infinite;
+}
+@keyframes qe-driftA {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(40px, -30px) scale(1.12); }
+    100% { transform: translate(0, 0) scale(1); }
+}
+@keyframes qe-driftB {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(-46px, 34px) scale(1.16); }
+    100% { transform: translate(0, 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .login-blob { animation: none !important; }
+}
