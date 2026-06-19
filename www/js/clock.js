@@ -645,12 +645,12 @@ window.QEClock = {
                     try { app.hideScanLoading(); } catch(_) {}
                 }
                 // Toon SUCCES/MISLUKT overlay als de scan-flow iets opleverde
-                if (scanResult && window.app && typeof app.showScanResult === 'function') {
+                if (scanResult && window.app) {
                     const refresh = !!scanResult.refresh;
                     const askKm = !!scanResult.askKilometers;
                     const woId = scanResult.workOrderId;
                     const empId = scanResult.employeeId;
-                    app.showScanResult(scanResult.ok, scanResult.message, async () => {
+                    const afterScan = async () => {
                         if (!refresh) return;
                         try { await this.syncWithRobaws(); } catch(_) {}
                         try { app.updateClockUI(); } catch(_) {}
@@ -662,7 +662,23 @@ window.QEClock = {
                                 console.warn('[Clock] km prompt fout:', e && e.message);
                             }
                         }
-                    });
+                    };
+                    // Uitklok-succes → geanimeerde celebratie (Claude Design "Uitklokken").
+                    // Clock-in en fouten houden de gewone SUCCES/MISLUKT-overlay.
+                    if (scanResult.ok && scanResult.celeb && window.QECeleb) {
+                        const _c = scanResult.celeb;
+                        const _nm = (user && user.name) ? String(user.name).split(' ')[0] : '';
+                        let _ht = '';
+                        if (_c.hours != null) {
+                            const _h = Number(_c.hours) || 0;
+                            _ht = Math.floor(_h) + 'u ' + Math.round((_h - Math.floor(_h)) * 60) + 'm vandaag';
+                        }
+                        QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan });
+                    } else if (typeof app.showScanResult === 'function') {
+                        app.showScanResult(scanResult.ok, scanResult.message, afterScan);
+                    } else {
+                        afterScan();
+                    }
                 }
             }
         } finally {
@@ -1238,6 +1254,8 @@ window.QEClock = {
 
         return {
             ok: true,
+            // Data voor de uitklok-celebratie (Claude Design "Uitklokken")
+            celeb: { weekend: isFridayParty, time: entryEnd, hours: payableHours },
             message: 'Uitgeklokt om ' + entryEnd + '\n' +
                 'Uren: ' + entryStart + ' - ' + entryEnd +
                 ' (' + pauseMinutes + 'min pauze)' + uitklokNote + openLLNote +

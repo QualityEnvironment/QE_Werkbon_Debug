@@ -400,6 +400,27 @@ const app = {
     // ========================================
     showLogin() {
         document.getElementById('loginScreen').classList.remove('hidden');
+        // Vloeibare intro (logo/label/kaart schuiven in). Faalt veilig: als de
+        // animatie niet kan, wordt de login-inhoud sowieso zichtbaar gemaakt.
+        try {
+            if (window.QELiquidLogin && QELiquidLogin.playIntro) {
+                QELiquidLogin.playIntro();
+            } else {
+                this._revealLoginContent();
+            }
+        } catch (e) {
+            this._revealLoginContent();
+        }
+    },
+
+    // Failsafe: toon de login-inhoud direct (gebruikt als de animatie uitvalt).
+    _revealLoginContent() {
+        ['loginLogoStage', 'loginSubtitle'].forEach(function (id) {
+            var n = document.getElementById(id);
+            if (n) { n.style.opacity = '1'; n.style.transform = 'none'; }
+        });
+        var c = document.querySelector('#loginScreen .login-card');
+        if (c) { c.style.opacity = '1'; c.style.transform = 'none'; }
     },
 
     /**
@@ -547,7 +568,7 @@ const app = {
                 return;
             }
             this.currentUser = data.user;
-            this.showApp();
+            this._enterAppWithMelt();
         } catch (e) {
             console.warn('[App] login PIN fout:', e);
             errorEl.textContent = this._friendlyError(e);
@@ -623,6 +644,49 @@ const app = {
         // zijn eigen key pas weer bij showApp).
         try { if (window.RobawsAPI && RobawsAPI.clearActiveCredentials) RobawsAPI.clearActiveCredentials(); } catch (e) {}
         location.reload();
+    },
+
+    // === Kaartbetaling: Mollie (debug) of Viva (release) ===
+    // Mollie Tap is in de RELEASE tijdelijk vergrendeld (werkt nog niet
+    // betrouwbaar op alle toestellen — zie Mollie-support). In debug blijft
+    // Mollie zichtbaar om te testen. Zet ENABLE_MOLLIE_IN_RELEASE op true en
+    // push via git om Mollie ook in de release weer te activeren.
+    ENABLE_MOLLIE_IN_RELEASE: false,
+    _isDebugBuild() {
+        try {
+            if (window.QEBridge && typeof QEBridge.getApkVersionName === 'function') {
+                return String(QEBridge.getApkVersionName() || '').toLowerCase().includes('debug');
+            }
+        } catch (e) {}
+        return false; // onbekend → behandel als release (Mollie verborgen — veiligst)
+    },
+    _mollieActive() { return this._isDebugBuild() || this.ENABLE_MOLLIE_IN_RELEASE === true; },
+    _applyCardPaymentMode() {
+        const on = this._mollieActive();
+        const set = (id, show, flex) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = show ? (flex ? 'flex' : '') : 'none';
+        };
+        set('payMollieBtn', on, false);     // Mollie actief (debug / indien ingeschakeld)
+        set('payMollieLocked', !on, true);  // Mollie vergrendeld (release)
+        set('payVivaBtn', !on, false);      // Viva actief (release)
+        set('payVivaLocked', on, true);     // Viva vergrendeld (debug)
+    },
+
+    // Login-succes → vloeibare overgang: het QE-logo smelt weg tot een draaiend
+    // laad-wiel terwijl de app (showApp) er onzichtbaar achter opbouwt, en faadt
+    // dan uit naar de app. Valt veilig terug op een directe showApp().
+    _enterAppWithMelt() {
+        var self = this;
+        try {
+            if (window.QELiquidLogin && QELiquidLogin.beginTransition) {
+                QELiquidLogin.beginTransition(function () { self.showApp(); });
+                return;
+            }
+        } catch (e) {
+            console.warn('[App] liquid-overgang faalde, directe showApp:', e);
+        }
+        this.showApp();
     },
 
     showApp() {
@@ -4913,19 +4977,6 @@ const app = {
         const vatName = client.vatTariffName || null;
         const btwRowsEl = document.getElementById('wbBtwRows');
 
-        // v198: apart "tabje" met de transactiekost (1,5% bij kaartbetaling) + totaal incl. transactiekost
-        const FEE_RATE = 0.015;
-        const txBox = (totalIncl, btwLabel) => {
-            const gross = totalIncl / (1 - FEE_RATE);
-            const fee = gross - totalIncl;
-            return `
-                <div style="margin-top:10px;padding:10px 12px;background:#fff3e0;border-radius:10px">
-                    <div style="font-size:11px;color:#e65100;font-weight:600;margin-bottom:4px">Bij kaartbetaling (Viva)${btwLabel ? ' — ' + btwLabel : ''}</div>
-                    <div class="total-row"><span>Transactiekosten (1,5%)</span><span>${this.formatPrice(fee)}</span></div>
-                    <div class="total-row subtotal" style="font-weight:700;color:#e65100"><span>Totaal incl. transactiekosten</span><span>${this.formatPrice(gross)}</span></div>
-                </div>`;
-        };
-
         if (vatPct !== null && vatName) {
             // Klant heeft een bekend BTW tarief — toon alleen dat tarief
             clientBtwInfo.innerHTML = `<span style="font-weight:600;color:var(--qe-purple)">Klant BTW: ${this.escapeHtml(vatName)}</span>`;
@@ -4942,7 +4993,7 @@ const app = {
                 <div class="total-row subtotal" style="font-weight:700;color:var(--qe-purple)">
                     <span>Totaal incl. ${vatPct}% BTW</span>
                     <span>${this.formatPrice(subtotal + btwBedrag)}</span>
-                </div>` + txBox(subtotal + btwBedrag, '');
+                </div>`;
         } else {
             // Onbekend BTW tarief — toon beide zodat technieker kan vergelijken
             clientBtwInfo.innerHTML = '<span style="color:var(--qe-orange);font-weight:600">Klant BTW: niet ingesteld in Robaws</span>';
@@ -4955,7 +5006,7 @@ const app = {
                 <div class="total-row"><span>BTW 6%</span><span>${this.formatPrice(btw6)}</span></div>
                 <div class="total-row"><span>BTW 21%</span><span>${this.formatPrice(btw21)}</span></div>
                 <div class="total-row subtotal"><span>Totaal incl. 6% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw6)}</span></div>
-                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw21)}</span></div>` + txBox(subtotal + btw6, '6% BTW') + txBox(subtotal + btw21, '21% BTW');
+                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw21)}</span></div>`;
         }
 
         // Opmerkingen & foto's
@@ -5004,6 +5055,8 @@ const app = {
                 b.style.color = '';
                 b.style.borderColor = '';
             });
+            // Kaartbetaling Mollie/Viva volgens build (release vergrendelt Mollie)
+            this._applyCardPaymentMode();
             if (btn) {
                 btn.innerHTML = 'Ondertekenen & Versturen';
                 btn.onclick = () => this.startSubmitFlow();
@@ -5794,10 +5847,7 @@ const app = {
                 }
             };
 
-            // v211: VOLGORDE GEWIJZIGD — eerst de eenmalige artikels, dán pas
-            // de transactiekost. Voorheen werd de 1,5% berekend op het totaal
-            // ZÓNDER de eenmalige artikels → de kaartbetaling dekte dat deel
-            // van de fee niet en QE paste het verschil bij.
+            // Eenmalige artikels toevoegen aan de factuur (op het verse totaal).
             if (customArticlesForInvoice.length > 0 && invoiceId) {
                 const vatTariffId = String(this.currentWO.vatTariffId);  // v210: default '4' weg
                 const customLineErrors = [];
@@ -5846,95 +5896,9 @@ const app = {
                 await _refreshInvoiceTotals('eenmalige artikels');
             }
 
-            // v170: Transactiekost 1.5% voor card payments toevoegen aan factuur.
-            // Math: gross = net / (1 - 0.015), fee = gross - net. Zo ontvangt QE
-            // netto exact het originele factuurbedrag nadat Mollie z'n 1.5%
-            // afhoudt. Robaws verwacht `price` excl. BTW → we delen door
-            // (1 + btw-rate). v211: draait nu NÁ de eenmalige artikels, op het
-            // verse totaal.
-            let transactionFeeAdded = false;
-            let _feeGrossTotal = null;
-            // v230: ook "QR code" draagt z'n kost — geen percentage maar de
-            // vaste Bancontact-transactiekost van Mollie (€0,39 excl. BTW;
-            // de betaallink is vergrendeld op Bancontact in de Worker).
-            const CARD_PAYMENT_METHODS = ['Mollie Tap', 'Viva wallet'];
-            const QR_FEE_EXCL = 0.39;
-            const _isCardFee = CARD_PAYMENT_METHODS.includes(paymentMethod);
-            const _isQrFee = paymentMethod === 'QR code';
-            if (invoiceId && (_isCardFee || _isQrFee)) {
-                const originalTotal = parseFloat(invoiceResult.invoice.totalInclVat || 0);
-                if (originalTotal > 0) {
-                    const FEE_RATE = 0.015;
-                    const grossTotal = _isCardFee ? (originalTotal / (1 - FEE_RATE)) : null;
-                    const feeInclVat = _isCardFee ? (grossTotal - originalTotal) : null;
-
-                    // v210: tarief-id is gegarandeerd (pre-submit-guard), de
-                    // default '4' is weg. Percentage uit de LIVE Robaws-
-                    // tariefmap (één bron); de lokale tabel is enkel nood-
-                    // fallback en kent nu ook id 5 (21%), die ontbrak —
-                    // daardoor kreeg de fee-lijn bij zo'n klant 0% excl-prijs.
-                    const vatTariffId = String(this.currentWO.vatTariffId);
-                    let vatRate = null;
-                    try {
-                        const vmap = await RobawsAPI.getVatTariffMap();
-                        const pct = (vmap && vmap[vatTariffId]) ? vmap[vatTariffId].percentage : null;
-                        if (pct != null && !isNaN(Number(pct))) vatRate = Number(pct) / 100;
-                    } catch (_) {}
-                    if (vatRate == null) {
-                        const vatRateMap = { '1': 0.21, '2': 0.00, '3': 0.00, '4': 0.06, '5': 0.21 };
-                        vatRate = (vatRateMap[vatTariffId] !== undefined) ? vatRateMap[vatTariffId] : 0;
-                        console.warn('[BTW] live tariefmap onbeschikbaar — noodfallback gebruikt voor id', vatTariffId);
-                    }
-                    const feeExclVat = _isCardFee ? (feeInclVat / (1 + vatRate)) : QR_FEE_EXCL;
-                    const roundedFeeExclVat = Math.round(feeExclVat * 100) / 100;
-                    const _feeIncl = _isCardFee ? feeInclVat : (QR_FEE_EXCL * (1 + vatRate));
-                    const _grossNa = _isCardFee ? grossTotal : (originalTotal + _feeIncl);
-                    const feeLabel = _isCardFee
-                        ? `Transactiekosten ${paymentMethod} (1,5%)`
-                        : 'Transactiekosten QR code (Bancontact)';
-
-                    try {
-                        const li = {
-                            type: 'LINE',
-                            description: feeLabel,
-                            quantity: 1,
-                            price: roundedFeeExclVat,
-                            vatTariffId,
-                        };
-                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
-                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
-                        if (r.code === 200 || r.code === 201) {
-                            console.log('[transactiekosten] +€' + _feeIncl.toFixed(4) +
-                                ' (incl BTW) = €' + roundedFeeExclVat.toFixed(2) +
-                                ' excl × ' + (vatRate * 100).toFixed(0) + '% toegevoegd aan factuur',
-                                invoiceId, '(' + paymentMethod + ')');
-                            transactionFeeAdded = true;
-                            _feeGrossTotal = _grossNa;
-                        } else {
-                            console.warn('[transactiekosten] POST faalde:', r.code, r.data);
-                            // v211: niet meer stil — QE droeg deze kost onzichtbaar zelf
-                            this.toast('Let op: transactiekost-lijn kon niet toegevoegd worden — klant betaalt het factuurbedrag zonder de transactiekost', true);
-                        }
-                    } catch (e) {
-                        console.warn('[transactiekosten] exception:', e && e.message);
-                        this.toast('Let op: transactiekost-lijn kon niet toegevoegd worden — klant betaalt het factuurbedrag zonder de transactiekost', true);
-                    }
-                } else {
-                    console.warn('[transactiekosten] geen totaal beschikbaar — fee overgeslagen');
-                }
-            }
-
-            // v211: het betaalbedrag MOET de fee bevatten. Refetch; lukt die
-            // niet, dan tellen we de fee lokaal bij — voorheen betaalde de
-            // klant in dat geval het bedrag zónder fee en bleef de factuur
-            // deels open staan.
-            if (invoiceId && transactionFeeAdded) {
-                const refreshOk = await _refreshInvoiceTotals('transactiekost');
-                if (!refreshOk && _feeGrossTotal != null) {
-                    invoiceResult.invoice.totalInclVat = Math.round(_feeGrossTotal * 100) / 100;
-                    console.warn('[App] Refetch faalde — fee lokaal bijgeteld:', invoiceResult.invoice.totalInclVat);
-                }
-            }
+            // v238b: transactiekosten (kaarttoeslag) volledig verwijderd —
+            // surcharging is in België/EU niet toegestaan. De klant betaalt
+            // exact het factuurbedrag, ongeacht de betaalmethode.
 
             // v112: dezelfde foto's die op de werkbon staan ook uploaden naar
             // de factuur-bestanden. Loopt parallel met de werkbon-flow zodat
@@ -6383,7 +6347,7 @@ const app = {
             container.innerHTML = `
                 <div style="text-align:center;padding:20px">
                     <h2>Overschrijving</h2>
-                    <p style="font-size:24px;font-weight:700">€ ${parseFloat(pay.amount || inv.totalInclVat || 0).toFixed(2)}</p>
+                    <p style="font-size:24px;font-weight:700">€ ${parseFloat(inv.totalInclVat || pay.amount || 0).toFixed(2)}</p>
                     <p>Factuur: ${inv.logicId || ''}</p>
                     <p>OGM: ${pay.formattedOgm || inv.formattedOgm || ''}</p>
                     <p>IBAN: ${pay.iban || ''}</p>
@@ -6508,7 +6472,7 @@ const app = {
         const inv = (invoiceResult && invoiceResult.invoice) || {};
         const pay = (invoiceResult && invoiceResult.payment) || {};
         try {
-            const bedrag = parseFloat(pay.amount || inv.totalInclVat || 0);
+            const bedrag = parseFloat(inv.totalInclVat || pay.amount || 0);
             if (!(bedrag > 0)) throw new Error('geen geldig bedrag gevonden');
             if (!inv.logicId) throw new Error('geen factuurnummer gevonden');
             if (container) {
@@ -6610,6 +6574,16 @@ const app = {
     },
 
     async _onQrBetaald(status, invoiceResult) {
+        // Geanimeerde 'Betaling geslaagd'-celebratie (Claude Design "Betaling").
+        try {
+            if (window.QECeleb) {
+                const _inv = (invoiceResult && invoiceResult.invoice) || {};
+                const _amt = (_inv.totalInclVat != null)
+                    ? this.formatPrice(parseFloat(_inv.totalInclVat))
+                    : (status && status.amount ? '€ ' + status.amount : '');
+                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · QR code' });
+            }
+        } catch (e) { /* celebratie mag de betaling nooit breken */ }
         const container = document.getElementById('overschrijvingContent');
         if (container) {
             container.innerHTML =
@@ -6807,22 +6781,6 @@ const app = {
             ctx.timestamp = Date.now();
             localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
 
-            // v223/v230: transactiekost-lijn MEEVERHUIZEN. Drie klassen:
-            // kaart (Tap/Viva) = 1,5%-lijn, QR code = vaste €0,39-lijn,
-            // rest = geen lijn. Verandert de klasse, dan wordt de oude
-            // fee-lijn vervangen door de juiste (of gewoon verwijderd).
-            const _feeClass = m => (['Mollie Tap', 'Viva wallet'].includes(m) ? 'pct'
-                : (m === 'QR code' ? 'fixed' : null));
-            if (ctx.invoiceId && _feeClass(cur) !== _feeClass(newMethod)) {
-                if (statusEl) statusEl.textContent = 'Transactiekost aanpassen…';
-                try {
-                    await this._migrateTransactionFee(ctx, newMethod);
-                } catch (e) {
-                    console.warn('[Fee-migratie] faalde:', e && e.message);
-                    this.toast('Let op: transactiekost-lijn kon niet aangepast worden — controleer de factuur in Robaws', true);
-                }
-            }
-
             this.toast('Betaalmethode → ' + newMethod);
 
             // Open nieuw betaalscherm waar relevant — anders terug naar Uitgevoerd
@@ -6853,90 +6811,6 @@ const app = {
         }
     },
 
-    /** v223/v230: transactiekost-lijn aanpassen aan de nieuwe betaalmethode.
-     *  Kaart (Tap/Viva) = 1,5%-lijn, QR code = vaste €0,39-lijn (Bancontact),
-     *  andere methodes = geen lijn. Verwijdert altijd eerst de bestaande
-     *  fee-lijn(en) en voegt daarna de juiste toe op het verse totaal. */
-    async _migrateTransactionFee(ctx, newMethod) {
-        const invoiceId = ctx.invoiceId;
-        if (!invoiceId) return;
-        const target = ['Mollie Tap', 'Viva wallet'].includes(newMethod) ? 'pct'
-            : (newMethod === 'QR code' ? 'fixed' : null);
-
-        // 1) Bestaande fee-lijn(en) verwijderen
-        const liRes = await RobawsAPI.get(`sales-invoices/${invoiceId}/line-items?limit=100`, { bypassCache: true });
-        const items = (liRes.data && (liRes.data.items || liRes.data)) || [];
-        const feeLines = items.filter(li => /^Transactiekosten /.test(String(li.description || '')));
-        for (const li of feeLines) {
-            const d = await RobawsAPI.del(`sales-invoices/${invoiceId}/line-items/${li.id}`);
-            if (d.code !== 200 && d.code !== 204) {
-                throw new Error('fee-lijn verwijderen faalde (' + d.code + ')');
-            }
-        }
-        if (!target) {
-            if (feeLines.length > 0) {
-                await this._refreshCtxInvoice(ctx);
-                this.toast('Transactiekost van de factuur gehaald');
-            }
-            return;
-        }
-
-        // 2) Vers totaal (zonder fee) + BTW-tarief van de overige lijnen
-        const inv = await RobawsAPI.get(`sales-invoices/${invoiceId}`, { bypassCache: true });
-        if (inv.code !== 200 || !inv.data) throw new Error('factuur niet leesbaar');
-        const totalIncl = parseFloat(inv.data.totalInclVat || 0);
-        if (!(totalIncl > 0)) return;
-        const counts = {};
-        for (const li of items) {
-            if (feeLines.includes(li)) continue;
-            const k = li.vatTariffId != null ? String(li.vatTariffId) : '';
-            if (k) counts[k] = (counts[k] || 0) + 1;
-        }
-        const vatTariffId = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || null;
-        let vatRate = 0;
-        try {
-            const vmap = await RobawsAPI.getVatTariffMap();
-            const pct = vatTariffId && vmap[vatTariffId] ? vmap[vatTariffId].percentage : null;
-            if (pct != null && !isNaN(Number(pct))) vatRate = Number(pct) / 100;
-        } catch (_) {}
-
-        // 3) Juiste fee-lijn toevoegen
-        let priceExcl, label;
-        if (target === 'pct') {
-            const FEE_RATE = 0.015;
-            const feeIncl = (totalIncl / (1 - FEE_RATE)) - totalIncl;
-            priceExcl = Math.round((feeIncl / (1 + vatRate)) * 100) / 100;
-            label = 'Transactiekosten ' + newMethod + ' (1,5%)';
-        } else {
-            priceExcl = 0.39;  // vaste Bancontact-kost (Mollie-betaallink)
-            label = 'Transactiekosten QR code (Bancontact)';
-        }
-        const body = {
-            type: 'LINE',
-            description: label,
-            quantity: 1,
-            price: priceExcl,
-        };
-        if (vatTariffId) body.vatTariffId = String(vatTariffId);
-        if (ctx.salesOrderId) body.orderId = String(ctx.salesOrderId);
-        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, body);
-        if (r.code !== 200 && r.code !== 201) throw new Error('fee-lijn toevoegen faalde (' + r.code + ')');
-        await this._refreshCtxInvoice(ctx);
-        this.toast('Transactiekost aangepast op de factuur');
-    },
-
-    /** v223: ververs de factuur-totalen in de betaalcontext (na fee-wissel). */
-    async _refreshCtxInvoice(ctx) {
-        try {
-            const r = await RobawsAPI.get(`sales-invoices/${ctx.invoiceId}`, { bypassCache: true });
-            if (r.code === 200 && r.data && ctx.invoiceResult && ctx.invoiceResult.invoice) {
-                for (const k of ['totalInclVat', 'totalExclVat', 'totalVat']) {
-                    if (r.data[k] !== undefined) ctx.invoiceResult.invoice[k] = r.data[k];
-                }
-                localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
-            }
-        } catch (_) { /* totalen verversen is best effort */ }
-    },
 
     // ========================================
     // CLOCK-IN SYSTEEM (NFC + GPS)
