@@ -67,7 +67,7 @@ const RobawsAPI = {
 
     // v219: Tijd-types die een AFWEZIGHEID zijn (de Robaws-keuzelijst minus
     // "Op tijd"/"Te laat"). Eén bron voor klok, aanwezigheid en dagoverzicht.
-    ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof'],
+    ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof', 'Tijdelijke werkloosheid'],
 
     // v222b: vaste ontvangers voor automatische taken — één plek i.p.v.
     // losse hardcoded id's. Facturen & betalingen → Els (boekhouding),
@@ -2217,7 +2217,13 @@ const RobawsAPI = {
                 let addr = null;
                 if (planningItemId) {
                     const p = await this.get(`planning-items/${planningItemId}`);
-                    if (p.code === 200 && p.data && p.data.address) addr = p.data.address;
+                    if (p.code === 200 && p.data) {
+                        if (p.data.address) addr = p.data.address;
+                        // v243: project van de dagplanning overnemen op de werkbon
+                        // (Robaws DayPlanningItemReadDTO.projectId → WorkOrder.projectId).
+                        // Voorheen werd het project nooit mee overgenomen op de werkbon.
+                        if (p.data.projectId) body.projectId = toStr(p.data.projectId);
+                    }
                 }
                 if (!addr && clientId) {
                     const c = await this.get(`clients/${clientId}`);
