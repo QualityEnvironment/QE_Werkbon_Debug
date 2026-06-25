@@ -2037,9 +2037,11 @@ window.QEClock = {
                 return fd ? String(fd.stringValue ?? fd.value ?? '').trim() : '';
             } catch (_) { return ''; }
         };
-        // v219: ÁL het personeel tonen — bureel ziet van elkaar wie er is
-        // (was: bureel uitgefilterd).
-        const entries = Object.entries(RobawsAPI.EMPLOYEES);
+        // v219: ÁL het personeel tonen — bureel ziet van elkaar wie er is.
+        // v244: live ACTIEVE werknemers (stopgezette eruit, nieuwe erbij) i.p.v.
+        // de statische EMPLOYEES-map.
+        const activeEmps = await RobawsAPI.getActiveEmployees();
+        const entries = activeEmps.map(e => [e.email, e]);
         const out = await Promise.all(entries.map(async ([email, emp]) => {
             const wo = byUser[String(emp.userId)] || null;
             let startuur = '', pauze = null;

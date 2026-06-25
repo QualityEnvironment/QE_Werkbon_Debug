@@ -7357,27 +7357,34 @@ const app = {
     // overgeslagen. Dankzij de absence-filter in getTodaysOpen... telt zo'n
     // registratie NIET als open klok-sessie op de telefoon van de werknemer.
     // ========================================
-    openAfwezigheid() {
+    async openAfwezigheid() {
         const user = RobawsAPI.getLoggedInUser();
         if (!user || user.role !== 'bureel') return;
         const vanEl = document.getElementById('afwVan');
         const totEl = document.getElementById('afwTot');
         if (vanEl && !vanEl.value) vanEl.value = this._localDateStr();
         if (totEl) totEl.value = '';
+        const res = document.getElementById('afwResult');
+        if (res) res.style.display = 'none';
         const cont = document.getElementById('afwWerknemers');
+        if (cont) cont.innerHTML = '<div class="spinner"></div>';
+        this.navigate('screenAfwezigheid');
+        // v244: live ACTIEVE werknemers (stopgezette eruit, nieuwe erbij)
         if (cont) {
-            cont.innerHTML = Object.entries(RobawsAPI.EMPLOYEES).map(([email, emp]) => {
-                const safe = String(email).replace(/[^\w@.-]/g, '');
-                return `
+            try {
+                const emps = await RobawsAPI.getActiveEmployees();
+                cont.innerHTML = emps.map(emp => {
+                    const safe = String(emp.email).replace(/[^\w@.-]/g, '');
+                    return `
                 <label style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f0f0f0;font-size:14px">
                     <input type="checkbox" class="afw-emp" value="${safe}" style="width:18px;height:18px">
                     <span>${this.escapeHtml(emp.name)} <span style="font-size:11px;color:var(--qe-grey)">(${this.escapeHtml(emp.role)})</span></span>
                 </label>`;
-            }).join('');
+                }).join('');
+            } catch (e) {
+                cont.innerHTML = '<p class="text-grey text-sm text-center">Werknemers laden mislukt — sleep omlaag of probeer opnieuw</p>';
+            }
         }
-        const res = document.getElementById('afwResult');
-        if (res) res.style.display = 'none';
-        this.navigate('screenAfwezigheid');
     },
 
     afwToggleAll() {
@@ -7422,10 +7429,12 @@ const app = {
         if (btn) { btn.disabled = true; btn.textContent = 'Bezig...'; }
         let ok = 0;
         const fouten = [];
+        // v244: actieve werknemers live (email → record), met statische fallback
+        const empMap = await RobawsAPI.getActiveEmployeesMap();
         try {
             show('Bezig: 0/' + totaal + '...');
             for (const email of emails) {
-                const emp = RobawsAPI.EMPLOYEES[email];
+                const emp = empMap[email] || RobawsAPI.EMPLOYEES[email];
                 if (!emp) { fouten.push(email + ': onbekende werknemer'); continue; }
                 for (const dag of dagen) {
                     try {
