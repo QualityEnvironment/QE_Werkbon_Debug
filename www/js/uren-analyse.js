@@ -128,7 +128,7 @@
     if (_mobilityById) return _mobilityById;
     var map = {};
     try {
-      var r = await window.RobawsAPI.get('mobility-types?limit=100');
+      var r = await RobawsAPI.get('mobility-types?limit=100');
       if (meta) meta.calls++;
       if (r && r.code === 200 && r.data) {
         var items = r.data.items || [];
@@ -160,7 +160,7 @@
   async function loadEmployees(meta) {
     var byId = {};
     try {
-      var list = await window.RobawsAPI.getActiveEmployees(); // 5-min cache
+      var list = await RobawsAPI.getActiveEmployees(); // 5-min cache
       if (meta) meta.empSource = 'active';
       for (var i = 0; i < list.length; i++) {
         var e = list[i];
@@ -185,7 +185,7 @@
       iter++;
       var url = 'work-orders?limit=' + limit + '&offset=' + offset +
         '&sort=date:desc&include=timeEntries,commuteEntries';
-      var r = await window.RobawsAPI.get(url, { bypassCache: true });
+      var r = await RobawsAPI.get(url, { bypassCache: true });
       if (meta) meta.calls++;
       if (!r || r.code !== 200 || !r.data) break;
       var items = r.data.items || [];
