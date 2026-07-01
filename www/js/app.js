@@ -851,6 +851,10 @@ const app = {
             adminCard.style.display = (_u && _u.role === 'bureel') ? 'block' : 'none';
         }
 
+        // v247: Uren-analyse enkel voor geselecteerd bureel (Levi & Vince)
+        const uaCard = document.getElementById('urenAnalyseCard');
+        if (uaCard) uaCard.style.display = this._isUrenAnalyseAllowed() ? 'block' : 'none';
+
         // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
         // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
         // In de productie-versie bestaat die file niet en gebeurt er niets.
@@ -925,6 +929,121 @@ const app = {
         else profile.appendChild(card);
     },
     // === EINDE DEBUG NFC TESTER ===
+
+    // ================= v247: UREN-ANALYSE (bureel: Levi & Vince) =================
+    UREN_ANALYSE_WHITELIST: ['levi@qe.be', 'vince@qe.be'],
+    _uaState: null,
+
+    /** Enkel geselecteerd bureel mag de uren-analyse zien/gebruiken. */
+    _isUrenAnalyseAllowed() {
+        const email = (this.currentUser && this.currentUser.email || '').toLowerCase();
+        return this.UREN_ANALYSE_WHITELIST.indexOf(email) !== -1;
+    },
+
+    /** Bij openen: whitelist bewaken + maand-picker default = huidige maand. */
+    onNavigateToUrenAnalyse() {
+        if (!this._isUrenAnalyseAllowed()) { this.navigate('screenProfile', false); return; }
+        const inp = document.getElementById('uaMonth');
+        if (inp && !inp.value) {
+            const d = new Date();
+            inp.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        }
+    },
+
+    /** Haal de maand op uit Robaws en toon het in-app overzicht. */
+    async runUrenAnalyse() {
+        if (!this._isUrenAnalyseAllowed()) return;
+        if (typeof QEUren === 'undefined' || typeof QEXlsx === 'undefined') {
+            this.toast('Uren-module niet geladen', true); return;
+        }
+        const inp = document.getElementById('uaMonth');
+        const ym = (inp && inp.value) || new Date().toISOString().slice(0, 7);
+        const btn = document.getElementById('uaRunBtn');
+        const content = document.getElementById('uaContent');
+        const actions = document.getElementById('uaActions');
+        if (actions) actions.style.display = 'none';
+        if (btn) { btn.disabled = true; btn.textContent = 'Laden…'; }
+        if (content) content.innerHTML = '<div class="spinner"></div><div style="text-align:center;color:var(--qe-grey);font-size:12px;margin-top:6px">Uren ophalen uit Robaws…</div>';
+        try {
+            const agg = await QEUren.computeMonth(ym);
+            this._uaState = agg;
+            if (content) content.innerHTML = QEUren.renderOverviewHTML(agg);
+            if (actions) actions.style.display = agg.empList.length ? 'flex' : 'none';
+        } catch (e) {
+            console.error('[UrenAnalyse] faalde:', e);
+            this._uaState = null;
+            if (content) content.innerHTML = '<div class="ua-empty">Kon de uren niet laden: ' + this._escapeHtml(e && e.message ? e.message : 'onbekende fout') + '</div>';
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Overzicht'; }
+        }
+    },
+
+    /** Bouw de .xlsx client-side en sla op via de native bridge (Downloads). */
+    async exportUrenXlsx() {
+        if (!this._uaState) { this.toast('Genereer eerst een overzicht'); return; }
+        const btn = document.getElementById('uaExportBtn');
+        if (btn) btn.disabled = true;
+        try {
+            this.toast('Excel genereren…');
+            const sheets = QEUren.buildSheets(this._uaState);
+            const bytes = QEXlsx.build(sheets);
+            const blob = new Blob([bytes], { type: QEXlsx.MIME });
+            const fileName = QEUren.fileNameFor(this._uaState.ym);
+            await this._saveBlobNative(blob, fileName, QEXlsx.MIME);
+            this.toast('✓ ' + fileName + ' opgeslagen in Downloads');
+        } catch (e) {
+            console.error('[UrenAnalyse] export faalde:', e);
+            this.toast('Export mislukt: ' + (e && e.message || ''), true);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    /** Fase 2: mail de Excel naar de ingelogde gebruiker via de Cloudflare Worker. */
+    async mailUrenXlsx() {
+        if (!this._uaState) { this.toast('Genereer eerst een overzicht'); return; }
+        const email = (this.currentUser && this.currentUser.email) || '';
+        if (typeof this._mailUrenViaWorker === 'function') {
+            return this._mailUrenViaWorker(email);
+        }
+        this.toast('Mailen wordt binnenkort geactiveerd — gebruik voorlopig “Exporteer Excel”.');
+    },
+
+    /** Bouw de .xlsx en laat de Cloudflare Worker ze mailen naar de gebruiker. */
+    async _mailUrenViaWorker(email) {
+        const to = String(email || '').trim();
+        if (!/@qe\.be$/i.test(to)) { this.toast('Je account heeft geen geldig @qe.be-adres', true); return; }
+        if (!this._uaState) { this.toast('Genereer eerst een overzicht'); return; }
+        const btn = document.getElementById('uaMailBtn');
+        if (btn) btn.disabled = true;
+        try {
+            this.toast('Rapport mailen…');
+            const sheets = QEUren.buildSheets(this._uaState);
+            const base64 = QEXlsx.toBase64(sheets);
+            const filename = QEUren.fileNameFor(this._uaState.ym);
+            const base = (window.MollieAPI && MollieAPI.WEBHOOK_URL) || 'https://qe-mollie-webhook.levi-957.workers.dev';
+            const res = await fetch(base + '/send-uren-report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to, month: this._uaState.ym, filename, base64 }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.sent) this.toast('✓ Rapport gemaild naar ' + to);
+            else this.toast('Mailen mislukt: ' + (data.error || ('HTTP ' + res.status)), true);
+        } catch (e) {
+            console.error('[UrenAnalyse] mail faalde:', e);
+            this.toast('Mailen mislukt: ' + (e && e.message || ''), true);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    _escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    },
+    // ================= EINDE UREN-ANALYSE =================
 
     // v218: volledig herschreven. De oude knop pollde QEBridge.getAppVersion
     // 30 s lang — maar bij een gevonden update KILLT de native installer het
@@ -1624,6 +1743,7 @@ const app = {
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
             screenAdmin: 'Beheer',  // v233
+            screenUrenAnalyse: 'Uren-analyse',  // v247
         };
         document.getElementById('headerTitle').textContent = titles[screenId] || '';
 
@@ -1639,6 +1759,7 @@ const app = {
         if (screenId === 'screenDagoverzicht') this.loadDagoverzicht(0);
         if (screenId === 'screenClock') this.onNavigateToClock();
         if (screenId === 'screenAdmin') this.loadAdmin();
+        if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -7374,10 +7495,11 @@ const app = {
             try {
                 const emps = await RobawsAPI.getActiveEmployees();
                 cont.innerHTML = emps.map(emp => {
-                    const safe = String(emp.email).replace(/[^\w@.-]/g, '');
+                    // v245: identificeer op employeeId i.p.v. e-mail (e-mail is in
+                    // Robaws niet altijd ingevuld → gaf 'onbekend' bij opslaan).
                     return `
                 <label style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f0f0f0;font-size:14px">
-                    <input type="checkbox" class="afw-emp" value="${safe}" style="width:18px;height:18px">
+                    <input type="checkbox" class="afw-emp" value="${this.escapeHtml(String(emp.employeeId))}" style="width:18px;height:18px">
                     <span>${this.escapeHtml(emp.name)} <span style="font-size:11px;color:var(--qe-grey)">(${this.escapeHtml(emp.role)})</span></span>
                 </label>`;
                 }).join('');
@@ -7400,12 +7522,12 @@ const app = {
         const type = document.getElementById('afwType')?.value || '';
         const van = document.getElementById('afwVan')?.value || '';
         const tot = document.getElementById('afwTot')?.value || van;
-        const emails = Array.from(document.querySelectorAll('.afw-emp:checked')).map(b => b.value);
+        const ids = Array.from(document.querySelectorAll('.afw-emp:checked')).map(b => b.value);
         const resEl = document.getElementById('afwResult');
         const show = (html) => { if (resEl) { resEl.style.display = 'block'; resEl.style.padding = '12px'; resEl.innerHTML = html; } };
 
         if (!type || !van) { this.toast('Kies een type en een datum', true); return; }
-        if (emails.length === 0) { this.toast('Selecteer minstens één werknemer', true); return; }
+        if (ids.length === 0) { this.toast('Selecteer minstens één werknemer', true); return; }
         if (tot < van) { this.toast('"Tot en met" ligt vóór "Van"', true); return; }
 
         // Werkdagen opbouwen (za/zo overslaan), veiligheidscap 31 dagen
@@ -7421,21 +7543,26 @@ const app = {
         }
         if (dagen.length === 0) { this.toast('Geen werkdagen in de gekozen periode (za/zo worden overgeslagen)', true); return; }
 
-        const totaal = dagen.length * emails.length;
-        if (!confirm(type + ' registreren voor ' + emails.length + ' werknemer(s) × ' + dagen.length + ' werkdag(en) = ' + totaal + ' registratie(s)?')) return;
+        const totaal = dagen.length * ids.length;
+        if (!confirm(type + ' registreren voor ' + ids.length + ' werknemer(s) × ' + dagen.length + ' werkdag(en) = ' + totaal + ' registratie(s)?')) return;
 
         this._afwBusy = true;
         const btn = document.getElementById('btnAfwSubmit');
         if (btn) { btn.disabled = true; btn.textContent = 'Bezig...'; }
         let ok = 0;
         const fouten = [];
-        // v244: actieve werknemers live (email → record), met statische fallback
-        const empMap = await RobawsAPI.getActiveEmployeesMap();
+        // v245: opzoeken op employeeId i.p.v. e-mail — een e-mailadres is in
+        // Robaws niet gegarandeerd ingevuld (daardoor kreeg je 'onbekend' voor
+        // wie geen/ander e-mailadres had, bv. Yassine).
+        const emps = await RobawsAPI.getActiveEmployees();
+        const byId = {};
+        for (const e of emps) byId[String(e.employeeId)] = e;
         try {
             show('Bezig: 0/' + totaal + '...');
-            for (const email of emails) {
-                const emp = empMap[email] || RobawsAPI.EMPLOYEES[email];
-                if (!emp) { fouten.push(email + ': onbekende werknemer'); continue; }
+            for (const id of ids) {
+                const emp = byId[String(id)];
+                if (!emp) { fouten.push('werknemer #' + id + ': onbekend'); continue; }
+                if (!emp.userId) { fouten.push((emp.name || ('#' + id)) + ': geen Robaws-gebruiker gekoppeld'); continue; }
                 for (const dag of dagen) {
                     try {
                         // Géén ingeklokt-tijd en géén time-entries: afwezigheid

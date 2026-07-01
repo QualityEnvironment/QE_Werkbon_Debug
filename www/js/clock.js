@@ -1042,13 +1042,20 @@ window.QEClock = {
         try {
             const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
             const exItems = (exRes.data && (exRes.data.items || exRes.data)) || [];
+            // v245: idempotency PER TIJDSBLOK i.p.v. per werkbon. Sla enkel over
+            // als er al een getimede 185-entry bestaat die op DEZELFDE starttijd
+            // begint = een echte retry van net déze uitklok. Een TWEEDE sessie
+            // van de dag heeft een andere starttijd en moet wél geboekt worden.
+            // (Voorheen blokkeerde de entry van de 1e sessie de 2e → verloren uren.)
             alreadyPosted = exItems.some(te => {
                 const aId = te.articleId || (te.article && te.article.id);
-                return String(aId) === String(ART_MONTEUR) &&
-                       String(te.employeeId || '') === String(session.employeeId || '') &&
-                       te.startTime != null;
+                if (String(aId) !== String(ART_MONTEUR)) return false;
+                if (String(te.employeeId || '') !== String(session.employeeId || '')) return false;
+                if (te.startTime == null) return false;  // phantom/aanvul-entries hebben geen tijd → negeren
+                const sMin = (te.startTime.hour || 0) * 60 + (te.startTime.minute || 0);
+                return sMin === entryStartMin;
             });
-            if (alreadyPosted) console.log('[Clock] entries staan er al — posten overgeslagen (idempotency)');
+            if (alreadyPosted) console.log('[Clock] entry met deze starttijd staat er al — posten overgeslagen (idempotency v245)');
         } catch (_) { /* check faalt → normaal posten (oude gedrag) */ }
 
         let uitklokNote = '';
