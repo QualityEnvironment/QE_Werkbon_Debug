@@ -766,7 +766,8 @@ const RobawsAPI = {
             group: 'QE Werkbon app',
             stringValue: String(pin),
         };
-        console.log('[RobawsAPI] PIN opslaan als TEXT/stringValue:', String(pin));
+        // v251: PIN nooit in klare tekst loggen (logcat is leesbaar via adb)
+        console.log('[RobawsAPI] PIN opslaan als TEXT/stringValue: ***(' + String(pin).length + ' chars)');
         const putRes = await this.put(`employees/${employeeId}`, empData);
         console.log('[RobawsAPI] PUT response code:', putRes.code);
         if (putRes.code !== 200 && putRes.code !== 204) {
@@ -1731,7 +1732,10 @@ const RobawsAPI = {
             description: data.description || '',
             relatedResource: `/work-orders/${workOrderId}`,
             status: 'Te doen',
-            reportingUserId: user ? String(user.robawsUserId) : null,
+            // v251: robawsUserId kan ontbreken (werknemer zonder Robaws-LOGIN);
+            // String(undefined) werd dan letterlijk "undefined" → Robaws 400
+            // → de opvolgtaak werd nooit aangemaakt.
+            reportingUserId: (user && user.robawsUserId != null) ? String(user.robawsUserId) : null,
         };
         if (data.assignedUserId) {
             body.assignedUserId = String(data.assignedUserId);
@@ -1752,7 +1756,8 @@ const RobawsAPI = {
             description: data.description || '',
             relatedResource: `/time-registrations/${timeRegId}`,
             status: 'Te doen',
-            reportingUserId: user ? String(user.robawsUserId) : null,
+            // v251: zelfde fix als createTaskForWorkOrder — geen "null"/"undefined"-string
+            reportingUserId: (user && user.robawsUserId != null) ? String(user.robawsUserId) : null,
         };
         // Wijs toe aan een kantoor-gebruiker (bijv. Levi userId=8, of een vaste admin)
         if (data.assignedUserId) {
@@ -2090,7 +2095,10 @@ const RobawsAPI = {
         // Robaws zoekt server-side op naam, maar matcht meerdere woorden slecht.
         // Daarom sturen we het meest onderscheidende (langste) woord naar Robaws
         // en verfijnen we de rest client-side op de teruggekregen kandidaten.
-        const primary = words.reduce((a, b) => (b.length > a.length ? b : a), raw);
+        // v252: seed was per ongeluk de VOLLEDIGE zoekstring — geen enkel woord
+        // is ooit langer dan de hele string, dus de multi-woord-optimalisatie
+        // was dode code en 'sok 110' ging integraal naar Robaws (0 resultaten).
+        const primary = words.reduce((a, b) => (b.length > a.length ? b : a), words[0] || raw);
 
         const byId = new Map();
         const add = arr => {
@@ -3137,8 +3145,16 @@ const RobawsAPI = {
                     totalHours += hrs;
                 }
                 // line-items (materialen)
+                // v252: bij een HTTP-fout is li.data een error-object (geen
+                // array) — for...of gooide dan een TypeError en de HELE
+                // correctie-tool crashte. Nu: die ene werkbon overslaan.
                 const li = liResults[idx];
-                const liItems = (li && li.data && (li.data.items || li.data)) || [];
+                let liItems = (li && li.data && (li.data.items || li.data)) || [];
+                if (!Array.isArray(liItems)) {
+                    console.warn('[RobawsAPI] line-items van werkbon', wo.id,
+                        'niet bruikbaar (code', li && li.code, ') — overgeslagen');
+                    liItems = [];
+                }
                 for (const l of liItems) {
                     const aId = String(l.articleId || '');
                     const desc = l.description || '';
@@ -3348,7 +3364,7 @@ const RobawsAPI = {
         const invoiceId = invoice.id;
 
         // Stap 2b: Factuur bijwerken — status, verantwoordelijke, werfadres, betaalmethode
-        const invGet = await this.get(`sales-invoices/${invoiceId}`);
+        const invGet = await this.get(`sales-invoices/${invoiceId}`, { bypassCache: true });  // v252: vers vóór full-replace-PUT
         if (invGet.code === 200) {
             const invFull = invGet.data;
             invFull.booked = false;
@@ -3447,6 +3463,14 @@ const RobawsAPI = {
             if (statusPut.code !== 200 && statusPut.code !== 204) {
                 statusErrors.push('factuur Oorsprong/verantwoordelijke niet gezet (code ' + statusPut.code + ')');
             }
+        } else {
+            // v252: dit blok werd bij een gefaalde GET (502/timeout) STIL
+            // overgeslagen — de factuur had dan geen Oorsprong=Technieker en
+            // geen 'Nog te controleren'-vinkje en viel buiten Felicity's
+            // nakijkfilter (werd nooit gecontroleerd). Nu net als de PUT
+            // eerlijk in statusErrors → bureel-taak.
+            statusErrors.push('factuur-GET voor Oorsprong/Nog te controleren faalde (code ' +
+                invGet.code + ') — velden NIET gezet');
         }
 
         // Stap 3: Line items toevoegen
@@ -3592,7 +3616,16 @@ const RobawsAPI = {
             // Fallback: time-entries van werkorder (NIET bij onderhoud — dan worden uren niet gefactureerd)
             // Tel alle uren op per article en rond totaal af
             const timeResult = await this.get(`work-orders/${workOrderId}/time-entries`);
-            const timeEntries = (timeResult.data && (timeResult.data.items || timeResult.data)) || [];
+            // v252: bij een HTTP-fout is timeResult.data een error-object —
+            // for...of gooide dan een TypeError NADAT de factuur al bestond;
+            // een retry gaf een duplicaatfactuur. Nu: fout registreren en de
+            // uren-lijnen overslaan (zelfde patroon als de materiaal-fallback).
+            let timeEntries = (timeResult.data && (timeResult.data.items || timeResult.data)) || [];
+            if (!Array.isArray(timeEntries)) {
+                errors.push({ line: 'urenlijnen (fallback)', code: timeResult.code,
+                    error: 'time-entries niet leesbaar — urenlijnen niet toegevoegd' });
+                timeEntries = [];
+            }
             const teByArticle = {};
             for (const te of timeEntries) {
                 const hrs = Number(te.billableHours) || Number(te.hours) || 0;
@@ -3705,7 +3738,10 @@ const RobawsAPI = {
         if (newStatus) {
             // v88: Werkbon status + Betaling extra-field updaten
             try {
-                const woFull = await this.get(`work-orders/${workOrderId}`);
+                // v252: vers GET vóór full-replace-PUT (valkuil) — de werkbon
+                // zat met 30s-TTL in de cache en de PUT schreef anders een
+                // verouderde kopie terug.
+                const woFull = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });
                 if (woFull.code === 200 && woFull.data) {
                     woFull.data.status = newStatus;
                     if (paymentMethod) {
@@ -3734,7 +3770,10 @@ const RobawsAPI = {
             // v88: Sales order status + Betaling extra-field updaten
             if (woSalesOrderId) {
                 try {
-                    const soFull = await this.get(`sales-orders/${woSalesOrderId}`);
+                    // v252: vers GET vóór full-replace-PUT — sales-orders hebben
+                    // een 5-min-TTL: een tussentijdse back-office-wijziging werd
+                    // anders geruisloos teruggedraaid door de stale PUT.
+                    const soFull = await this.get(`sales-orders/${woSalesOrderId}`, { bypassCache: true });
                     if (soFull.code === 200 && soFull.data) {
                         soFull.data.status = newStatus;
                         if (paymentMethod) {
@@ -4105,7 +4144,12 @@ const RobawsAPI = {
         } catch (e) {
             console.warn('[RobawsAPI] getHourTypeNameMap faalde:', e && e.message);
         }
-        this._hourTypeNameCache = map;
+        // v251: een LEGE map niet cachen (zelfde patroon als getVatTariffMap
+        // v210) — één mislukte fetch betekende voorheen dat weekend-overuren
+        // de hele sessie als werkuren geteld werden in het dagoverzicht.
+        if (Object.keys(map).length > 0) {
+            this._hourTypeNameCache = map;
+        }
         return map;
     },
 
@@ -4379,14 +4423,18 @@ const RobawsAPI = {
      * Returns het time-entry id zodat we het kunnen updaten bij eind-scan.
      */
     async postOpenLLTimeEntry(opts) {
-        const { workOrderId, employeeId, startTime } = opts;
+        const { workOrderId, employeeId, startTime, date } = opts;
+        // v110: L&L is uursoort OVERUREN (vroeger werkuren — gebruiker wil dat
+        // L&L altijd buiten de 8u werkuren-eis valt en als overuren wordt
+        // geregistreerd, zonder dat kantoor handmatig hoeft te switchen).
+        // v251: op za/zo de weekend-variant ('Overuren zaterdag/zondag') —
+        // consistent met addWorkHoursTimeEntry (v138) op dezelfde dag.
+        const llHourType = await this.getWeekendAdjustedHourTypeId(
+            this.HOUR_TYPE_IDS.overuren, date || this._localDateStr());
         const te = {
             employeeId: String(employeeId),
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
-            // v110: L&L is uursoort OVERUREN (vroeger werkuren — gebruiker wil dat
-            // L&L altijd buiten de 8u werkuren-eis valt en als overuren wordt
-            // geregistreerd, zonder dat kantoor handmatig hoeft te switchen).
-            hourTypeId: String(this.HOUR_TYPE_IDS.overuren),
+            hourTypeId: String(llHourType),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
@@ -4406,11 +4454,14 @@ const RobawsAPI = {
      * Robaws v2 ondersteunt PUT op /work-orders/{id}/time-entries/{teId}.
      */
     async closeOpenLLTimeEntry(workOrderId, teId, opts) {
-        const { startTime, endTime } = opts;
+        const { startTime, endTime, date } = opts;
+        // v110: bij PUT update ook hourTypeId op OVERUREN zetten (was werkuren).
+        // v251: idem weekend-variant, zodat de PUT de POST niet terugzet.
+        const llHourType = await this.getWeekendAdjustedHourTypeId(
+            this.HOUR_TYPE_IDS.overuren, date || this._localDateStr());
         const body = {
             articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
-            // v110: bij PUT update ook hourTypeId op OVERUREN zetten (was werkuren).
-            hourTypeId: String(this.HOUR_TYPE_IDS.overuren),
+            hourTypeId: String(llHourType),
         };
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);

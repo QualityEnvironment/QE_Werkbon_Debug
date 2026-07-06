@@ -370,11 +370,10 @@ const APIBridge = {
             const body = await this.parseBody(options);
             const dataUrl = body.dataUrl || '';
             if (!dataUrl) return this.jsonResponse({ success: false, error: 'Geen foto' }, 400);
-            // Lokaal direct cachen als 256x256 thumbnail (past gegarandeerd
-            // in localStorage; voorkomt quota-fouten bij grote foto's).
-            // De Robaws-upload hieronder krijgt de oorspronkelijke dataUrl.
-            const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
-            // Naar Robaws sturen
+            // v252: EERST uploaden naar Robaws, pas bij succes lokaal cachen.
+            // Voorheen werd eerst gecachet: weigerde Robaws de upload, dan
+            // toonde de app (cache-first) blijvend een foto die niet in
+            // Robaws staat — kantoor zag de oude foto, de werknemer de nieuwe.
             try {
                 const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
                 const binary = atob(base64);
@@ -398,13 +397,23 @@ const APIBridge = {
                 const upRes = await RobawsAPI.uploadEmployeePhoto(user.robawsEmployeeId, file, fileName);
                 const ok = upRes && (upRes.code === 200 || upRes.code === 201);
                 if (!ok) {
-                    return this.jsonResponse({ success: false, error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')', avatar: dataUrl });
+                    // Upload geweigerd → lokale cache NIET aanraken; toon de
+                    // bestaande (oude) foto zodat app en Robaws gelijk blijven.
+                    const oldLocal = RobawsAPI.getLocalAvatar(user.email);
+                    return this.jsonResponse({ success: false,
+                        error: 'Robaws weigerde de upload (code ' + (upRes?.code || '?') + ')',
+                        avatar: oldLocal || null, dataUrl: oldLocal || null });
                 }
-                // Return de gecachete (kleinere) dataUrl zodat de UI de
-                // identieke foto toont als bij volgende refresh uit cache.
+                // Succes → nu pas lokaal cachen als 256x256 thumbnail (past
+                // gegarandeerd in localStorage) en die tonen (identiek aan
+                // wat een volgende refresh uit cache geeft).
+                const cachedDataUrl = await RobawsAPI.cacheAvatarFromDataUrl(user.email, dataUrl) || dataUrl;
                 return this.jsonResponse({ success: true, robawsCode: upRes.code, avatar: cachedDataUrl, dataUrl: cachedDataUrl, fileName });
             } catch(e) {
-                return this.jsonResponse({ success: false, error: 'Upload naar Robaws mislukt: ' + e.message, avatar: cachedDataUrl });
+                const oldLocal = RobawsAPI.getLocalAvatar(user.email);
+                return this.jsonResponse({ success: false,
+                    error: 'Upload naar Robaws mislukt: ' + e.message,
+                    avatar: oldLocal || null, dataUrl: oldLocal || null });
             }
         }
 
@@ -648,13 +657,41 @@ const APIBridge = {
                         }
                         for (const m of customArticles) {
                             try {
-                                await RobawsAPI.post('work-orders/' + workOrderId + '/line-items', {
+                                const rLi = await RobawsAPI.post('work-orders/' + workOrderId + '/line-items', {
                                     type: 'LINE',
                                     description: m.name || 'Eenmalig artikel',
                                     quantity: parseFloat(m.quantity || 1),
                                     price: parseFloat(m.salePrice ?? m.unitPrice ?? 0),
                                 });
+                                // v252: post() gooit NIET bij een 400/422 — de
+                                // weigering werd stil geslikt terwijl de queue-
+                                // entry (met de artikeldetails) al gewist werd.
+                                if (rLi.code !== 200 && rLi.code !== 201) {
+                                    naFouten.push('eenmalig artikel "' + (m.name || '?') + '": Robaws code ' + rLi.code);
+                                }
                             } catch (e) { naFouten.push('eenmalig artikel "' + (m.name || '?') + '": ' + (e && e.message)); }
+                        }
+                        // v252: Felicity-taak voor eenmalige artikels — beleid:
+                        // artikel-aanmaak → Felicity (TASK_USERS.ARTIKELS). De
+                        // live flow deed dit al; de queue-verwerking stopte de
+                        // artikels alleen als bijzin in de Els/Vince-taak,
+                        // zonder details en zonder taak voor Felicity.
+                        if (customArticles.length) {
+                            try {
+                                const lines = customArticles.map(m => {
+                                    const price = parseFloat(m.salePrice || m.unitPrice || 0).toFixed(2);
+                                    const qty = parseFloat(m.quantity || 1);
+                                    return '• ' + (m.name || '?') + ' — ' + qty + '× à €' + price;
+                                });
+                                await RobawsAPI.createTaskForWorkOrder(workOrderId, {
+                                    title: '✏️ Eenmalig artikel toevoegen aan Robaws',
+                                    description: 'Eenmalige artikels op deze (offline verwerkte) werkbon — ' +
+                                        'gelieve het echte artikel in Robaws aan te maken en de line-item ' +
+                                        'op werkbon + factuur te corrigeren.\n\n' + lines.join('\n') +
+                                        (naFouten.length ? '\n\nLet op — fouten bij verwerking: ' + naFouten.join('; ') : ''),
+                                    assignedUserId: RobawsAPI.TASK_USERS.ARTIKELS,
+                                });
+                            } catch (e) { naFouten.push('Felicity-taak: ' + (e && e.message)); }
                         }
                         // Bureel-taak. v208: tekst hangt af van de flow —
                         // garantie/monteur-werkbonnen (noInvoice) horen géén
@@ -705,6 +742,29 @@ const APIBridge = {
 
         if (action === 'count') {
             return this.jsonResponse({ success: true, count: this._readWerkbonQueue().length });
+        }
+
+        // v253: bestond niet — de klanthistoriek-badge viel daardoor ALTIJD
+        // stil terug op de lokale telling (alleen dit toestel). Nu echt de
+        // Robaws-werkbonnen per klant tellen, mét verificatie dat de
+        // clientId-filter werkt (Robaws negeert sommige filters); zo niet →
+        // geen count teruggeven zodat de app zijn lokale telling gebruikt.
+        if (action === 'countByClient') {
+            const cid = params.clientId ? String(params.clientId) : '';
+            if (cid) {
+                try {
+                    const r = await RobawsAPI.get(`work-orders?clientId=${encodeURIComponent(cid)}&limit=5`);
+                    const d = r && r.data;
+                    const items = (d && d.items) || [];
+                    const filterOk = items.every(w =>
+                        String(w.clientId || (w.client && w.client.id) || '') === cid);
+                    const total = d ? (d.totalItems ?? d.total ?? null) : null;
+                    if (r.code === 200 && filterOk && total != null) {
+                        return this.jsonResponse({ success: true, count: parseInt(total, 10) || 0 });
+                    }
+                } catch (_) { /* offline of filter onbruikbaar → fallback */ }
+            }
+            return this.jsonResponse({ success: true });  // zonder count → app gebruikt lokale telling
         }
 
         return this.jsonResponse({ success: true });

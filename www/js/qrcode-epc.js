@@ -44,10 +44,12 @@ window.EPCQR = {
 
         // Primaire API: goqr.me / qrserver.com (betrouwbaar, gratis)
         const primaryUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&ecc=M&data=${encoded}`;
-        // Fallback: Google Charts (deprecated maar werkt soms nog)
-        const fallbackUrl = `https://chart.googleapis.com/chart?cht=qr&chs=${size}x${size}&chl=${encoded}&choe=UTF-8&chld=M|2`;
+        // v253: fallback was Google Charts — die QR-dienst is sinds 2019
+        // definitief uitgeschakeld, dus er was de facto GEEN tweede dienst.
+        // Nu quickchart.io (actief onderhouden, gratis QR-endpoint).
+        const fallbackUrl = `https://quickchart.io/qr?size=${size}&ecLevel=M&text=${encoded}`;
 
-        return `<img src="${primaryUrl}" alt="Betaal QR Code" style="width:${size}px;height:${size}px;image-rendering:pixelated" onerror="this.onerror=function(){this.parentElement.innerHTML='<p style=\\'color:#999\\'>QR code kon niet geladen worden</p>'};this.src='${fallbackUrl}'">`;
+        return `<img src="${primaryUrl}" alt="Betaal QR Code" style="width:${size}px;height:${size}px;image-rendering:pixelated" onerror="this.onerror=function(){this.parentElement.innerHTML='<p style=\\'color:#999\\'>QR code kon niet geladen worden — gebruik de gegevens hierboven</p>'};this.src='${fallbackUrl}'">`;
     },
 
     /**

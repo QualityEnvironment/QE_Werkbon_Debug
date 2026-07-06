@@ -470,7 +470,15 @@ window.QEClock = {
             return;
         }
         this._scanLock = true;
-        const lockTimeoutId = setTimeout(() => { this._scanLock = false; }, 8000);
+        // v251: safety-net verruimd van 8s naar 60s. De uitklok-flow kan
+        // legitiem lang duren (confirm-modal tot 30s + GPS tot 10s); na 8s
+        // kwam een NFC-herlezing dan als parallelle flow binnen → dubbele
+        // time-entries. De lock wordt normaal via finally vrijgegeven; dit
+        // is enkel het vangnet voor een catastrofale hang.
+        const lockTimeoutId = setTimeout(() => {
+            console.warn('[Clock] scanLock safety-timeout (60s) — lock geforceerd vrijgegeven');
+            this._scanLock = false;
+        }, 60000);
 
         try {
             const user = RobawsAPI.getLoggedInUser();
@@ -551,7 +559,11 @@ window.QEClock = {
                 // (kwartierafronding), en daarna gewoon doorgaan met vandaag.
                 if (!session.active) {
                     try {
-                        const yd = new Date(Date.now() - 86400000);
+                        // v251: servertijd i.p.v. toesteltijd (zoals de rest van
+                        // de klok) — een foute toesteldatum checkte anders de
+                        // verkeerde gisteren-key en de open dag bleef staan.
+                        const nowSrv = await this._getNow();
+                        const yd = new Date(nowSrv.getTime() - 86400000);
                         const yStr = yd.getFullYear() + '-' +
                             String(yd.getMonth() + 1).padStart(2, '0') + '-' +
                             String(yd.getDate()).padStart(2, '0');
@@ -842,10 +854,18 @@ window.QEClock = {
                 console.log('[Clock] Tijdsregistratie-werkbon aangemaakt:', wo.workOrderId);
             } catch (e) {
                 console.error('[Clock] Kon werkbon niet aanmaken:', e.message);
+                // v251: sessie NIET actief zonder workOrderId achterlaten — de
+                // volgende scan kwam anders in de uitklok-tak ('uitklokken?')
+                // en faalde met 'Geen werkbon gevonden'. Inactief laten zodat
+                // de herkansings-scan gewoon opnieuw inklokt.
+                session.active = false;
+                session.startTime = null;
+                session.startISO = null;
                 this._saveSession(session);
                 return {
                     ok: false,
-                    message: 'Inklokken mislukt:\n' + (e.message || 'Robaws onbereikbaar'),
+                    message: 'Inklokken mislukt:\n' + (e.message || 'Robaws onbereikbaar') +
+                        '\nScan opnieuw om alsnog in te klokken.',
                     refresh: false,
                 };
             }
@@ -984,6 +1004,39 @@ window.QEClock = {
             '-> entry ' + entryStart + ' -> ' + entryEnd,
             '(pauze ' + pauseMinutes + 'min, bron ' + pauseSource + ')');
 
+        // v251: guard — eind ≤ start. Kan door de kwartierafronding (inklok
+        // 23:50-23:59 rondt naar 24:00 en wrapte via %24 naar "00:00") of een
+        // uitklok direct na de inklok. Zonder guard boekte de gisteren-
+        // afsluiting dan een 00:00→23:45-entry van 22,75u. manualClockOut
+        // had deze guard al; hier ontbrak hij volledig.
+        if (entryEndMin <= entryStartMin) {
+            if (opts2.forcedEndTime) {
+                // Degeneraat gisteren-blok (bv. 23:52 ingeklokt): geen uren te
+                // boeken — alleen netjes afsluiten zodat vandaag verder kan.
+                try {
+                    await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw,
+                        'klok-uit: automatische afsluiting — blok te kort voor uren');
+                } catch (e) {
+                    return { ok: false, message: 'Afsluiten van gisteren mislukte:\n' + (e && e.message), refresh: false };
+                }
+                session.active = false;
+                session.endTime = endTimeRaw;
+                this._saveSession(session);
+                return {
+                    ok: true,
+                    message: 'Gisteren afgesloten om ' + endTimeRaw + ' (blok te kort — geen uren geboekt)',
+                    refresh: true,
+                    askKilometers: false,
+                };
+            }
+            return {
+                ok: false,
+                message: 'Uitklokken mislukt:\nDe afgeronde eindtijd (' + entryEnd + ') ligt niet na de starttijd (' +
+                    entryStart + ').\nProbeer over een kwartier opnieuw of verwittig bureel.',
+                refresh: false,
+            };
+        }
+
         // v70/v72: bij clock-out 2e regel toevoegen met GPS+tijd.
         // v72: GPS-fetch met short timeout + cached fallback. Op slechte ontvangst
         // wachten we maximaal 3 sec; daarna gebruiken we de in-scan GPS uit de sessie
@@ -1032,179 +1085,186 @@ window.QEClock = {
         // kon ochtend-L&L zelfs te weinig uitbetalen — teruggedraaid.)
         const klantMinutes = entryEndMin - entryStartMin - (pauseMinutes || 0);
         const klantHours = Math.max(0, klantMinutes / 60);
-        const EIGHT_HRS_MIN = 8 * 60;
 
         // v214: idempotency — staan er op deze werkbon al GETIMEDE monteur-
         // uren van deze werknemer (artikel 185), dan is een eerdere uitklok-
-        // poging al (deels) gelukt. Opnieuw posten zou de uren verdubbelen
-        // (16u werkuren na een retry). Dan alleen nog de uitkloktijd zetten.
-        let alreadyPosted = false;
+        // poging al (deels) gelukt. Opnieuw posten zou de uren verdubbelen.
+        // v245: idempotency PER TIJDSBLOK (starttijd-match) i.p.v. per werkbon.
+        // v251: verfijnd naar PER BLOK BINNEN de uitklok: bij een >8u-split
+        // waarvan alleen het werkuren-blok gelukt was, sloeg de alles-of-niets-
+        // check bij de retry óók het ontbrekende overuren-blok over (stil 2u
+        // kwijt). Nu kennen we élk bestaand blok en posten we alleen wat mist.
+        let exTimedStarts = null;   // Set van startminuten van bestaande getimede 185-entries
         try {
             const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
             const exItems = (exRes.data && (exRes.data.items || exRes.data)) || [];
-            // v245: idempotency PER TIJDSBLOK i.p.v. per werkbon. Sla enkel over
-            // als er al een getimede 185-entry bestaat die op DEZELFDE starttijd
-            // begint = een echte retry van net déze uitklok. Een TWEEDE sessie
-            // van de dag heeft een andere starttijd en moet wél geboekt worden.
-            // (Voorheen blokkeerde de entry van de 1e sessie de 2e → verloren uren.)
-            alreadyPosted = exItems.some(te => {
+            exTimedStarts = new Set(exItems.filter(te => {
                 const aId = te.articleId || (te.article && te.article.id);
                 if (String(aId) !== String(ART_MONTEUR)) return false;
                 if (String(te.employeeId || '') !== String(session.employeeId || '')) return false;
-                if (te.startTime == null) return false;  // phantom/aanvul-entries hebben geen tijd → negeren
-                const sMin = (te.startTime.hour || 0) * 60 + (te.startTime.minute || 0);
-                return sMin === entryStartMin;
-            });
-            if (alreadyPosted) console.log('[Clock] entry met deze starttijd staat er al — posten overgeslagen (idempotency v245)');
-        } catch (_) { /* check faalt → normaal posten (oude gedrag) */ }
+                return te.startTime != null;  // phantom/aanvul-entries hebben geen tijd → negeren
+            }).map(te => (te.startTime.hour || 0) * 60 + (te.startTime.minute || 0)));
+        } catch (_) { exTimedStarts = null; /* check faalt → normaal posten (oude gedrag) */ }
+        const hasEntryAt = (m) => !!(exTimedStarts && exTimedStarts.has(m));
+
+        // v251: dag-totaal VÓÓR het posten bepalen — zowel de >8u-split als de
+        // 8u-aanvulling rekenen per DAG (niet per sessieblok). Voorheen kreeg
+        // een dag met 2 sessies van elk ≤8u (samen >8u) nul overuren.
+        const prevDayHours = (session.completedSessions || [])
+            .reduce((s, c) => s + (parseFloat(c.hours) || 0), 0);
+        const dayKlantHours = Math.round((prevDayHours + klantHours) * 100) / 100;
 
         let uitklokNote = '';
-        if (alreadyPosted) uitklokNote = '\n(uren stonden al geregistreerd — enkel uitkloktijd bijgewerkt)';
+        let skippedBlocks = 0, postedBlocks = 0;
 
         try {
-            if (alreadyPosted) {
-                // niets posten — alles staat er al van een eerdere poging
-            } else if (isWeekendOut) {
+            // v251: één helper die een blok alleen post als het er nog niet
+            // staat (starttijd-match) — maakt elke retry veilig per blok.
+            const postBlockIfMissing = async (label, startMin, endMin, breakMin, hourTypeId) => {
+                if (hasEntryAt(startMin)) {
+                    skippedBlocks++;
+                    console.log('[Clock] ' + label + '-blok ' + fromMinutes(startMin) + ' staat er al — overgeslagen (idempotency)');
+                    return;
+                }
+                const r = await RobawsAPI.addWorkHoursTimeEntry({
+                    workOrderId: session.workOrderId,
+                    employeeId: session.employeeId,
+                    startTime: fromMinutes(startMin),
+                    endTime: fromMinutes(endMin),
+                    breakMinutes: breakMin,
+                    articleId: ART_MONTEUR,
+                    hourTypeId: hourTypeId,
+                    date: ruleDateStr,  // v215: sessie-datum (gisteren-afsluiting)
+                });
+                if (r.code !== 200 && r.code !== 201) {
+                    console.warn('[Clock] ' + label + ' POST faalde:', r.code, r.data);
+                    throw new Error(label + ' POST (' + r.code + ')');
+                }
+                postedBlocks++;
+            };
+
+            if (isWeekendOut) {
                 // v215 (bevestigde regel): za/zo zijn geen vaste werkdagen —
                 // ALLE klant-uren zijn overuren. addWorkHoursTimeEntry zet er
                 // via de weekend-adjust automatisch de za/zo-variant op.
                 // Geen werkuren-blok, geen 8u-split, geen aanvulling.
-                const rw = await RobawsAPI.addWorkHoursTimeEntry({
-                    workOrderId: session.workOrderId,
-                    employeeId: session.employeeId,
-                    startTime: entryStart,
-                    endTime: entryEnd,
-                    breakMinutes: pauseMinutes,
-                    articleId: ART_MONTEUR,
-                    hourTypeId: HT_OVERUREN,
-                    date: ruleDateStr,
-                });
-                if (rw.code !== 200 && rw.code !== 201) {
-                    console.warn('[Clock] weekend-overuren POST faalde:', rw.code, rw.data);
-                    return { ok: false, message: 'Uitklokken mislukt:\nOveruren POST (' + rw.code + ')', refresh: true };
-                }
-                console.log('[Clock] weekend: volledig blok als overuren gepost (' + klantHours.toFixed(2) + 'u)');
+                await postBlockIfMissing('weekend-overuren', entryStartMin, entryEndMin, pauseMinutes, HT_OVERUREN);
+                console.log('[Clock] weekend: volledig blok als overuren (' + klantHours.toFixed(2) + 'u)');
                 uitklokNote += '\n(weekend: alle uren als overuren)';
-            } else if (klantHours > 8) {
-                // Splits in werkuren-blok (8u + pauze) + overuren-blok (rest)
-                const werkurenEndMin = entryStartMin + EIGHT_HRS_MIN + (pauseMinutes || 0);
-                const werkurenEnd = fromMinutes(werkurenEndMin);
-                console.log('[Clock] Splits klant ' + klantHours.toFixed(2) + 'u: ' +
-                    'werkuren ' + entryStart + '→' + werkurenEnd + ' (8u, pauze ' + pauseMinutes + 'min) + ' +
-                    'overuren ' + werkurenEnd + '→' + entryEnd + ' (' + (klantHours-8).toFixed(2) + 'u)');
-
-                // Werkuren-blok
-                const r1 = await RobawsAPI.addWorkHoursTimeEntry({
-                    workOrderId: session.workOrderId,
-                    employeeId: session.employeeId,
-                    startTime: entryStart,
-                    endTime: werkurenEnd,
-                    breakMinutes: pauseMinutes,
-                    articleId: ART_MONTEUR,
-                    hourTypeId: HT_WERKUREN,
-                    date: ruleDateStr,  // v215: sessie-datum (gisteren-afsluiting)
-                });
-                if (r1.code !== 200 && r1.code !== 201) {
-                    console.warn('[Clock] werkuren POST faalde:', r1.code, r1.data);
-                    return { ok: false, message: 'Uitklokken mislukt:\nWerkuren POST (' + r1.code + ')', refresh: true };
+            } else if (dayKlantHours > 8.004) {
+                // v251: splits op DAG-totaal. Werkuren-restant van de dag gaat
+                // als werkuren, al de rest als overuren. Een 2e sessie op een
+                // dag die daarmee boven 8u komt, wordt dus (deels) overuren —
+                // voorheen keek de split alleen naar het huidige blok en
+                // compenseerde de dag-delta de ochtend-aanvulling tot 0 overuren.
+                const werkurenRestMin = Math.max(0, Math.round((8 - prevDayHours) * 60));
+                if (werkurenRestMin < 1) {
+                    // dag zat al aan/boven 8u → heel dit blok is overuren
+                    console.log('[Clock] dagtotaal ' + dayKlantHours.toFixed(2) + 'u: blok volledig als overuren');
+                    await postBlockIfMissing('overuren', entryStartMin, entryEndMin, pauseMinutes, HT_OVERUREN);
+                } else {
+                    const werkurenEndMin = entryStartMin + werkurenRestMin + (pauseMinutes || 0);
+                    console.log('[Clock] Splits dagtotaal ' + dayKlantHours.toFixed(2) + 'u: ' +
+                        'werkuren ' + entryStart + '→' + fromMinutes(werkurenEndMin) +
+                        ' (' + (werkurenRestMin / 60).toFixed(2) + 'u, pauze ' + pauseMinutes + 'min) + ' +
+                        'overuren ' + fromMinutes(werkurenEndMin) + '→' + entryEnd);
+                    await postBlockIfMissing('werkuren', entryStartMin, werkurenEndMin, pauseMinutes, HT_WERKUREN);
+                    await postBlockIfMissing('overuren', werkurenEndMin, entryEndMin, 0, HT_OVERUREN);
                 }
-
-                // Overuren-blok
-                const r2 = await RobawsAPI.addWorkHoursTimeEntry({
-                    workOrderId: session.workOrderId,
-                    employeeId: session.employeeId,
-                    startTime: werkurenEnd,
-                    endTime: entryEnd,
-                    breakMinutes: 0,
-                    articleId: ART_MONTEUR,
-                    hourTypeId: HT_OVERUREN,
-                    date: ruleDateStr,  // v215
-                });
-                if (r2.code !== 200 && r2.code !== 201) {
-                    console.warn('[Clock] overuren POST faalde:', r2.code, r2.data);
-                    return { ok: false, message: 'Uitklokken mislukt:\nOveruren POST (' + r2.code + ')', refresh: true };
-                }
-                console.log('[Clock] werkuren + overuren posted');
             } else {
-                // ≤ 8u: 1 enkele werkuren-entry over volledige tijdsblok
-                const r = await RobawsAPI.addWorkHoursTimeEntry({
-                    workOrderId: session.workOrderId,
-                    employeeId: session.employeeId,
-                    startTime: entryStart,
-                    endTime: entryEnd,
-                    breakMinutes: pauseMinutes,
-                    articleId: ART_MONTEUR,
-                    hourTypeId: HT_WERKUREN,
-                    date: ruleDateStr,  // v215
-                });
-                if (r.code !== 200 && r.code !== 201) {
-                    console.warn('[Clock] werkuren POST faalde:', r.code, r.data);
-                    return { ok: false, message: 'Uitklokken mislukt:\nWerkuren POST (' + r.code + ')', refresh: true };
-                }
-                console.log('[Clock] werkuren posted (klant ' + klantHours.toFixed(2) + 'u)');
+                // ≤ 8u (dag-totaal): 1 enkele werkuren-entry over het volledige blok
+                await postBlockIfMissing('werkuren', entryStartMin, entryEndMin, pauseMinutes, HT_WERKUREN);
+                console.log('[Clock] werkuren geboekt/gecontroleerd (klant ' + klantHours.toFixed(2) + 'u)');
+            }
+            if (skippedBlocks > 0 && postedBlocks === 0) {
+                uitklokNote += '\n(uren stonden al geregistreerd — enkel uitkloktijd bijgewerkt)';
+            } else if (skippedBlocks > 0) {
+                uitklokNote += '\n(ontbrekend deel van een eerdere poging alsnog geboekt)';
             }
 
             // v214: phantom/compensatie als DAG-delta i.p.v. per sessie.
             // (De v90/v110-regel blijft: < 8u klant-uren wordt aangevuld tot
             // 8u werkuren met gelijke overuren-aftrek; L&L telt niet mee.)
-            // Voorheen kreeg élke sessie zijn eigen 8u-aanvulling: ochtend 5u
-            // + namiddag 3u gaf 16u werkuren en −9u overuren plus 2× pauze.
-            // Nu: doel = max(0, 8 − dag-totaal klant-uren), en we posten enkel
-            // het VERSCHIL met wat vandaag al gepost is (dayPhantomPosted) —
-            // een latere sessie corrigeert de eerdere aanvulling dus vanzelf.
-            // Geen aanvulling op weekend (za/zo) of bij < 1u dag-totaal (een
-            // mis-scan van 20 min gaf voorheen +8u phantom en −8u overuren).
-            if (!alreadyPosted) {
-                const prevDayHours = (session.completedSessions || [])
-                    .reduce((s, c) => s + (parseFloat(c.hours) || 0), 0);
-                const dayKlantHours = Math.round((prevDayHours + klantHours) * 100) / 100;
-                const isWeekend = isWeekendOut;  // v215: sessie-datum is leidend
+            // Doel = max(0, 8 − dag-totaal klant-uren); we posten enkel het
+            // VERSCHIL met wat al gepost is. Geen aanvulling op weekend of
+            // bij < 1u dag-totaal.
+            // v251: werk- en overuren-helft apart bijhouden (dayPhantomWerk-/
+            // OverPosted) en een teller alléén bijwerken als zijn POST slaagde.
+            // Voorheen werd dayPhantomPosted óók bij een gefaalde POST op het
+            // doel gezet, waardoor de ontbrekende helft nooit meer werd
+            // ingehaald (dag te veel of te weinig betaalde uren, zonder melding).
+            {
                 let targetPhantom = Math.max(0, 8 - dayKlantHours);
                 let skipReason = '';
-                if (isWeekend) { targetPhantom = 0; skipReason = 'weekend'; }
+                if (isWeekendOut) { targetPhantom = 0; skipReason = 'weekend'; }
                 else if (dayKlantHours < 1) { targetPhantom = 0; skipReason = 'korte dag (<1u)'; }
                 targetPhantom = Math.round(targetPhantom * 100) / 100;
-                const prevPhantom = parseFloat(session.dayPhantomPosted) || 0;
-                const deltaPhantom = Math.round((targetPhantom - prevPhantom) * 100) / 100;
-                if (Math.abs(deltaPhantom) > 0.005) {
-                    console.log('[Clock] phantom dag-delta:', deltaPhantom, 'u (doel', targetPhantom,
-                        ', eerder', prevPhantom, ', dagtotaal', dayKlantHours, 'u)');
+                // migratie: oude sessies hebben alleen dayPhantomPosted
+                const prevW = (session.dayPhantomWerkPosted != null)
+                    ? (parseFloat(session.dayPhantomWerkPosted) || 0)
+                    : (parseFloat(session.dayPhantomPosted) || 0);
+                const prevO = (session.dayPhantomOverPosted != null)
+                    ? (parseFloat(session.dayPhantomOverPosted) || 0)
+                    : -(parseFloat(session.dayPhantomPosted) || 0);
+                const targetW = targetPhantom;
+                const targetO = Math.round(-targetPhantom * 100) / 100;
+                const deltaW = Math.round((targetW - prevW) * 100) / 100;
+                const deltaO = Math.round((targetO - prevO) * 100) / 100;
+                let phantomFouten = 0;
+                if (Math.abs(deltaW) > 0.005) {
+                    console.log('[Clock] phantom werkuren dag-delta:', deltaW, 'u (doel', targetW, ', eerder', prevW, ')');
                     const rp = await RobawsAPI.addWorkHoursTimeEntry({
                         workOrderId: session.workOrderId,
                         employeeId: session.employeeId,
                         articleId: ART_MONTEUR,
                         hourTypeId: HT_WERKUREN,
-                        hoursOverride: deltaPhantom,
+                        hoursOverride: deltaW,
                         date: ruleDateStr,  // v215
                     });
-                    if (rp.code !== 200 && rp.code !== 201) {
-                        console.warn('[Clock] phantom werkuren POST faalde (niet kritiek):', rp.code);
+                    if (rp.code === 200 || rp.code === 201) {
+                        session.dayPhantomWerkPosted = targetW;
+                    } else {
+                        phantomFouten++;
+                        console.warn('[Clock] phantom werkuren POST faalde:', rp.code, '— teller blijft', prevW);
                     }
+                } else {
+                    session.dayPhantomWerkPosted = targetW;
+                }
+                if (Math.abs(deltaO) > 0.005) {
+                    console.log('[Clock] phantom overuren dag-delta:', deltaO, 'u (doel', targetO, ', eerder', prevO, ')');
                     const rc = await RobawsAPI.addWorkHoursTimeEntry({
                         workOrderId: session.workOrderId,
                         employeeId: session.employeeId,
                         articleId: ART_MONTEUR,
                         hourTypeId: HT_OVERUREN,
-                        hoursOverride: Math.round(-deltaPhantom * 100) / 100,
+                        hoursOverride: deltaO,
                         date: ruleDateStr,  // v215
                     });
-                    if (rc.code !== 200 && rc.code !== 201) {
-                        console.warn('[Clock] overuren-compensatie POST faalde (niet kritiek):', rc.code);
+                    if (rc.code === 200 || rc.code === 201) {
+                        session.dayPhantomOverPosted = targetO;
+                    } else {
+                        phantomFouten++;
+                        console.warn('[Clock] overuren-compensatie POST faalde:', rc.code, '— teller blijft', prevO);
                     }
-                } else if (skipReason) {
-                    console.log('[Clock] geen 8u-aanvulling (' + skipReason + '), dagtotaal', dayKlantHours, 'u');
+                } else {
+                    session.dayPhantomOverPosted = targetO;
                 }
+                // legacy-veld synchroon houden voor oudere lezers/rebuilds
+                session.dayPhantomPosted = session.dayPhantomWerkPosted;
                 if (skipReason && dayKlantHours < 8) {
+                    console.log('[Clock] geen 8u-aanvulling (' + skipReason + '), dagtotaal', dayKlantHours, 'u');
                     uitklokNote += '\n(geen 8u-aanvulling: ' + skipReason + ')';
                 }
-                session.dayPhantomPosted = targetPhantom;
+                if (phantomFouten > 0) {
+                    uitklokNote += '\n(let op: 8u-aanvulling deels mislukt — wordt bij de volgende scan hersteld; anders bureel verwittigen)';
+                }
             }
         } catch(e) {
             console.error('[Clock] time-entry POST exception:', e.message);
             return {
                 ok: false,
                 message: 'Uitklokken mislukt:\n' + e.message,
-                refresh: false,
+                refresh: true,
             };
         }
 
@@ -1307,16 +1367,25 @@ window.QEClock = {
             const billableDuration = Math.max(15, Math.ceil(actualDuration / 15) * 15);
             // Start blijft op 5 min afgerond (dichtbij de werkelijkheid).
             // End = start + billable_duration (zo blijft het kwartier-veelvoud).
-            const startMinForDisplay = round5(startMinRaw);
-            const endMinForDisplay = startMinForDisplay + billableDuration;
+            let startMinForDisplay = round5(startMinRaw);
+            let endMinForDisplay = startMinForDisplay + billableDuration;
+            // v251: over middernacht → binnen de dag houden. fromMinutes wrapte
+            // ≥1440 naar 00:xx waardoor closeOpenLLTimeEntry hours=0 rekende en
+            // het gegarandeerde kwartier L&L verloren ging. Cap op 23:55 en
+            // schuif de start zo nodig terug zodat de duur behouden blijft.
+            if (endMinForDisplay >= 1440) {
+                endMinForDisplay = 1435;  // 23:55 (5-min-raster)
+                startMinForDisplay = Math.max(0, endMinForDisplay - billableDuration);
+            }
             const llEnd = fromMinutes(endMinForDisplay);
             const llStartRounded = fromMinutes(startMinForDisplay);
             try {
                 if (session.llActiveTeId) {
                     // v73: PUT update met endTime
+                    // v251: sessie-datum mee voor de za/zo-uursoortvariant
                     const r = await RobawsAPI.closeOpenLLTimeEntry(
                         session.workOrderId, session.llActiveTeId,
-                        { startTime: llStartRounded, endTime: llEnd }
+                        { startTime: llStartRounded, endTime: llEnd, date: session.dateStr || session.date }
                     );
                     if (r.code !== 200 && r.code !== 201 && r.code !== 204) {
                         console.warn('[Clock] L&L PUT faalde:', r.code, r.data,
@@ -1331,6 +1400,7 @@ window.QEClock = {
                             breakMinutes: 0,
                             articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen,
                             hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
+                            date: session.dateStr || session.date,  // v251: weekend-adjust
                         });
                     }
                 } else {
@@ -1344,6 +1414,7 @@ window.QEClock = {
                         breakMinutes: 0,
                         articleId: RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen,
                         hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
+                        date: session.dateStr || session.date,  // v251: weekend-adjust
                     });
                 }
             } catch(e) {
@@ -1419,6 +1490,7 @@ window.QEClock = {
                 workOrderId: session.workOrderId,
                 employeeId: session.employeeId,
                 startTime: llStartRounded,
+                date: session.dateStr || session.date,  // v251: za/zo-uursoortvariant
             });
         } catch(e) {
             console.error('[Clock] L&L start POST exception:', e.message);
@@ -1457,8 +1529,11 @@ window.QEClock = {
     // =============================================
 
     _getGPS(opts) {
+        // v251: opts werden berekend maar daarna hardcoded overschreven —
+        // de v72-bedoeling 'bij uitklok max 3s wachten' werkte dus nooit en
+        // de flow kon 10s blokkeren. Nu tellen timeoutMs/maximumAge écht.
         const timeout = (opts && opts.timeoutMs) || 10000;
-        const maxAge = (opts && opts.maximumAge) || 0;
+        const maxAge = (opts && opts.maximumAge != null) ? opts.maximumAge : 30000;
         return new Promise((resolve, reject) => {
             if (!navigator.geolocation) {
                 reject(new Error('Geolocation niet beschikbaar'));
@@ -1467,7 +1542,7 @@ window.QEClock = {
             navigator.geolocation.getCurrentPosition(
                 pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
                 err => reject(err),
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+                { enableHighAccuracy: true, timeout: timeout, maximumAge: maxAge }
             );
         });
     },
@@ -1797,16 +1872,40 @@ window.QEClock = {
         const tijdLabel  = (ef.Tijd && ef.Tijd.stringValue) || 'Op tijd';
 
         // Active: ingeklokt-tijd staat, maar uitgeklokt nog leeg
-        const isActive = !!ingeklokt && !uitgeklokt;
+        let isActive = !!ingeklokt && !uitgeklokt;
 
         const session = this.getSession() || this._newSession();
+
+        // v251: een 2e sessie op dezelfde werkbon wist het Uitgeklokt-veld
+        // van de ochtend NIET (alleen create/setUitgeklokt schrijven dat).
+        // Direct na de 2e inklok draaide deze sync en zette de verse lokale
+        // sessie meteen terug op inactief + de ochtend-starttijd — waardoor
+        // het namiddagblok nooit geboekt werd (haaks op de v245-fix). Als de
+        // lokale sessie actief is en NA de uitgeklokt-tijd is gestart, is de
+        // lokale staat leidend.
+        let keepLocalStart = false;
+        if (!isActive && uitgeklokt && session.active === true && session.startTime
+                && String(session.workOrderId || '') === String(wo.id)) {
+            const _m = (s) => {
+                const m = String(s || '').match(/^(\d{1,2}):(\d{1,2})/);
+                return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+            };
+            const sMin = _m(session.startTime), uMin = _m(uitgeklokt);
+            if (sMin != null && uMin != null && sMin >= uMin) {
+                isActive = true;
+                keepLocalStart = true;
+                console.log('[Clock] sync: lokale 2e sessie (start', session.startTime,
+                    '≥ uitgeklokt', uitgeklokt, ') blijft actief');
+            }
+        }
+
         session.workOrderId      = wo.id;
         session.dateStr          = (wo.date || '').substring(0, 10);
         session.employeeId       = String(user.robawsEmployeeId);
         session.employeeName     = user.name || user.email;
         session.onTimeLabel      = tijdLabel;
         session.registrationType = tijdLabel;  // compat met oude UI
-        session.startTime        = ingeklokt || session.startTime;
+        session.startTime        = keepLocalStart ? session.startTime : (ingeklokt || session.startTime);
         session.active           = isActive;
         // v71: strip klok-in:/klok-uit: prefix EN GPS-deel om enkel tag-naam te krijgen.
         // Sinds v70 begint elke regel met "klok-in: <tag> — <gps> — <tijd>".
@@ -1823,7 +1922,7 @@ window.QEClock = {
             else if (tn.includes('laden')) session.tagType = 'laden_lossen';
             else session.tagType = 'camionet';
         }
-        if (uitgeklokt) {
+        if (uitgeklokt && !keepLocalStart) {
             session.endTime = uitgeklokt;
         }
 
@@ -1833,15 +1932,54 @@ window.QEClock = {
             session.completedSessions = session.completedSessions.filter(c => c && c.workOrderId === wo.id);
         }
 
+        // v251: time-entries ÉÉN keer ophalen — voor de sessie-herbouw
+        // hieronder én de L&L-detectie daarna.
+        let _teItems = null;
+        try {
+            const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
+            if (teRes.code === 200 && teRes.data && teRes.data.items) _teItems = teRes.data.items;
+        } catch (e) {
+            console.warn('[Clock] time-entries fetch voor sync mislukt:', e.message);
+        }
+
         // Als de werkbon afgesloten is (Uitgeklokt gevuld), zet completedSessions
         if (uitgeklokt && (!session.completedSessions || session.completedSessions.length === 0)) {
+            // v251: 'hours' en de phantom-tellers mee herbouwen uit de echte
+            // Robaws-entries. Zonder deze velden rekende een uitklok op een
+            // ander toestel het dagtotaal op 0 en de eerder geposte aanvulling
+            // op 0 — met een dubbele 8u-aanvulling als gevolg.
+            let timedHours = 0, phW = 0, phO = 0;
+            if (_teItems) {
+                const ART = String(RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject);
+                for (const te of _teItems) {
+                    const aId = String(te.articleId || (te.article && te.article.id) || '');
+                    if (aId !== ART) continue;
+                    if (String(te.employeeId || '') !== String(session.employeeId || '')) continue;
+                    if (te.startTime != null && te.endTime != null) {
+                        const h = parseFloat(te.hours);
+                        if (!isNaN(h)) { timedHours += h; continue; }
+                        const s = (te.startTime.hour || 0) * 60 + (te.startTime.minute || 0);
+                        const e2 = (te.endTime.hour || 0) * 60 + (te.endTime.minute || 0);
+                        if (e2 > s) timedHours += ((e2 - s) - (parseInt(te.breakMinutes, 10) || 0)) / 60;
+                    } else if (te.startTime == null && te.endTime == null) {
+                        // untimed = aanvulling/compensatie: positief = werk-aanvulling,
+                        // negatief = overuren-compensatie
+                        const h = parseFloat(te.hours) || 0;
+                        if (h > 0) phW += h; else if (h < 0) phO += h;
+                    }
+                }
+            }
             session.completedSessions = [{
                 startTime: ingeklokt,
                 endTime: uitgeklokt,
                 type: tijdLabel,
                 workOrderId: wo.id,
                 tagName: session.tagName,
+                hours: Math.round(timedHours * 100) / 100,
             }];
+            session.dayPhantomWerkPosted = Math.round(phW * 100) / 100;
+            session.dayPhantomOverPosted = Math.round(phO * 100) / 100;
+            session.dayPhantomPosted = session.dayPhantomWerkPosted;  // legacy compat
         }
 
         // v77: detecteer open L&L time-entry. Een entry is "open" als:
@@ -1850,10 +1988,9 @@ window.QEClock = {
         // Dit voorkomt dat een midnight-entry of een net-aangemaakte open entry
         // ten onrechte als afgesloten wordt beschouwd.
         try {
-            const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
-            if (teRes.code === 200 && teRes.data && teRes.data.items) {
+            if (_teItems) {
                 const llArt = String(RobawsAPI.WERKUUR_ARTICLE_IDS.ladenLossen);
-                const llItems = teRes.data.items.filter(te => {
+                const llItems = _teItems.filter(te => {
                     const aId = te.articleId || (te.article && te.article.id);
                     return String(aId) === llArt;
                 });

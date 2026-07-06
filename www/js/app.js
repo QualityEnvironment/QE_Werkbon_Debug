@@ -65,10 +65,14 @@ const app = {
     // Auto-save: sla woData op na elke wijziging
     _saveWoData() {
         try {
-            // Sla alleen id/hours/materials/notes op (geen foto-data — te groot)
-            // Foto's worden in IndexedDB bewaard (zie _idb* helpers).
+            // Sla alleen id/hours/materials/notes op (geen foto-data — te
+            // groot voor localStorage). v253: foto's overleven een app-
+            // herstart NIET in de app zelf (de IndexedDB-opslag is in v103+
+            // bewust verwijderd wegens camera-crashes); de native kopie in
+            // de Pictures/QE-galerij blijft wel bestaan.
             const slim = {};
             for (const [id, d] of Object.entries(this.woData)) {
+                if (id === '__correctie__') continue;  // v253: werk-array van de correctie-tool niet persisteren
                 slim[id] = {
                     hours: d.hours || [],
                     materials: d.materials || [],
@@ -92,124 +96,11 @@ const app = {
                     }
                 }
             }
-            // v102+: foto's worden LAZY hersteld in openWorkorder() per WO,
-            // niet bij init. Voorkomt geheugendruk + langere init-tijd op toestellen
-            // met veel foto's in cache.
+            // v253: de IndexedDB-fotohelpers (_idb*, _restorePhotosForWO) zijn
+            // verwijderd — ze werden sinds v103+ nergens meer aangeroepen en
+            // de commentaren eromheen beschreven foto-herstel dat niet bestond.
+            // Foto's leven alleen in-memory (+ native Pictures/QE-galerij).
         } catch (e) {}
-    },
-
-    /**
-     * v102+: Lazy-load foto's uit IndexedDB voor een specifieke WO.
-     * Wordt aangeroepen in openWorkorder. Zo blijven foto's na refresh maar
-     * laden we niet alle foto-data tegelijk in RAM.
-     */
-    async _restorePhotosForWO(woId) {
-        try {
-            const db = await this._idbOpen();
-            const photos = await new Promise((resolve, reject) => {
-                const tx = db.transaction(this._IDB_STORE, 'readonly');
-                const idx = tx.objectStore(this._IDB_STORE).index('woId');
-                const req = idx.getAll(IDBKeyRange.only(String(woId)));
-                req.onsuccess = () => resolve(req.result || []);
-                req.onerror = () => reject(req.error);
-            });
-            if (!this.woData[woId]) {
-                this.woData[woId] = { hours: [], materials: [], photos: [], notes: '', checklist: null, onderhoud: false };
-            }
-            this.woData[woId].photos = this.woData[woId].photos || [];
-            for (const ph of photos) {
-                if (!this.woData[woId].photos.some(p => String(p.id) === String(ph.id))) {
-                    this.woData[woId].photos.push({ id: ph.id, data: ph.data, name: ph.name });
-                }
-            }
-            if (photos.length > 0) {
-                console.log('[App] ' + photos.length + ' foto(s) hersteld voor WO ' + woId);
-            }
-        } catch (e) {
-            console.warn('[App] _restorePhotosForWO faalde:', e && e.message);
-        }
-    },
-
-    // ========================================
-    // v101+: INDEXEDDB voor foto-persistentie
-    // ========================================
-    _IDB_NAME: 'qe_werkbon_db',
-    _IDB_VERSION: 1,
-    _IDB_STORE: 'photos',
-    _idbCached: null,
-
-    _idbOpen() {
-        if (this._idbCached) return Promise.resolve(this._idbCached);
-        return new Promise((resolve, reject) => {
-            if (!window.indexedDB) { reject(new Error('IndexedDB niet beschikbaar')); return; }
-            const req = indexedDB.open(this._IDB_NAME, this._IDB_VERSION);
-            req.onupgradeneeded = () => {
-                const db = req.result;
-                if (!db.objectStoreNames.contains(this._IDB_STORE)) {
-                    const store = db.createObjectStore(this._IDB_STORE, { keyPath: 'id' });
-                    store.createIndex('woId', 'woId', { unique: false });
-                }
-            };
-            req.onsuccess = () => { this._idbCached = req.result; resolve(req.result); };
-            req.onerror = () => reject(req.error);
-        });
-    },
-
-    async _idbSavePhoto(woId, photo) {
-        const db = await this._idbOpen();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(this._IDB_STORE, 'readwrite');
-            const store = tx.objectStore(this._IDB_STORE);
-            store.put({
-                id: String(photo.id),
-                woId: String(woId),
-                data: photo.data,
-                name: photo.name,
-                addedAt: Date.now(),
-            });
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
-    },
-
-    async _idbDeletePhoto(photoId) {
-        const db = await this._idbOpen();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(this._IDB_STORE, 'readwrite');
-            tx.objectStore(this._IDB_STORE).delete(String(photoId));
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
-    },
-
-    async _idbDeleteAllForWO(woId) {
-        const db = await this._idbOpen();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(this._IDB_STORE, 'readwrite');
-            const store = tx.objectStore(this._IDB_STORE);
-            const idx = store.index('woId');
-            const req = idx.openCursor(IDBKeyRange.only(String(woId)));
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (cursor) {
-                    cursor.delete();
-                    cursor.continue();
-                } else {
-                    resolve();
-                }
-            };
-            req.onerror = () => reject(req.error);
-        });
-    },
-
-    async _idbGetAllPhotos() {
-        const db = await this._idbOpen();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(this._IDB_STORE, 'readonly');
-            const req = tx.objectStore(this._IDB_STORE).getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => reject(req.error);
-        });
     },
 
     // Ingediende uren bijhouden (keyed by WO id)
@@ -957,7 +848,9 @@ const app = {
             this.toast('Uren-module niet geladen', true); return;
         }
         const inp = document.getElementById('uaMonth');
-        const ym = (inp && inp.value) || new Date().toISOString().slice(0, 7);
+        // v253: lokale (Brussel) maand i.p.v. UTC — rond middernacht op de 1e
+        // pakte de UTC-fallback de vorige maand (gedocumenteerde valkuil).
+        const ym = (inp && inp.value) || this._localDateStr().slice(0, 7);
         const btn = document.getElementById('uaRunBtn');
         const content = document.getElementById('uaContent');
         const actions = document.getElementById('uaActions');
@@ -1393,7 +1286,7 @@ const app = {
         }
 
         // Vul uren in op de werkbon's woData
-        this._fillKlokurenForMonteur(wo, employees, session);
+        await this._fillKlokurenForMonteur(wo, employees, session);
 
         // Set currentWO + automatische uurcode (monteurProject)
         this.currentWO = wo;
@@ -1406,6 +1299,10 @@ const app = {
         // Auto-submit. executeMonteurSubmitFlow navigeert intern naar planning;
         // dat is OK — daarna mag uitklokken alsnog doorgaan.
         try {
+            // v251: de werkbon-datum moet VANDAAG zijn — executeMonteurSubmitFlow
+            // gebruikt this.currentDate en die kon nog op de 'vorige werkdag'-
+            // chip staan, waardoor de uren op de verkeerde dag geboekt werden.
+            this.currentDate = new Date();
             await this.executeMonteurSubmitFlow();
         } catch(e) {
             console.warn('[ClockOut-check] monteur auto-submit faalde:', e && e.message);
@@ -1421,7 +1318,7 @@ const app = {
 
     /** Vul uren-blokken in op woData voor elke aangevinkte werknemer.
      *  Eén blok per werknemer met dezelfde start/eind/duur/pauze. */
-    _fillKlokurenForMonteur(wo, employees, session) {
+    async _fillKlokurenForMonteur(wo, employees, session) {
         const woId = wo.id;
         if (!this.woData[woId]) {
             this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
@@ -1451,8 +1348,17 @@ const app = {
         };
 
         // Start = session start tijd, eind = huidige tijd
+        // v251: servertijd (QEClock) i.p.v. toesteltijd — de starttijd komt al
+        // uit de server-gecorrigeerde klok; met new Date() kon een verkeerd
+        // gezette toestelklok hier langere werkbon-uren opleveren dan de
+        // echte klok-uren (anti-manipulatie werd net in dit pad omzeild).
         const startTime = session && session.startTime ? session.startTime : '08:00';
-        const now = new Date();
+        let now = new Date();
+        try {
+            if (window.QEClock && typeof QEClock._getNow === 'function') {
+                now = await QEClock._getNow();
+            }
+        } catch (_) { /* fallback: toesteltijd */ }
         const endTimeRaw = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
 
         const entryStartMin = roundUp15(toMin(startTime));
@@ -1467,8 +1373,17 @@ const app = {
         const grossMin = Math.max(0, entryEndMin - entryStartMin);
         const netMin = Math.max(0, grossMin - pauze);
 
+        // v251: geen dubbele uren — werknemers die al een uren-blok op deze
+        // werkbon hebben (eerder manueel ingevuld, nog niet verstuurd) worden
+        // overgeslagen; het bestaande blok blijft leidend.
+        const alreadyOnWo = new Set((this.woData[woId].hours || [])
+            .filter(h => h && h.employeeId != null)
+            .map(h => String(h.employeeId)));
+        const targets = employees.filter(emp => !alreadyOnWo.has(String(emp.id)));
+        const skipped = employees.length - targets.length;
+
         const baseId = Date.now();
-        employees.forEach((emp, idx) => {
+        targets.forEach((emp, idx) => {
             this.woData[woId].hours.push({
                 id: baseId + idx,
                 type: 'klant',
@@ -1483,7 +1398,11 @@ const app = {
 
         this._saveWoData();
         console.log('[ClockOut-check] uren ingevuld op werkbon', woId,
-            entryStart, '->', entryEnd, 'voor', employees.map(e => e.name).join(', '));
+            entryStart, '->', entryEnd, 'voor', targets.map(e => e.name).join(', ') +
+            (skipped > 0 ? ' (' + skipped + ' overgeslagen: had al uren op deze bon)' : ''));
+        if (skipped > 0) {
+            this.toast(skipped + ' werknemer(s) had(den) al uren op deze werkbon — bestaande uren behouden');
+        }
     },
 
     /** Modal die de monteur vraagt of hij de geklokte uren wil overnemen. */
@@ -1959,12 +1878,21 @@ const app = {
         list.innerHTML = this._skelList(4);
 
         const dateStr = this._localDateStr(this.currentDate);
+        // v253: request-token — een traag antwoord van een VORIGE datum mag
+        // de nieuwere lijst niet overschrijven (snel wisselen tussen
+        // datumchips of samenloop met de 5-min-poll toonde anders de
+        // werkorders van de verkeerde dag onder de juiste header).
+        const reqToken = (this._planningReqToken = (this._planningReqToken || 0) + 1);
 
         try {
             const url = `api/planning.php?date=${dateStr}`;
             console.log('[QE] Fetching:', url);
             const res = await fetch(url);
             const text = await res.text();
+            if (reqToken !== this._planningReqToken) {
+                console.log('[QE] planning-antwoord voor verouderde request genegeerd (' + dateStr + ')');
+                return;
+            }
             console.log('[QE] Response:', res.status, text.substring(0, 300));
 
             let data;
@@ -1986,12 +1914,18 @@ const app = {
             document.getElementById('woCount').textContent = this.workorders.length;
 
             if (this.workorders.length === 0) {
-                const isToday = dateStr === this._localDateStr();
+                // v253: label klopt nu ook voor de 'vorige werkdag'-chip
+                // (zei altijd 'morgen' voor elke niet-vandaag datum).
+                const todayStr = this._localDateStr();
+                let dagLabel = 'deze dag';
+                if (dateStr === todayStr) dagLabel = 'vandaag';
+                else if (dateStr > todayStr) dagLabel = 'morgen';
+                else dagLabel = this.currentDate.toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'long' });
                 list.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-icon">${this.icon('clipboard', { size: 44, stroke: 1.6 })}</div>
                         <h3>Geen werkorders</h3>
-                        <p>Geen werkorders voor ${isToday ? 'vandaag' : 'morgen'}</p>
+                        <p>Geen werkorders voor ${this.escapeHtml(dagLabel)}</p>
                     </div>
                 `;
                 this.renderPendingPaymentsBanner();
@@ -2021,6 +1955,7 @@ const app = {
                 }
             });
         } catch (err) {
+            if (reqToken !== this._planningReqToken) return;  // v253: verouderde fout niet tonen
             console.error('Planning laden mislukt:', err);
             list.innerHTML = `
                 <div class="empty-state">
@@ -2173,7 +2108,7 @@ const app = {
                     </div>
                     <div style="display:flex;flex-direction:column;gap:6px;align-items:center;flex-shrink:0">
                         ${tel ? `<a href="tel:${this.escapeHtml(tel)}" class="wo-nav-btn" onclick="event.stopPropagation()" title="Bel klant" style="text-decoration:none">${this.icon('phone', { size: 17 })}</a>` : ''}
-                        ${address ? `<button class="wo-nav-btn" onclick="event.stopPropagation(); app.navigateToAddress('${this.escapeHtml(address).replace(/'/g, "\\'")}')" title="Navigeer">${this.icon('navigation', { size: 17 })}</button>` : ''}
+                        ${address ? `<button class="wo-nav-btn" onclick="event.stopPropagation(); app.navigateToAddress('${this._escapeJsArg(address)}')" title="Navigeer">${this.icon('navigation', { size: 17 })}</button>` : ''}
                     </div>
                 </div>
             </div>
@@ -2277,6 +2212,22 @@ const app = {
     },
 
     async openWorkorder(woId) {
+        // v251: loopt er nog een timer van een ANDERE werkbon, parkeer die
+        // dan. Voorheen tikte hij gewoon door op het gedeelde timer-paneel
+        // van de nieuwe werkbon en schreef de stop de uren naar de VERKEERDE
+        // bon. De state blijft in localStorage staan (met de oude woId), dus
+        // de timer loopt onzichtbaar door en verschijnt weer zodra je de
+        // oorspronkelijke werkbon opnieuw opent.
+        if (this.timer && this.timer.running && this.currentWO
+                && String(this.currentWO.id) !== String(woId)) {
+            try {
+                this._saveTimerState();   // state veiligstellen onder de OUDE woId
+                if (this.timer.interval) clearInterval(this.timer.interval);
+                this._resetTimerUI();
+                this.toast('Timer van de vorige werkbon loopt door — open die werkbon om te stoppen');
+            } catch (_) {}
+        }
+
         this.currentWO = this.workorders.find(w => String(w.id) === String(woId));
         if (!this.currentWO) return;
 
@@ -2850,37 +2801,66 @@ const app = {
         const from = String(fh).padStart(2,'0') + ':' + String(fm).padStart(2,'0');
         const to = String(th).padStart(2,'0') + ':' + String(tm).padStart(2,'0');
         const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
-        if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
-        const duration = Math.max(0, totalDuration - pauze);
+        if (totalDuration === 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+
+        // v251: blok over middernacht (bv. depannage 23:15→00:40) — de timer
+        // mag 24u lopen maar opslaan werd geweigerd, dus de echte tijden
+        // KONDEN niet ingevoerd worden. Robaws-time-entries kunnen niet over
+        // de dagrens; we splitsen in twee blokken (…→23:59 en 00:00→…),
+        // met de pauze op het eerste blok.
+        const blocks = [];
+        if (totalDuration < 0) {
+            const dur1 = (23 * 60 + 59) - (fh * 60 + fm);
+            const dur2 = th * 60 + tm;
+            if (dur1 + dur2 <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+            if (dur1 > 0) blocks.push({ startTime: from, endTime: '23:59', duration: Math.max(0, dur1 - pauze), pauze: pauze });
+            if (dur2 > 0) blocks.push({ startTime: '00:00', endTime: to, duration: dur2, pauze: 0 });
+        } else {
+            blocks.push({ startTime: from, endTime: to, duration: Math.max(0, totalDuration - pauze), pauze: pauze });
+        }
 
         // Werknemer ophalen (uit dropdown of ingelogde user)
         const empSelect = document.getElementById('tcEmployee');
         const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
         const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
 
-        // GPS check-out bij stop
-        this._getGpsLocation(loc => {
-            if (loc && this.currentWO) {
-                const lastHour = this.woData[this.currentWO.id].hours[this.woData[this.currentWO.id].hours.length - 1];
-                if (lastHour) lastHour.gpsEnd = loc;
-                this._saveWoData();
-            }
-        });
-
+        const pushed = [];
         if (this.currentWO) {
-            this.woData[this.currentWO.id].hours.push({
-                id: Date.now(), type, startTime: from, endTime: to,
-                duration, pauze,
-                employeeId, employeeName,
-                gpsStart: this.timer.gpsStart || null,
+            const baseId = Date.now();
+            blocks.forEach((b, i) => {
+                const entry = {
+                    id: baseId + i, type, startTime: b.startTime, endTime: b.endTime,
+                    duration: b.duration, pauze: b.pauze,
+                    employeeId, employeeName,
+                    gpsStart: (i === 0 && this.timer.gpsStart) || null,
+                };
+                this.woData[this.currentWO.id].hours.push(entry);
+                pushed.push(entry);
             });
             this.renderHoursList();
+            this._saveWoData();
         }
+
+        // v251: GPS-checkout aan het ZOJUIST toegevoegde blok hangen (closure)
+        // i.p.v. aan "het laatste blok van de dan geopende werkbon" — een
+        // trage GPS-fix (tot 10s) kon anders op een intussen geopende ANDERE
+        // werkbon of een nieuw blok landen.
+        if (pushed.length) {
+            const lastEntry = pushed[pushed.length - 1];
+            this._getGpsLocation(loc => {
+                if (loc) {
+                    lastEntry.gpsEnd = loc;
+                    this._saveWoData();
+                }
+            });
+        }
+
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
         const pauzeTxt = pauze > 0 ? ` (${pauze}min pauze)` : '';
-        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}`);
+        const splitTxt = blocks.length > 1 ? ' (gesplitst rond middernacht)' : '';
+        this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}${splitTxt}`);
     },
 
     _discardTimer() {
@@ -2904,6 +2884,18 @@ const app = {
     _saveTimerState() {
         // Niet opslaan als startTime ongeldig is
         if (this.timer.running && !this.timer.startTime) return;
+        // v251: een geparkeerde (lopende) timer van een ANDERE werkbon nooit
+        // overschrijven met onze eigen niet-lopende toestand — anders wist
+        // het openen van werkbon B de doorlopende timer van werkbon A.
+        if (!this.timer.running) {
+            try {
+                const st = JSON.parse(localStorage.getItem('qe_timer') || 'null');
+                if (st && st.running && st.woId
+                        && (!this.currentWO || String(st.woId) !== String(this.currentWO.id))) {
+                    return;
+                }
+            } catch (_) {}
+        }
         const state = {
             running: this.timer.running,
             type: this.timer.type,
@@ -3300,8 +3292,20 @@ const app = {
         const pauze = parseInt(document.getElementById('hourPauze')?.value || 0);
 
         const totalDuration = (th * 60 + tm) - (fh * 60 + fm);
-        if (totalDuration <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
-        const duration = Math.max(0, totalDuration - pauze); // Pauze aftrekken
+        if (totalDuration === 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+
+        // v251: zelfde middernacht-split als _saveTimerCorrection — een blok
+        // 23:15→00:40 was voorheen ook manueel niet in te voeren.
+        const blocks = [];
+        if (totalDuration < 0) {
+            const dur1 = (23 * 60 + 59) - (fh * 60 + fm);
+            const dur2 = th * 60 + tm;
+            if (dur1 + dur2 <= 0) { this.toast('Eindtijd moet na starttijd zijn'); return; }
+            if (dur1 > 0) blocks.push({ startTime: from, endTime: '23:59', duration: Math.max(0, dur1 - pauze), pauze: pauze });
+            if (dur2 > 0) blocks.push({ startTime: '00:00', endTime: to, duration: dur2, pauze: 0 });
+        } else {
+            blocks.push({ startTime: from, endTime: to, duration: Math.max(0, totalDuration - pauze), pauze: pauze });
+        }
 
         // Werknemer ophalen (als beschikbaar)
         const empSelect = document.getElementById('hourEmployee');
@@ -3309,15 +3313,20 @@ const app = {
         const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
 
         if (this.currentWO) {
-            this.woData[this.currentWO.id].hours.push({
-                id: Date.now(), type, startTime: from, endTime: to,
-                duration, pauze,
-                employeeId, employeeName,
+            const baseId = Date.now();
+            blocks.forEach((b, i) => {
+                this.woData[this.currentWO.id].hours.push({
+                    id: baseId + i, type, startTime: b.startTime, endTime: b.endTime,
+                    duration: b.duration, pauze: b.pauze,
+                    employeeId, employeeName,
+                });
             });
             this.renderHoursList();
+            this._saveWoData();
         }
         this.closeModal();
-        this.toast(`Uren opgeslagen voor ${employeeName}${pauze > 0 ? ` (${pauze} min pauze)` : ''}`);
+        const splitTxt = blocks.length > 1 ? ' — gesplitst rond middernacht' : '';
+        this.toast(`Uren opgeslagen voor ${employeeName}${pauze > 0 ? ` (${pauze} min pauze)` : ''}${splitTxt}`);
     },
 
     renderHoursList() {
@@ -3429,7 +3438,15 @@ const app = {
         clearTimeout(this.searchTimeout);
         const container = document.getElementById('materialSearchResults');
 
-        if (query.length < 2) { container.style.display = 'none'; return; }
+        if (query.length < 2) {
+            // v253: ook de nog lopende fetch afbreken en het query-id ophogen —
+            // anders klapte het (verouderde) resultaat van de vorige query
+            // alsnog open nadat het veld al leeggemaakt was.
+            if (this._searchAbort) { try { this._searchAbort.abort(); } catch (e) {} }
+            this._searchQueryId = (this._searchQueryId || 0) + 1;
+            container.style.display = 'none';
+            return;
+        }
 
         // BUG-fix: vroegere implementatie liet oudere fetches doorlopen,
         // waardoor out-of-order responses een nieuwer zoekresultaat
@@ -3549,7 +3566,11 @@ const app = {
         document.getElementById('caSubmit').addEventListener('click', () => {
             const desc = (descEl.value || '').trim();
             const price = parseFloat(priceEl.value) || 0;
-            const qty = parseFloat(qtyEl.value) || 1;
+            // v253: aantal expliciet valideren — '0' werd stil 1 en een
+            // negatief aantal (bv. -2) werd geaccepteerd en verlaagde het
+            // factuurtotaal. Leeg veld blijft default 1.
+            const qtyRaw = parseFloat(qtyEl.value);
+            const qty = isNaN(qtyRaw) ? 1 : qtyRaw;
             if (!desc) {
                 errEl.textContent = 'Omschrijving is verplicht';
                 errEl.style.display = 'block';
@@ -3557,6 +3578,11 @@ const app = {
             }
             if (price <= 0) {
                 errEl.textContent = 'Verkoopprijs moet groter dan 0 zijn';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (!(qty > 0)) {
+                errEl.textContent = 'Aantal moet groter dan 0 zijn';
                 errEl.style.display = 'block';
                 return;
             }
@@ -4391,7 +4417,7 @@ const app = {
             html += `<div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;margin-bottom:12px">`;
             groups.forEach(g => {
                 const hasChildren = g.children && g.children.length > 0;
-                const escapedName = this.escapeHtml(g.name).replace(/'/g, "\\'");
+                const escapedName = this._escapeJsArg(g.name);  // v253: quote-veilig in onclick
                 const { icon, bg } = this.getGroupIcon(g.name);
                 html += `<div onclick="app.openGroup('${g.id}', '${escapedName}')" style="
                     cursor:pointer;background:#fff;border-radius:12px;overflow:hidden;
@@ -4739,7 +4765,7 @@ const app = {
             const sizeStr = doc.size > 0 ? this._formatFileSize(doc.size) : '';
             return `
                 <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:8px;cursor:pointer"
-                     onclick="app.downloadPlanDocument('${doc.id}', '${this.escapeHtml(doc.name).replace(/'/g, "\\'")}')">
+                     onclick="app.downloadPlanDocument('${doc.id}', '${this._escapeJsArg(doc.name)}')">
                     <span style="font-size:24px">${icon}</span>
                     <div style="flex:1;min-width:0">
                         <div style="font-size:14px;font-weight:500;color:var(--qe-darkblue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(doc.name)}</div>
@@ -4778,7 +4804,7 @@ const app = {
                         <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
                         <img src="${blobUrl}" style="max-width:100%;max-height:70vh;border-radius:8px" />
                         <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
+                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this._escapeJsArg(fileName)}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
                     </div>
                 `);
             } else if (contentType.includes('pdf')) {
@@ -4787,7 +4813,7 @@ const app = {
                         <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
                         <iframe src="${blobUrl}" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>
                         <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this.escapeHtml(fileName).replace(/'/g, "\\'")}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
+                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this._escapeJsArg(fileName)}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
                     </div>
                 `);
             } else {
@@ -5057,7 +5083,11 @@ const app = {
                 // Afronden: wachturen per heel uur, overige per half uur
                 const roundedMinutes = this.roundHoursForInvoice(totals.klant, this.selectedUurcode);
                 const urenDecimal = Math.round(roundedMinutes / 60 * 100) / 100;
-                const uurPrijsReal = this.selectedUurcode.salePrice || this.selectedUurcode.unitPrice || 0;
+                // v252: zelfde prijsbron als de factuur-payload (?? i.p.v. ||).
+                // unitPrice is de KOSTprijs — die hoort nooit in de preview:
+                // bij salePrice €0 toonde de preview de kostprijs terwijl de
+                // factuur €0 boekte → klant tekende voor het verkeerde bedrag.
+                const uurPrijsReal = this.selectedUurcode.salePrice ?? 0;
                 const uurPrijs = data.onderhoud ? 0 : uurPrijsReal;
                 const urenTotal = uurPrijs * urenDecimal;
                 subtotal += urenTotal;
@@ -5070,7 +5100,7 @@ const app = {
         // Materialen
         if (data.materials.length > 0) {
             data.materials.forEach(mat => {
-                const price = mat.salePrice || mat.unitPrice || 0;
+                const price = mat.salePrice ?? mat.unitPrice ?? 0;  // v252: ?? zoals de payloads (salePrice 0 = bewust gratis)
                 const total = price * mat.quantity;
                 subtotal += total;
                 rows += `<tr><td>${this.escapeHtml(mat.name)}</td><td class="text-right">${mat.quantity}</td><td class="text-right">${this.formatPrice(price)}</td><td class="text-right" style="font-weight:500">${this.formatPrice(total)}</td></tr>`;
@@ -5146,6 +5176,12 @@ const app = {
 
         // Reset betaalmethode
         this._selectedPaymentMethod = null;
+        // v252: "Geen factuur maken" mee resetten — de checkbox is een
+        // statisch element en bleef na een garantie-werkbon aangevinkt voor
+        // ALLE volgende werkbonnen: de technieker koos een betaalmethode maar
+        // de flow stopte stil zonder factuur en zonder betaalscherm.
+        const noInvEl = document.getElementById('wbNoInvoice');
+        if (noInvEl) noInvEl.checked = false;
         const pmSection = document.getElementById('wbPaymentMethodSection');
         const pmEmailSection = document.getElementById('wbOverschrijvingEmail');
         const btn = document.getElementById('btnSubmitWerkbon');
@@ -5434,17 +5470,23 @@ const app = {
             // Cascade: zoek dedicated billing-email eerst, dan algemene email.
             // Robaws kan billing-email in verschillende velden zetten — we
             // proberen alle bekende paden.
+            // v252: extraFields-waarden kunnen in stringValue ÓF value zitten
+            // (gedocumenteerde valkuil) — met alleen .stringValue werd een
+            // dedicated facturatie-adres gemist en ging de PDF naar c.email.
+            const efVal = (key) => {
+                const f = c.extraFields && c.extraFields[key];
+                if (!f || typeof f !== 'object') return null;
+                return (f.stringValue != null) ? f.stringValue
+                     : (f.value != null) ? f.value : null;
+            };
             const candidates = [
                 c.invoiceEmail,
                 c.billingEmail,
                 c.billing && c.billing.email,
                 c.invoiceContact && c.invoiceContact.email,
-                c.extraFields && c.extraFields['Facturatie email']
-                    && c.extraFields['Facturatie email'].stringValue,
-                c.extraFields && c.extraFields['facturatieEmail']
-                    && c.extraFields['facturatieEmail'].stringValue,
-                c.extraFields && c.extraFields['Facturatie e-mail']
-                    && c.extraFields['Facturatie e-mail'].stringValue,
+                efVal('Facturatie email'),
+                efVal('facturatieEmail'),
+                efVal('Facturatie e-mail'),
                 c.email,                          // fallback laatste optie
             ];
 
@@ -5553,19 +5595,23 @@ const app = {
         }
     },
 
-    _buildWerkbonPayload(data) {
+    _buildWerkbonPayload(data, woOverride) {
+        // v252: optionele expliciete werkbon — de submit-flows geven hun
+        // snapshot mee zodat een tussentijdse navigatie (this.currentWO
+        // gewijzigd) nooit de verkeerde klant/order in de payload zet.
+        const wo = woOverride || this.currentWO;
         return {
-            salesOrderId: this.currentWO.salesOrderId || null,
-            planningItemId: this.currentWO.id,
-            clientId: this.currentWO.clientId,
-            installationIds: this.currentWO.installationIds || [],
+            salesOrderId: wo.salesOrderId || null,
+            planningItemId: wo.id,
+            clientId: wo.clientId,
+            installationIds: wo.installationIds || [],
             employeeId: this.currentUser.robawsEmployeeId,
             userId: this.currentUser.robawsUserId,
-            clientName: (this.currentWO.client && this.currentWO.client.name) || '',
-            summary: this.currentWO.summary || 'Werkbon via QE App',
+            clientName: (wo.client && wo.client.name) || '',
+            summary: wo.summary || 'Werkbon via QE App',
             date: this._localDateStr(this.currentDate),
             // Regie-vinkje overnemen van de sales order (niet hardcoded true)
-            timeAndMaterial: this.currentWO.timeAndMaterial ?? false,
+            timeAndMaterial: wo.timeAndMaterial ?? false,
             // v93: filter eenmalige artikels uit — die hebben geen Robaws articleId.
             // Felicity krijgt taakje om die zelf toe te voegen.
             materials: data.materials.filter(m => !m.isCustom).map(m => ({
@@ -5658,8 +5704,11 @@ const app = {
         }
     },
 
-    _markWOSubmitted(data) {
-        const woId = this.currentWO.id;
+    _markWOSubmitted(data, woIdOverride) {
+        // v252: expliciete woId vanuit de submit-flows — this.currentWO kan
+        // tijdens de async keten al naar een ANDERE werkbon wijzen; dan werd
+        // die bon gemarkeerd als verstuurd en zijn ingevoerde data gewist.
+        const woId = (woIdOverride != null) ? woIdOverride : this.currentWO.id;
         if (!this.submittedHours[woId]) this.submittedHours[woId] = [];
         this.submittedHours[woId].push(...data.hours);
         this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
@@ -5670,8 +5719,15 @@ const app = {
     async executeSubmitFlow() {
         if (!this.currentWO) return;
 
+        // v252: SNAPSHOT van de werkbon — deze flow bevat vele awaits en
+        // navigatie is niet geblokkeerd. this.currentWO kon intussen naar een
+        // ANDERE werkbon wijzen: factuur met klant/BTW/order van de verkeerde
+        // bon + _markWOSubmitted dat de verkeerde bon markeerde en zijn
+        // ingevoerde data wiste. Alle stappen gebruiken vanaf nu 'wo'.
+        const wo = this.currentWO;
+
         // === GUARD: voorkom dubbele factuur/werkbon ===
-        const woId = String(this.currentWO.id);
+        const woId = String(wo.id);
         if (this.submittedWOs.includes(woId)) {
             this.toast('Deze werkbon is al verstuurd');
             return;
@@ -5685,7 +5741,7 @@ const app = {
         // Voorheen stond de vlag al op true bij onderstaande early-returns
         // (buiten try/finally) → vlag bleef op true hangen en élke volgende
         // poging gaf "Bezig met versturen..." tot een app-herstart.
-        const data = this.woData[this.currentWO.id];
+        const data = this.woData[wo.id];
         const hasWorkHours = data.hours.some(h => h.type === 'klant');
         if (hasWorkHours && !this.selectedUurcode) {
             this.toast('Kies eerst een uurcode in het Uren tabblad', true);
@@ -5709,8 +5765,8 @@ const app = {
         // dus geen tarief nodig).
         const _noInvoiceChecked = !!(document.getElementById('wbNoInvoice') &&
                                      document.getElementById('wbNoInvoice').checked);
-        const _vatIdKnown = this.currentWO.vatTariffId != null &&
-                            String(this.currentWO.vatTariffId) !== '';
+        const _vatIdKnown = wo.vatTariffId != null &&
+                            String(wo.vatTariffId) !== '';
         if (!_noInvoiceChecked && !_vatIdKnown) {
             this.toast('Geen BTW-tarief gekend voor deze klant — stel het in via "BTW wijzigen" op de info-tab', true);
             return;
@@ -5742,7 +5798,7 @@ const app = {
 
             // === STAP 1: Werkbon versturen (met betaalmethode) ===
             this.toast('Werkbon versturen...');
-            const payload = this._buildWerkbonPayload(data);
+            const payload = this._buildWerkbonPayload(data, wo);  // v252: snapshot
             const werkbonRes = await fetch('api/werkbon.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -5828,7 +5884,7 @@ const app = {
             // v197: "Geen factuur maken" → werkbon is verstuurd, factuur-stap overslaan
             // (garantie / terugkomwerk door gebreken).
             if (document.getElementById('wbNoInvoice') && document.getElementById('wbNoInvoice').checked) {
-                this._markWOSubmitted(data);
+                this._markWOSubmitted(data, wo.id);
                 this._submitInProgress = false;
                 this.toast('Werkbon verstuurd — geen factuur aangemaakt');
                 this.navigate('screenPlanning', false);
@@ -5841,15 +5897,15 @@ const app = {
             this.toast('Factuur aanmaken...');
             const invoicePayload = {
                 workOrderId,
-                vatTariffId: String(this.currentWO.vatTariffId),  // v210: gegarandeerd door pre-submit-guard; default '4' weg
-                clientId: this.currentWO.clientId || this.currentWO.endClientId,
-                companyId: this.currentWO.companyId,
-                salesOrderId: this.currentWO.salesOrderId || null,
+                vatTariffId: String(wo.vatTariffId),  // v210: gegarandeerd door pre-submit-guard; default '4' weg — v252: snapshot
+                clientId: wo.clientId || wo.endClientId,
+                companyId: wo.companyId,
+                salesOrderId: wo.salesOrderId || null,
                 paymentMethod: paymentMethod,
                 notes: data.notes || '',
                 // Verantwoordelijke + installatie-adres voor factuur
                 userId: this.currentUser.robawsUserId,
-                installationIds: this.currentWO.installationIds || [],
+                installationIds: wo.installationIds || [],
                 // Materialen direct meesturen (WO material-entries ≠ line-items in Robaws)
                 // v93: filter custom-artikels uit — Felicity-taak handelt die af.
                 materials: data.materials.filter(m => !m.isCustom).map(m => ({
@@ -5870,7 +5926,7 @@ const app = {
                     type: 'klant',
                     duration: h.duration,
                     articleId: h.articleId || (this.selectedUurcode ? this.selectedUurcode.id : null),
-                    salePrice: h.salePrice || (this.selectedUurcode ? this.selectedUurcode.salePrice : 0),
+                    salePrice: h.salePrice ?? (this.selectedUurcode ? (this.selectedUurcode.salePrice ?? 0) : 0),  // v252: ?? — salePrice 0 blijft 0 (zoals preview)
                 })),
                 hoursPrerounded: true,  // v212: createInvoice rondt niet dubbel
                 onderhoud: data.onderhoud || false,
@@ -5899,7 +5955,7 @@ const app = {
                         assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
-                this._markWOSubmitted(data);
+                this._markWOSubmitted(data, wo.id);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
@@ -5924,7 +5980,7 @@ const app = {
                         assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
-                this._markWOSubmitted(data);
+                this._markWOSubmitted(data, wo.id);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
@@ -5949,21 +6005,62 @@ const app = {
                                          'totalCost', 'totalPrice', 'lineItems']) {
                             if (fresh[k] !== undefined) merged[k] = fresh[k];
                         }
+                        // v252: Robaws geeft voor een DRAFT soms geen totalen
+                        // terug (gedocumenteerd in createInvoice). Voorheen
+                        // bleef dan stil het OUDE totaal staan — zonder de net
+                        // toegevoegde eenmalige artikels — en betaalde de
+                        // klant te weinig. Nu: zelf herberekenen uit de
+                        // factuurlijnen; lukt ook dat niet → eerlijk waarschuwen.
+                        let gotTotal = (fresh.totalInclVat != null);
+                        if (!gotTotal) {
+                            try {
+                                const liRes = await RobawsAPI.get(`sales-invoices/${invoiceId}/line-items?limit=100`, { bypassCache: true });
+                                const liItems = (liRes.data && (liRes.data.items || liRes.data)) || [];
+                                let pct = null;
+                                try {
+                                    const vmap = await RobawsAPI.getVatTariffMap();
+                                    const vt = vmap[String(wo.vatTariffId)];
+                                    if (vt && vt.percentage != null) pct = parseFloat(vt.percentage);
+                                } catch (_) {}
+                                if (Array.isArray(liItems) && liItems.length && pct != null && !isNaN(pct)) {
+                                    let excl = 0;
+                                    for (const li of liItems) {
+                                        if (String(li.type || 'LINE') !== 'LINE') continue;
+                                        excl += (parseFloat(li.quantity) || 0) * (parseFloat(li.price) || 0);
+                                    }
+                                    merged.totalExclVat = Math.round(excl * 100) / 100;
+                                    merged.totalInclVat = Math.round(excl * (1 + pct / 100) * 100) / 100;
+                                    gotTotal = true;
+                                    console.log('[App] totaal herberekend uit factuurlijnen:', merged.totalInclVat, '(' + pct + '% BTW)');
+                                }
+                            } catch (e) {
+                                console.warn('[App] herberekening uit factuurlijnen faalde:', e && e.message);
+                            }
+                        }
                         invoiceResult.invoice = merged;
+                        if (!gotTotal) {
+                            this.toast('Let op: factuurtotaal kon niet ververst worden na ' + reason +
+                                ' — controleer het bedrag in Robaws vóór je afrekent', true);
+                            return false;
+                        }
                         console.log(`[App] Factuur ververst na ${reason} — nieuw totaal:`, merged.totalInclVat);
                         return true;
                     }
                     console.warn('[App] Refetch factuur gaf code', refreshed.code);
+                    this.toast('Let op: factuurtotaal kon niet ververst worden na ' + reason +
+                        ' — controleer het bedrag in Robaws vóór je afrekent', true);
                     return false;
                 } catch (e) {
                     console.warn('[App] Refetch factuur faalde:', e && e.message);
+                    this.toast('Let op: factuurtotaal kon niet ververst worden na ' + reason +
+                        ' — controleer het bedrag in Robaws vóór je afrekent', true);
                     return false;
                 }
             };
 
             // Eenmalige artikels toevoegen aan de factuur (op het verse totaal).
             if (customArticlesForInvoice.length > 0 && invoiceId) {
-                const vatTariffId = String(this.currentWO.vatTariffId);  // v210: default '4' weg
+                const vatTariffId = String(wo.vatTariffId);  // v210: default '4' weg — v252: snapshot
                 const customLineErrors = [];
                 for (const m of customArticlesForInvoice) {
                     try {
@@ -5974,7 +6071,7 @@ const app = {
                             price: parseFloat(m.salePrice || m.unitPrice || 0),
                             vatTariffId: String(vatTariffId),
                         };
-                        if (this.currentWO.salesOrderId) li.orderId = String(this.currentWO.salesOrderId);
+                        if (wo.salesOrderId) li.orderId = String(wo.salesOrderId);
                         const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
                         if (r.code !== 200 && r.code !== 201) {
                             customLineErrors.push(m.name || 'eenmalig artikel');
@@ -6001,7 +6098,7 @@ const app = {
                             assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                         });
                     } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
-                    this._markWOSubmitted(data);
+                    this._markWOSubmitted(data, wo.id);
                     this.navigate('screenPlanning', false);
                     this.screenHistory = [];
                     this.loadPlanning();
@@ -6045,7 +6142,7 @@ const app = {
                 } catch (e) { console.warn('[App] status-taak mislukt:', e && e.message); }
             }
 
-            this._markWOSubmitted(data);
+            this._markWOSubmitted(data, wo.id);
 
             // v169: Werkbon PDF mailen naar klant indien email-veld ingevuld
             // bij de handtekening. Fire-and-forget — blokkeert de betaalflow niet.
@@ -6070,7 +6167,7 @@ const app = {
             try {
                 const ctx = {
                     workOrderId: workOrderId,
-                    salesOrderId: this.currentWO.salesOrderId || null,
+                    salesOrderId: wo.salesOrderId || null,
                     invoiceId: (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.id) || null,
                     invoiceLogicId: (invoiceResult && invoiceResult.invoice && invoiceResult.invoice.logicId) || null,
                     paymentMethod: paymentMethod,
@@ -6162,8 +6259,12 @@ const app = {
     async executeMonteurSubmitFlow() {
         if (!this.currentWO) return;
 
+        // v252: zelfde werkbon-snapshot als executeSubmitFlow — woId werd
+        // hier pas ná de awaits gelezen.
+        const wo = this.currentWO;
+
         // === GUARD: voorkom dubbele werkbon ===
-        const woId = String(this.currentWO.id);
+        const woId = String(wo.id);
         if (this.submittedWOs.includes(woId)) {
             this.toast('Deze werkbon is al verstuurd');
             return;
@@ -6175,7 +6276,7 @@ const app = {
 
         // v205: validatie VÓÓR het zetten van de vlag (zelfde leak-fix als
         // executeSubmitFlow — vlag bleef hangen bij deze early-return).
-        const data = this.woData[this.currentWO.id];
+        const data = this.woData[wo.id];
         const hasWorkHours = data.hours.some(h => h.type === 'klant');
         if (hasWorkHours && !this.selectedUurcode) {
             this.toast('Kies eerst een uurcode in het Uren tabblad', true);
@@ -6206,16 +6307,16 @@ const app = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    salesOrderId: this.currentWO.salesOrderId || null,
-                    planningItemId: this.currentWO.id,
-                    clientId: this.currentWO.clientId,
-                    installationIds: this.currentWO.installationIds || [],
+                    salesOrderId: wo.salesOrderId || null,          // v252: snapshot
+                    planningItemId: wo.id,
+                    clientId: wo.clientId,
+                    installationIds: wo.installationIds || [],
                     employeeId: this.currentUser.robawsEmployeeId,
                     userId: this.currentUser.robawsUserId,
-                    clientName: (this.currentWO.client && this.currentWO.client.name) || '',
-                    summary: this.currentWO.summary || 'Werkbon via QE App',
+                    clientName: (wo.client && wo.client.name) || '',
+                    summary: wo.summary || 'Werkbon via QE App',
                     date: this._localDateStr(this.currentDate),
-                    timeAndMaterial: this.currentWO.timeAndMaterial ?? false,
+                    timeAndMaterial: wo.timeAndMaterial ?? false,
                     materials: data.materials.map(m => ({
                         articleId: m.id,
                         name: m.name,
@@ -6254,13 +6355,11 @@ const app = {
 
             this.toast('Werkbon verstuurd');
 
-            // Data resetten en terug naar planning
-            const woId = this.currentWO.id;
-            if (!this.submittedHours[woId]) this.submittedHours[woId] = [];
-            this.submittedHours[woId].push(...data.hours);
-            this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
-            if (!this.submittedWOs.includes(String(woId))) this.submittedWOs.push(String(woId));
-            this._saveSubmittedWOs();
+            // Data resetten en terug naar planning — v252: op de SNAPSHOT-id
+            // (this.currentWO kon intussen een andere werkbon zijn; dan werd
+            // die gemarkeerd en zijn data gewist terwijl deze bon opnieuw
+            // verstuurd kon worden).
+            this._markWOSubmitted(data, wo.id);
 
             this.navigate('screenPlanning', false);
             this.screenHistory = [];
@@ -6824,7 +6923,12 @@ const app = {
                 '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
                 '<div style="font-size:18px;color:#1A237E;font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
                 '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
-                mkBtnHtml('Mollie Tap',    this.icon('card', { size: 20 }), 'Bancontact / kaart (Mollie Tap)') +
+                // v252: Mollie Tap alleen tonen waar hij actief is — dit scherm
+                // omzeilde de release-vergrendeling (_applyCardPaymentMode) en
+                // kon in de release-APK alsnog een Tap-betaling starten.
+                (this._mollieActive()
+                    ? mkBtnHtml('Mollie Tap', this.icon('card', { size: 20 }), 'Bancontact / kaart (Mollie Tap)')
+                    : '') +
                 mkBtnHtml('QR code',       this.icon('card', { size: 20 }), 'QR code (scan & betaal)') +
                 mkBtnHtml('Viva wallet',   this.icon('card', { size: 20 }), 'Viva Wallet (legacy)') +
                 mkBtnHtml('Cash',          this.icon('cash', { size: 20 }), 'Cash') +
@@ -6853,6 +6957,12 @@ const app = {
      *    werk localStorage context bij, en open eventueel het nieuwe betaalscherm.
      */
     async changeLastPaymentMethod(newMethod) {
+        // v252: beleidsgate — 'Release-app: Mollie Tap vergrendeld'. Ook als
+        // de knop tóch aangeroepen wordt (oude HTML/console) blokkeren we hier.
+        if (newMethod === 'Mollie Tap' && !this._mollieActive()) {
+            this.toast('Mollie Tap is niet beschikbaar in deze app-versie', true);
+            return;
+        }
         const statusEl = document.getElementById('changePmStatus');
         let ctx;
         try {
@@ -7452,8 +7562,11 @@ const app = {
             };
 
             list.innerHTML = attendance.map(a => {
-                this._attendance[a.email] = a;
+                // v251: opslaan onder de GESANITIZEDE sleutel — de knoppen
+                // geven safeEmail door, dus een adres met bv. '+' werd anders
+                // nooit teruggevonden en de knop deed stil niets.
                 const safeEmail = String(a.email).replace(/[^\w@.-]/g, '');
+                this._attendance[safeEmail] = a;
                 let statusHtml = '', btnHtml = '';
                 const isAbsent = a.tijd && Array.isArray(RobawsAPI.ABSENCE_TIJD) &&
                                  RobawsAPI.ABSENCE_TIJD.includes(a.tijd);
@@ -8005,6 +8118,7 @@ const app = {
 
             if (success) {
                 const pp = this._pendingPayment || {};
+                this._pendingPayment = null;  // v252: verbruikt — nooit hergebruiken voor een andere factuur
                 // Factuur uit openstaande lijst halen
                 if (pp.invoiceId) this._removePendingPayment(pp.invoiceId);
                 // Markeer factuur als betaald in Robaws
@@ -8030,6 +8144,13 @@ const app = {
 
     /** Start de Mollie Tap-to-Pay flow: bouw payload + launch via Java bridge. */
     async payWithMollieTap(invoiceResult) {
+        // v252: beleidsgate — 'Release-app: Mollie Tap vergrendeld'. Laatste
+        // verdedigingslinie voor alle aanroepende paden.
+        if (!this._mollieActive()) {
+            this.toast('Mollie Tap is niet beschikbaar in deze app-versie', true);
+            this.showPaymentScreen(invoiceResult);
+            return;
+        }
         if (typeof MollieAPI === 'undefined') {
             this.toast('Mollie module niet geladen');
             this.showPaymentScreen(invoiceResult);
@@ -8219,9 +8340,10 @@ const app = {
             || (() => { try { return JSON.parse(localStorage.getItem('qe_mollie_pending') || 'null'); } catch(_) { return null; } })()
             || {};
         try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
-        if (this._removePendingPayment && ctx.invoiceId) {
-            this._removePendingPayment(ctx.invoiceId);
-        }
+        // v252: de factuur werd hier ONVOORWAARDELIJK uit de openstaande-
+        // betalingen-banner gehaald — óók bij failed/canceled, terwijl de
+        // fout-kaart zegt 'je kan opnieuw proberen vanuit Uitgevoerd'. De
+        // verwijdering gebeurt nu pas in de paid-tak hieronder.
 
         const status   = result && result.status;
         const paymentId = result && result.paymentId;
@@ -8231,6 +8353,11 @@ const app = {
         // ── 1. SUCCES (status = paid) ──────────────────────────────────
         if (status === 'paid') {
             console.log('[Mollie] PAID:', paymentId, 'signature valid:', sigOk);
+
+            // v252: pas bij écht betaald uit de openstaande-lijst halen
+            if (this._removePendingPayment && ctx.invoiceId) {
+                this._removePendingPayment(ctx.invoiceId);
+            }
 
             // Signature warning maar niet blokkerend — Mollie Tap heeft 'paid' al
             // gerapporteerd, en de gebruiker ziet ook zelf de success-melding in de
@@ -8524,9 +8651,8 @@ const app = {
         this._mollieHandled = true;
         if (typeof this.hideScanLoading === 'function') this.hideScanLoading();
         try { localStorage.removeItem('qe_mollie_pending'); } catch(_) {}
-        if (this._removePendingPayment && this._mollieContext && this._mollieContext.invoiceId) {
-            this._removePendingPayment(this._mollieContext.invoiceId);
-        }
+        // v252: er is NIET betaald — de factuur blijft dus gewoon in de
+        // openstaande-betalingen-banner staan (werd hier voorheen gewist).
         this.showPaymentFailed(
             'Geen antwoord van Mollie Tap. Controleer in Mollie dashboard of de betaling toch is doorgekomen.'
         );
@@ -8615,6 +8741,20 @@ const app = {
      *  Wordt aangeroepen bij app-start + online-event + na elke succesvolle login. */
     async processMollieRetryQueue() {
         if (!navigator.onLine) return;
+        // v252: concurrency-guard — init + 'online'-event konden overlappen:
+        // beide runs passeerden de saldo-precheck vóór de ander boekte →
+        // dezelfde betaling 2× in Robaws, en de traagste overschreef de
+        // queue met zijn verouderde remaining-lijst.
+        if (this._mollieRetryBusy) return;
+        this._mollieRetryBusy = true;
+        try {
+            await this._processMollieRetryQueueInner();
+        } finally {
+            this._mollieRetryBusy = false;
+        }
+    },
+
+    async _processMollieRetryQueueInner() {
         let list;
         try {
             const raw = localStorage.getItem(this._MOLLIE_RETRY_KEY);
@@ -8893,9 +9033,21 @@ const app = {
         };
         document.getElementById('paymentRetryBtn').onclick = () => {
             closeWithAnim(() => {
+                // v252: _pendingPayment kan van een ANDERE factuur zijn — hij
+                // wordt alleen door de Viva-flow gezet en werd nooit gewist,
+                // en dit scherm wordt óók door de Mollie-flows getoond. De
+                // terminal opende dan met bedrag/OGM van een vorige klant.
+                // Alleen direct retryen als hij bij de LAATSTE betaling hoort;
+                // anders veilig via het betaalmethode-scherm (juiste context).
                 const pp = this._pendingPayment;
-                if (pp && pp.invoiceId) {
+                let ctxInvoiceId = null;
+                try {
+                    ctxInvoiceId = (JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}').invoiceId) || null;
+                } catch (_) {}
+                if (pp && pp.invoiceId && ctxInvoiceId && String(pp.invoiceId) === String(ctxInvoiceId)) {
                     this.startTerminalPayment(pp.invoiceId, pp.amount, pp.ogm, pp.invoiceLogicId);
+                } else {
+                    this.openChangePaymentMethodModal();
                 }
             });
         };
@@ -10316,7 +10468,12 @@ const app = {
         // currentWO in een fake state. Nu gebruiken we een explicit
         // safety-timeout én een max van 60 seconden polling.
         const fakeWoId = '__correctie__';
-        if (!this.woData[fakeWoId]) this.woData[fakeWoId] = { hours: [], materials: [], photos: [], notes: '' };
+        // v253: fake-WO ALTIJD leeg starten. Hij bleef voorheen staan (en
+        // werd zelfs gepersisteerd): koos je later nogmaals hetzelfde artikel,
+        // dan dedupliceerde addMaterial op id (quantity++ zonder array-groei),
+        // zag de poll niets en verdween het materiaal stil uit de correctie —
+        // terwijl de toast wél 'toegevoegd' meldde.
+        this.woData[fakeWoId] = { hours: [], materials: [], photos: [], notes: '' };
         this._origCurrentWO = this.currentWO;
         this.currentWO = { id: fakeWoId };
         this._showMaterialSearchModal();
@@ -11042,6 +11199,12 @@ const app = {
             if (directWTEl) directWTEl.addEventListener('change', recalcKm);
 
             const submit = async () => {
+                // v251: re-entry-guard — btn.disabled blokkeerde alleen kliks,
+                // maar Enter op het km-veld riep submit() rechtstreeks aan;
+                // twee keer Enter op traag 4G gaf dubbele commute-entries
+                // (dubbele km-vergoeding).
+                if (this._kmSubmitBusy) return;
+                this._kmSubmitBusy = true;
                 const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
                 const terug = Math.max(0, Math.round(parseFloat(terugEl.value) || 0));
                 const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
@@ -11095,7 +11258,8 @@ const app = {
                     // is, en alle 3 in één PUT (anders 3 round-trips).
                     if (fiets || directThuisWerf || directWerfThuis) {
                         try {
-                            const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`);
+                            // v251: vers GET vóór full-replace-PUT (valkuil)
+                            const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`, { bypassCache: true });
                             if (woFull.code === 200 && woFull.data) {
                                 woFull.data.extraFields = woFull.data.extraFields || {};
                                 if (fiets) {
@@ -11146,6 +11310,8 @@ const app = {
                     errEl.style.display = 'block';
                     btn.disabled = false;
                     btn.textContent = 'Opslaan';
+                } finally {
+                    this._kmSubmitBusy = false;  // v251
                 }
             };
             btn.addEventListener('click', submit);
@@ -11749,9 +11915,25 @@ const app = {
     },
     escapeHtml(str) {
         if (!str) return '';
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
+        // v253: ook aanhalingstekens escapen — deze helper wordt overal in
+        // double-quoted HTML-attributen geïnterpoleerd; een " in bv. een
+        // artikelgroep ('Fittingen 1/2"') of documentnaam kapte het attribuut
+        // af en brak de knop. (div.textContent→innerHTML escapete alleen &<>.)
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    },
+
+    /** v253: veilige interpolatie van een waarde als '...'-JS-string BINNEN
+     *  een double-quoted onclick-attribuut: eerst JS-escapen (backslash +
+     *  enkele quote), dan HTML-escapen voor het attribuut. */
+    _escapeJsArg(str) {
+        return this.escapeHtml(String(str == null ? '' : str)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'"));
     },
 
     // ========================================

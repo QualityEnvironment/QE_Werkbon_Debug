@@ -10,9 +10,11 @@
  *   1x  RobawsAPI.getActiveEmployees()   (5-min cache, meestal 0 calls)
  *   1x  /mobility-types                  (module-cache, 1 call ooit)
  *   Kx  /work-orders?...&include=timeEntries,commuteEntries&sort=date:desc
- *       -> vroegtijdig stoppen zodra een pagina volledig vóór de maand valt
- *   Uursoorten worden NIET opgehaald: id 2 = overuren, rest = werkuren
- *   (bevestigd WO 1343), zoals de PHP-fallback.
+ *       -> stoppen met een veiligheidsmarge van 31 dagen vóór de maand
+ *       (v251 — date:desc is niet strikt, zie ROBAWS_API_HANDLEIDING §2.17)
+ *   1x  RobawsAPI.getHourTypeNameMap()   (v251 — weekend-overuren-varianten
+ *       'Overuren zaterdag/zondag' correct als overuren classificeren;
+ *       fallback zonder map blijft: id 2 = overuren, rest = werkuren)
  * ===================================================================== */
 (function () {
   'use strict';
@@ -20,6 +22,16 @@
   // ---- config (spiegelt de .env defaults van de PHP-tool) ----
   var ABSENCE_CLASSES = ['sick', 'feestdag', 'rustdag', 'verlof', 'sociaalverlof'];
   var OVERTIME_HOURTYPE_IDS = { 2: true }; // 1 = werkuren, 2 = overuren
+
+  /** v251: overuren-classificatie met de uursoort-namenmap. clock.js boekt
+   *  weekenduren via de varianten 'Overuren zaterdag/zondag' (dynamische ids
+   *  ≠ 2) — zonder deze check vielen die in de werkuren-bak (zelfde bug als
+   *  v180 in het dagoverzicht). */
+  function isOvertimeHourType(htId, htNames) {
+    if (OVERTIME_HOURTYPE_IDS[htId]) return true;
+    var nm = (htNames && htNames[String(htId)]) || '';
+    return /overuren/i.test(nm);
+  }
 
   var MONTHS_NL = ['januari', 'februari', 'maart', 'april', 'mei', 'juni',
     'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
@@ -178,6 +190,13 @@
   async function fetchMonthWorkOrders(ym, meta) {
     var emStart = ym + '-01';
     var emEnd = ym + '-' + pad2(daysInMonth(ym));
+    // v251: date:desc is per ROBAWS_API_HANDLEIDING §2.17 NIET strikt (items
+    // van dezelfde datum kunnen over pagina's verspreid zitten). Een harde
+    // break zodra de pagina vóór de maand valt kan dus registraties missen.
+    // Daarom: pas stoppen wanneer de nieuwste datum op de pagina meer dan
+    // 31 dagen vóór de maandstart ligt — ruim buiten de geobserveerde scatter.
+    var bufDate = new Date(dateOf(ym, 1).getTime() - 31 * 86400000);
+    var bufStart = bufDate.getFullYear() + '-' + pad2(bufDate.getMonth() + 1) + '-' + pad2(bufDate.getDate());
     var regs = [];
     var seen = {};
     var offset = 0, limit = 100, iter = 0, maxIter = 250;
@@ -204,9 +223,9 @@
         if (st.indexOf('tijdsregistratie') === -1) continue;
         regs.push(wo);
       }
-      // desc-sortering: zodra de nieuwste datop op de pagina vóór de maand valt,
-      // is al de rest ouder -> stoppen.
-      if (pageMax && pageMax < emStart) break;
+      // desc-sortering met veiligheidsmarge (v251): pas stoppen als de
+      // nieuwste datum op de pagina >31 dagen vóór de maandstart ligt.
+      if (pageMax && pageMax < bufStart) break;
       if (items.length < limit) break;
       offset += limit;
     }
@@ -217,7 +236,7 @@
   // ---------------------------------------------------------------
   // 4. werkbon -> registratie-record (spiegelt PHP "PROCESS")
   // ---------------------------------------------------------------
-  function toRegistration(wo, empById, mobById) {
+  function toRegistration(wo, empById, mobById, htNames) {
     var extra = (wo.extraFields && typeof wo.extraFields === 'object') ? wo.extraFields : {};
     var tijd = efValue(extra, 'Tijd');
     var ingeklokt = efValue(extra, 'Ingeklokt');
@@ -237,11 +256,15 @@
       var hrs = (typeof t.hours === 'number' || (t.hours != null && !isNaN(t.hours))) ? parseFloat(t.hours) : 0;
       totalHours += hrs;
       var htId = parseInt(t.hourTypeId || 0, 10);
-      if (OVERTIME_HOURTYPE_IDS[htId]) overtimeHours += hrs;
+      if (isOvertimeHourType(htId, htNames)) overtimeHours += hrs;  // v251: incl. weekend-varianten
       else workHours += hrs;
     }
 
-    // fallback employeeId via titel
+    // fallback employeeId via titel — v251: de titel bevat de VOLLEDIGE naam
+    // (robaws-api: `Tijdsregistratie ${voornaam achternaam} - …`), dus eerst
+    // op volledige naam matchen; alleen-voornaam blijft als vangnet voor
+    // oude registraties. Voorheen werd voornaam met volledige naam vergeleken
+    // en matchte er nooit iets → alle afwezigheden klonterden op employeeId 0.
     var title = String(wo.title || '');
     if (!employeeId) {
       var nm = nameFromTitle(title);
@@ -249,8 +272,9 @@
         var needle = nm.toLowerCase();
         for (var key in empById) {
           if (!empById.hasOwnProperty(key)) continue;
-          var first = String(empById[key].name || '').trim().split(' ')[0].toLowerCase();
-          if (first === needle) { employeeId = parseInt(key, 10); break; }
+          var full = String(empById[key].name || '').trim().toLowerCase();
+          var first = full.split(' ')[0];
+          if (full === needle || first === needle) { employeeId = parseInt(key, 10); break; }
         }
       }
     }
@@ -389,8 +413,12 @@
     var meta = { calls: 0, woPages: 0, woMatched: 0, empSource: null };
     var mobById = await loadMobilityTypes(meta);
     var empById = await loadEmployees(meta);
+    // v251: uursoort-namen voor correcte overuren-classificatie (weekend-
+    // varianten). Bij een mislukte fetch: lege map → fallback id 2.
+    var htNames = {};
+    try { htNames = await RobawsAPI.getHourTypeNameMap(); meta.calls++; } catch (e) {}
     var woList = await fetchMonthWorkOrders(ym, meta);
-    var regs = woList.map(function (wo) { return toRegistration(wo, empById, mobById); });
+    var regs = woList.map(function (wo) { return toRegistration(wo, empById, mobById, htNames); });
     var agg = aggregate(regs, ym, empById);
     agg.meta = meta;
     agg.monthLabel = monthLabel(ym);
@@ -501,25 +529,33 @@
         row.push({ f: 'SUM(' + firstDayCol + rowUT + ':' + lastDayCol + rowUT + ')', t: 'n', s: 3, v: round2(utTotal) });
         gridRows.push(row);
 
-        // WERKUREN-rij (statisch 8)
+        // WERKUREN-rij — v251: de ECHTE werkuren uit de time-entries i.p.v.
+        // statisch 8. Op weekdagen is dat dankzij de 8u-aanvulling meestal 8,
+        // maar op za/zo boekt de klok alles als overuren (weekend = altijd
+        // overuren, geen aanvulling) en moet hier dus 0 staan — voorheen
+        // toonde het rapport dan 8 werkuren + negatieve overuren.
         row = [{ v: 'Werkuren', t: 's', s: 18 }];
         var wuTotal = 0;
         for (var d5 = 1; d5 <= dim; d5++) {
           var wk5 = isWeekend(dateOf(ym, d5)), cell5 = p.days[d5];
           var worked5 = cell5 && ABSENCE_CLASSES.indexOf(cell5.class) === -1 && Math.abs(cell5.hours) > 0.001;
-          if (worked5) { row.push({ v: 8, t: 'n', s: wk5 ? 20 : 19 }); wuTotal += 8; }
+          if (worked5) {
+            var wu5 = round2(cell5.workHours);
+            row.push({ v: wu5, t: 'n', s: wk5 ? 20 : 19 });
+            wuTotal += wu5;
+          }
           else row.push({ v: '', t: 's', s: wk5 ? 20 : 19 });
         }
-        row.push({ f: 'SUM(' + firstDayCol + rowWU + ':' + lastDayCol + rowWU + ')', t: 'n', s: 3, v: wuTotal });
+        row.push({ f: 'SUM(' + firstDayCol + rowWU + ':' + lastDayCol + rowWU + ')', t: 'n', s: 3, v: round2(wuTotal) });
         gridRows.push(row);
 
-        // OVERUREN-rij (formule = Uren tot - Werkuren)
+        // OVERUREN-rij (formule = Uren tot - Werkuren; cache = echte overuren)
         row = [{ v: 'Overuren', t: 's', s: 16 }];
         for (var d6 = 1; d6 <= dim; d6++) {
           var wk6 = isWeekend(dateOf(ym, d6)), cell6 = p.days[d6], L = col(d6 + 1);
           var worked6 = cell6 && ABSENCE_CLASSES.indexOf(cell6.class) === -1 && Math.abs(cell6.hours) > 0.001;
           var f = 'IF(' + L + rowUT + '="","",' + L + rowUT + '-' + L + rowWU + ')';
-          if (worked6) row.push({ f: f, t: 'n', s: wk6 ? 20 : 17, v: round2(cell6.hours - 8) });
+          if (worked6) row.push({ f: f, t: 'n', s: wk6 ? 20 : 17, v: round2(cell6.hours - cell6.workHours) });
           else row.push({ f: f, t: 'n', s: wk6 ? 20 : 17 });
         }
         row.push({ f: 'SUM(' + firstDayCol + rowOV + ':' + lastDayCol + rowOV + ')', t: 'n', s: 3, v: round2(utTotal - wuTotal) });
@@ -568,7 +604,7 @@
         blockAddr[p.id] = {
           name: p.name, rowOpm: rowOpm, rowUT: rowUT, rowWU: rowWU, rowOV: rowOV,
           rowCmp: rowCmp, rowCzp: rowCzp, rowP: rowP, rowFts: rowFts,
-          cacheUT: round2(utTotal), cacheWU: wuTotal, cacheOV: round2(utTotal - wuTotal),
+          cacheUT: round2(utTotal), cacheWU: round2(wuTotal), cacheOV: round2(utTotal - wuTotal),
           cacheCmp: round2(totCmp), cacheCzp: round2(totCzp), cacheP: round2(totP),
           cacheDays: p.count_days,
           cacheOntime: p.count_days - p.count_late - p.count_sick,
@@ -634,7 +670,7 @@
     function mkSum(c, cache) { return { f: 'SUM(' + c + firstEmpRow + ':' + c + lastEmpRow + ')', t: 'n', s: 3, v: cache }; }
     var totRow = [{ v: 'TOTAAL', t: 's', s: 3 }];
     totRow.push(mkSum(sColDagen, g.D));
-    totRow.push(mkSum(sColWU, g.WU));
+    totRow.push(mkSum(sColWU, round2(g.WU)));
     totRow.push(mkSum(sColOV, round2(g.OV)));
     totRow.push(mkSum(sColUT, round2(g.UT)));
     totRow.push(mkSum(sColCmp, round2(g.Cmp)));
@@ -687,10 +723,12 @@
         ];
         var fOver = 'IF(' + colUT + rd + '="","",' + colUT + rd + '-' + colWU + rd + ')';
         if (worked) {
-          row.push({ v: 8, t: 'n', s: 2 });
-          row.push({ f: fOver, t: 'n', s: 2, v: round2(cell.hours - 8) });
+          // v251: echte werkuren i.p.v. statisch 8 (weekend = 0 werkuren)
+          var wuDay = round2(cell.workHours);
+          row.push({ v: wuDay, t: 'n', s: 2 });
+          row.push({ f: fOver, t: 'n', s: 2, v: round2(cell.hours - wuDay) });
           row.push({ v: round2(cell.hours), t: 'n', s: 6 });
-          tWU += 8; tOV += round2(cell.hours - 8); tUT += round2(cell.hours);
+          tWU += wuDay; tOV += round2(cell.hours - wuDay); tUT += round2(cell.hours);
         } else {
           row.push({ v: '', t: 's', s: styleBase });
           row.push({ f: fOver, t: 'n', s: 2 });
@@ -717,7 +755,7 @@
       var totaalRow = [
         { v: 'MAANDTOTAAL', t: 's', s: 3 }, { v: p.count_days + ' dgn', t: 's', s: 3 },
         { v: '', t: 's', s: 3 }, { v: '', t: 's', s: 3 }, { v: '', t: 's', s: 3 }, { v: '', t: 's', s: 3 },
-        { f: 'SUM(' + colWU + firstDataRow + ':' + colWU + lastDataRow + ')', t: 'n', s: 3, v: tWU },
+        { f: 'SUM(' + colWU + firstDataRow + ':' + colWU + lastDataRow + ')', t: 'n', s: 3, v: round2(tWU) },
         { f: 'SUM(' + colOV + firstDataRow + ':' + colOV + lastDataRow + ')', t: 'n', s: 3, v: round2(tOV) },
         { f: 'SUM(' + colUT + firstDataRow + ':' + colUT + lastDataRow + ')', t: 'n', s: 3, v: round2(tUT) }
       ];
