@@ -653,6 +653,17 @@
                     <span style="font-size:11px;color:#1565c0">Klant scant en betaalt — direct bevestigd</span>
                 </span>
             </button>
+            <!-- v254: Terminal — pointofsale-push via de Worker naar een Mollie-
+                 terminal (Tap-telefoon of fysieke terminal). Geen app-to-app nodig. -->
+            <button class="btn btn-outline btn-full payment-method-btn" data-method="Terminal"
+                onclick="app.selectPaymentMethod('Terminal')"
+                style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.5" width="12" height="19" rx="2"/><path d="M6 6.5h12M9 17.5h6"/></svg>
+                <span style="display:flex;flex-direction:column;line-height:1.3">
+                    <span>Terminal</span>
+                    <span style="font-size:11px;color:#1565c0">Bedrag verschijnt vanzelf op de terminal</span>
+                </span>
+            </button>
             <button class="btn btn-outline btn-full payment-method-btn" data-method="Cash"
                 onclick="app.selectPaymentMethod('Cash')"
                 style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">

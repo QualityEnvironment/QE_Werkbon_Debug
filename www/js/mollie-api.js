@@ -152,7 +152,8 @@ const MollieAPI = {
     /** v229: Maak een Mollie-BETAALLINK aan via de Worker; de app toont de
      *  link-URL als QR.
      *  v250: description = de GESTRUCTUREERDE MEDEDELING (wat klant en
-     *  boekhouding op de betaling zien). Omdat betaallinks geen metadata
+     *  boekhouding op de betaling zien); v254: zonder tekens — kale 12
+     *  cijfers. Omdat betaallinks geen metadata
      *  ondersteunen gaan invoiceId en logicId (factuurnummer) apart mee:
      *  de Worker bewaart ze in KV en matcht de webhook daarop voor de
      *  automatische Robaws-boeking. Polling: op exact deze description.
@@ -178,6 +179,66 @@ const MollieAPI = {
             if (!res.ok || !data || data.error) {
                 throw new Error((data && data.error) || ('betaallink aanmaken faalde (HTTP ' + res.status + ')'));
             }
+            return data;
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    },
+
+    /** v254: haal de terminals van de organisatie op (via de Worker — de
+     *  Mollie-key blijft daar). Tap-app-telefoons én fysieke terminals.
+     *  @returns [{id, description, brand, model, serialNumber, status}] */
+    async listTerminals() {
+        const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+        try {
+            const res = await fetch(this.WEBHOOK_URL + '/list-terminals', {
+                method: 'GET',
+                cache: 'no-store',
+                signal: controller ? controller.signal : undefined,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || data.error) {
+                throw new Error((data && data.error) || ('terminals ophalen faalde (HTTP ' + res.status + ')'));
+            }
+            return data.terminals || [];
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    },
+
+    /** v254: push een betaling naar een terminal (method=pointofsale +
+     *  terminalId) via de Worker — zelfde pad als de dashboard-push. De
+     *  webhook boekt daarna automatisch in Robaws; de app pollt de status
+     *  op referenceId (zelfde KV-flow als QR).
+     *  description = de gestructureerde mededeling als kale 12 cijfers.
+     *  @returns {paymentId, status, expiresAt, referenceId} */
+    async createTerminalPayment({ amountCents, description, invoiceId, workOrderId, logicId, terminalId }) {
+        const value = (Math.round(amountCents) / 100).toFixed(2);
+        const referenceId = invoiceId
+            ? ('inv_' + invoiceId + '_' + Date.now())
+            : ('qe_' + (workOrderId || 'unknown') + '_' + Date.now());
+        const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 20000) : null;
+        try {
+            const res = await fetch(this.WEBHOOK_URL + '/create-terminal-payment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    amountValue: value,
+                    description: String(description || '').slice(0, 255),
+                    referenceId: referenceId,
+                    invoiceId: invoiceId || null,
+                    logicId: logicId || null,
+                    terminalId: String(terminalId || ''),
+                }),
+                signal: controller ? controller.signal : undefined,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || data.error) {
+                throw new Error((data && data.error) || ('terminal-betaling faalde (HTTP ' + res.status + ')'));
+            }
+            data.referenceId = referenceId;
             return data;
         } finally {
             if (timer) clearTimeout(timer);

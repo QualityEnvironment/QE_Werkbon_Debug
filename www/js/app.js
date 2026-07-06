@@ -6192,6 +6192,9 @@ const app = {
                 // v229: Mollie-betaallink als QR — klant scant, kiest methode,
                 // webhook boekt automatisch, app toont live "Betaald".
                 this.showQrBetaalScherm(invoiceResult);
+            } else if (paymentMethod === 'Terminal') {
+                // v254: pointofsale-push naar een Mollie-terminal via de Worker
+                this.showTerminalBetaalScherm(invoiceResult);
             } else if (paymentMethod === 'Overschrijving' || paymentMethod === 'Overschrijving ter plaatse') {
                 // Overschrijving ter plaatse → toon betaalscherm met QR code
                 // (legacy "Overschrijving ter plaatse" string ook ondersteund voor backward compat)
@@ -6575,6 +6578,7 @@ const app = {
 
     closePaymentScreen() {
         this._stopQrPoll();
+        this._stopTerminalPoll();  // v254-review-fix: QR én terminal delen screenOverschrijving
         this.navigate('screenPlanning', false);
         this.screenHistory = [];
         this.loadPlanning();
@@ -6683,6 +6687,7 @@ const app = {
         if (this._qrStartBusy) return;
         this._qrStartBusy = true;
         this._stopQrPoll();
+        this._stopTerminalPoll();  // v254-review-fix: zelfde scherm — oude terminal-poll mag QR-UI niet overschrijven
         this._mollieQrCtx = invoiceResult || null;
         this.navigate('screenOverschrijving', false);
         this.screenHistory = [];
@@ -6695,9 +6700,9 @@ const app = {
             if (!inv.logicId) throw new Error('geen factuurnummer gevonden');
             // v250: gestructureerde mededeling als omschrijving; factuur
             // zonder OGM (zou niet mogen) → fallback op het factuurnummer.
-            const ogm = pay.formattedOgm || inv.formattedOgm
-                || this._formatOgm(pay.paymentInstruction || inv.paymentInstruction
-                    || pay.ogm || inv.ogm || '');
+            // v254: ZONDER tekens — kale 12 cijfers i.p.v. +++xxx/xxxx/xxxxx+++
+            // (op vraag van Levi; de Worker herkent beide formaten).
+            const ogm = this._ogmDigits(pay, inv);
             const qrDesc = ogm || inv.logicId;
             if (container) {
                 container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
@@ -6858,6 +6863,268 @@ const app = {
         }
     },
 
+    // ========================================
+    // v254: TERMINAL — Mollie pointofsale-push via de Worker
+    // De app vraagt de Worker een betaling naar een gekozen terminal te
+    // pushen (method=pointofsale + terminalId) — hetzelfde pad als de
+    // dashboard-push. Het bedrag verschijnt vanzelf op de terminal, de
+    // klant tikt zijn kaart, de webhook boekt automatisch in Robaws en de
+    // app pollt live mee (zelfde KV-flow als de QR-betaling). Werkt voor
+    // Tap-app-telefoons én fysieke Mollie Tap-terminals, en vereist GEEN
+    // Mollie Tap app-to-app op het toestel van de technieker zelf.
+    // ========================================
+
+    _stopTerminalPoll() {
+        if (this._terminalPollTimer) { clearInterval(this._terminalPollTimer); this._terminalPollTimer = null; }
+    },
+
+    async showTerminalBetaalScherm(invoiceResult) {
+        if (this._terminalStartBusy) return;
+        this._terminalStartBusy = true;
+        this._stopTerminalPoll();
+        this._stopQrPoll();  // v254-review-fix: zelfde scherm — oude QR-poll mag terminal-UI niet overschrijven
+        this._terminalCtx = invoiceResult || null;
+        this.navigate('screenOverschrijving', false);
+        this.screenHistory = [];
+        const container = document.getElementById('overschrijvingContent');
+        const inv = (invoiceResult && invoiceResult.invoice) || {};
+        const pay = (invoiceResult && invoiceResult.payment) || {};
+        try {
+            const bedrag = parseFloat(inv.totalInclVat || pay.amount || 0);
+            if (!(bedrag > 0)) throw new Error('geen geldig bedrag gevonden');
+            if (!inv.logicId) throw new Error('geen factuurnummer gevonden');
+            if (container) {
+                container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
+                    'Terminals ophalen…</div>';
+            }
+            const all = await MollieAPI.listTerminals();
+            const terminals = all.filter(t => String(t.status || '').toLowerCase() === 'active');
+            if (!terminals.length) {
+                throw new Error(all.length
+                    ? 'geen ACTIEVE terminal gevonden (' + all.length + ' inactief)'
+                    : 'geen terminals gevonden in Mollie');
+            }
+            const lastId = localStorage.getItem('qe_last_terminal_id') || '';
+            if (terminals.length === 1) {
+                await this._startTerminalPayment(terminals[0], bedrag, invoiceResult);
+            } else {
+                this._renderTerminalKeuze(terminals, lastId, bedrag, invoiceResult);
+            }
+        } catch (e) {
+            console.error('[Terminal] start mislukt:', e);
+            this.toast('Terminal-betaling niet beschikbaar: ' + ((e && e.message) || e), true);
+            if (container) {
+                container.innerHTML =
+                    '<div style="text-align:center;padding:40px 20px">' +
+                        '<p style="color:#c62828;font-weight:600">Terminal-betaling kon niet starten.</p>' +
+                        '<p style="color:#666;font-size:14px">' + this.escapeHtml(String((e && e.message) || e)) + '</p>' +
+                        '<button class="btn btn-primary btn-full" style="margin-top:18px;padding:13px" ' +
+                            'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Opnieuw proberen</button>' +
+                        '<button style="margin-top:10px;background:none;border:1px solid #bbb;border-radius:8px;' +
+                            'padding:10px 16px;color:#444" onclick="app.openChangePaymentMethodModal()">Andere betaalmethode</button>' +
+                    '</div>';
+            }
+        } finally {
+            this._terminalStartBusy = false;
+        }
+    },
+
+    /** Terminal-keuze wanneer er meer dan één actieve terminal is; de laatst
+     *  gebruikte staat bovenaan voorgeselecteerd. */
+    _renderTerminalKeuze(terminals, lastId, bedrag, invoiceResult) {
+        const container = document.getElementById('overschrijvingContent');
+        if (!container) return;
+        // laatst gebruikte bovenaan
+        const sorted = terminals.slice().sort((a, b) =>
+            (a.id === lastId ? -1 : 0) - (b.id === lastId ? -1 : 0));
+        this._terminalKeuzeList = sorted;
+        container.innerHTML =
+            '<div style="padding:16px 12px 28px">' +
+                '<h2 style="margin:4px 0 2px;text-align:center">Kies terminal</h2>' +
+                '<p style="text-align:center;font-size:26px;font-weight:700;margin:4px 0 14px">€ ' + bedrag.toFixed(2) + '</p>' +
+                sorted.map((t, i) =>
+                    '<div onclick="app._kiesTerminal(' + i + ')" style="display:flex;align-items:center;gap:12px;' +
+                        'padding:16px 14px;margin-bottom:10px;border:2px solid ' + (t.id === lastId ? 'var(--qe-purple)' : '#cfd8dc') + ';' +
+                        'border-radius:12px;background:#fff;cursor:pointer">' +
+                        '<span style="flex:1;font-weight:600">' + this.escapeHtml(t.description || t.serialNumber || t.id) +
+                            (t.id === lastId ? ' <span style="font-size:10px;background:var(--qe-purple);color:#fff;padding:2px 6px;border-radius:8px;margin-left:6px">LAATST GEBRUIKT</span>' : '') +
+                            '<div style="font-size:11px;color:var(--qe-grey);font-weight:400">' + this.escapeHtml((t.brand || '') + ' ' + (t.model || '')) + '</div>' +
+                        '</span>' +
+                        '<span style="font-size:18px;color:#888">›</span>' +
+                    '</div>').join('') +
+                '<button style="width:100%;margin-top:8px;background:none;border:1px solid #bbb;border-radius:8px;' +
+                    'padding:10px 16px;color:#444" onclick="app.closePaymentScreen()">Terug naar planning</button>' +
+            '</div>';
+        this._terminalKeuzeBedrag = bedrag;
+    },
+
+    _kiesTerminal(idx) {
+        const t = this._terminalKeuzeList && this._terminalKeuzeList[idx];
+        if (!t) return;
+        // foutafhandeling + busy-guard zitten in _startTerminalPayment zelf
+        this._startTerminalPayment(t, this._terminalKeuzeBedrag, this._terminalCtx).catch(() => {});
+    },
+
+    async _startTerminalPayment(terminal, bedrag, invoiceResult) {
+        // v254-review-fix: eigen busy-guard — bij ≥2 terminals is
+        // _terminalStartBusy al vrijgegeven zodra het keuzescherm staat;
+        // een dubbel-tik pushte anders TWEE betalingen naar de terminal
+        // (en de poll volgde alleen de tweede).
+        if (this._terminalPushBusy) return;
+        this._terminalPushBusy = true;
+        const container = document.getElementById('overschrijvingContent');
+        const inv = (invoiceResult && invoiceResult.invoice) || {};
+        const pay = (invoiceResult && invoiceResult.payment) || {};
+        try {
+            if (container) {
+                container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
+                    'Bedrag naar de terminal sturen…</div>';
+            }
+            // v254: gestructureerde mededeling zonder tekens als omschrijving
+            const ogm = this._ogmDigits(pay, inv);
+            const r = await MollieAPI.createTerminalPayment({
+                amountCents: Math.round(bedrag * 100),
+                description: ogm || inv.logicId,
+                invoiceId: inv.id || null,
+                logicId: inv.logicId,
+                terminalId: terminal.id,
+            });
+            try { localStorage.setItem('qe_last_terminal_id', terminal.id); } catch (_) {}
+            const tNaam = this.escapeHtml(terminal.description || terminal.serialNumber || terminal.id);
+            if (container) {
+                container.innerHTML =
+                    '<div style="text-align:center;padding:16px 12px 28px">' +
+                        '<h2 style="margin:4px 0 2px">Terminal-betaling</h2>' +
+                        '<p style="color:#666;margin:0 0 2px;font-size:13.5px">Factuur ' + this.escapeHtml(inv.logicId || '') + '</p>' +
+                        (ogm ? '<p style="color:#666;margin:0 0 2px;font-size:13px;font-family:monospace;letter-spacing:1px">' + this.escapeHtml(ogm) + '</p>' : '') +
+                        '<p style="font-size:26px;font-weight:700;margin:4px 0 6px">€ ' + bedrag.toFixed(2) + '</p>' +
+                        '<p style="color:#444;font-size:14px;margin:0 0 14px">op <b>' + tNaam + '</b></p>' +
+                        '<div class="spinner" style="margin:14px auto"></div>' +
+                        '<p id="terminalPayStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
+                            'Bedrag staat op de terminal — de klant kan de kaart aanbieden…</p>' +
+                        '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
+                            'padding:10px 16px;color:#444;font-size:13.5px" ' +
+                            'onclick="app.closePaymentScreen()">Terug naar planning</button>' +
+                    '</div>';
+            }
+            this._beginTerminalPoll(r.referenceId, invoiceResult);
+        } catch (e) {
+            // v254-review-fix: volwaardig foutscherm i.p.v. alleen een toast —
+            // vanuit het keuzepad bleef anders een doodlopend scherm zonder
+            // knoppen achter ("Bedrag naar de terminal sturen…").
+            console.error('[Terminal] push mislukt:', e);
+            this.toast('Terminal-betaling faalde: ' + ((e && e.message) || e), true);
+            if (container) {
+                container.innerHTML =
+                    '<div style="text-align:center;padding:40px 20px">' +
+                        '<p style="color:#c62828;font-weight:600">Terminal-betaling kon niet starten.</p>' +
+                        '<p style="color:#666;font-size:14px">' + this.escapeHtml(String((e && e.message) || e)) + '</p>' +
+                        '<button class="btn btn-primary btn-full" style="margin-top:18px;padding:13px" ' +
+                            'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Opnieuw proberen</button>' +
+                        '<button style="margin-top:10px;background:none;border:1px solid #bbb;border-radius:8px;' +
+                            'padding:10px 16px;color:#444" onclick="app.openChangePaymentMethodModal()">Andere betaalmethode</button>' +
+                    '</div>';
+            }
+        } finally {
+            this._terminalPushBusy = false;
+        }
+    },
+
+    _beginTerminalPoll(referenceId, invoiceResult) {
+        this._stopTerminalPoll();
+        const startedAt = Date.now();
+        const MAX_MS = 10 * 60 * 1000;
+        this._terminalPollTimer = setInterval(async () => {
+            if (this.currentScreen !== 'screenOverschrijving') { this._stopTerminalPoll(); return; }
+            if (Date.now() - startedAt > MAX_MS) {
+                this._stopTerminalPoll();
+                const st = document.getElementById('terminalPayStatus');
+                if (st) {
+                    st.textContent = 'Geen betaling ontvangen — betaalt de klant later alsnog op de terminal, dan boekt Robaws automatisch.';
+                    st.style.color = '#e65100';
+                }
+                return;
+            }
+            let s = null;
+            try {
+                s = await MollieAPI.fetchPaymentStatus({ referenceId: referenceId });
+            } catch (e) { /* tijdelijke netwerkfout — volgende tick */ }
+            if (!s || !s.found) return;
+            if (s.status === 'paid') {
+                this._stopTerminalPoll();
+                this._onTerminalBetaald(s, invoiceResult);
+            } else if (s.status === 'failed' || s.status === 'canceled' || s.status === 'expired') {
+                // pointofsale-betaling is definitief — voor een nieuwe poging
+                // moet er een verse push gebeuren.
+                this._stopTerminalPoll();
+                const container = document.getElementById('overschrijvingContent');
+                if (container) {
+                    container.innerHTML =
+                        '<div style="text-align:center;padding:40px 20px">' +
+                            '<p style="color:#c62828;font-weight:600">Betaling ' +
+                                (s.status === 'canceled' ? 'geannuleerd' : s.status === 'expired' ? 'verlopen' : 'mislukt') + '.</p>' +
+                            (s.failureMessage ? '<p style="color:#666;font-size:13px">' + this.escapeHtml(s.failureMessage) +
+                                (s.failureSupportCode ? ' (' + this.escapeHtml(s.failureSupportCode) + ')' : '') + '</p>' : '') +
+                            '<button class="btn btn-primary btn-full" style="margin-top:18px;padding:13px" ' +
+                                'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Opnieuw naar terminal sturen</button>' +
+                            '<button style="margin-top:10px;background:none;border:1px solid #bbb;border-radius:8px;' +
+                                'padding:10px 16px;color:#444" onclick="app.openChangePaymentMethodModal()">Andere betaalmethode</button>' +
+                        '</div>';
+                }
+            }
+        }, 2000);
+    },
+
+    async _onTerminalBetaald(status, invoiceResult) {
+        try {
+            if (window.QECeleb) {
+                const _inv = (invoiceResult && invoiceResult.invoice) || {};
+                const _amt = (_inv.totalInclVat != null)
+                    ? this.formatPrice(parseFloat(_inv.totalInclVat))
+                    : (status && status.amount ? '€ ' + status.amount : '');
+                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · Terminal' });
+            }
+        } catch (e) { /* celebratie mag de betaling nooit breken */ }
+        // Eerlijk over de boeking, zoals bij QR (v250)
+        const geboekt = !(status && status.robawsMarked === false && status.robawsError);
+        const container = document.getElementById('overschrijvingContent');
+        if (container) {
+            container.innerHTML =
+                '<div style="text-align:center;padding:60px 20px">' +
+                    '<div style="font-size:64px">✅</div>' +
+                    '<h2 style="color:#2e7d32;margin:10px 0 4px">Betaald!</h2>' +
+                    '<p style="color:#444">€ ' + (status.amount || '') + ' via terminal — ' +
+                        (geboekt ? 'automatisch geboekt in Robaws.'
+                                 : 'boeking in Robaws volgt automatisch (nog bezig).') + '</p>' +
+                    (geboekt ? '' :
+                        '<p style="color:#e65100;font-size:13px">Nog niet zichtbaar in Robaws? ' +
+                        'Meld het aan bureel — de betaling zelf is zeker gelukt.</p>') +
+                    '<button class="btn btn-primary btn-full" style="margin-top:24px;padding:14px" ' +
+                        'onclick="app.closePaymentScreen()">✓ Klaar — terug naar planning</button>' +
+                '</div>';
+        }
+        this.toast(geboekt ? 'Betaling gelukt — automatisch geboekt' : 'Betaling gelukt — boeking volgt');
+        // Betaling-veld op de docs bijwerken (boeking deed de Worker al)
+        try {
+            let ctx = {};
+            try { ctx = JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}'); } catch (e) {}
+            const inv = (invoiceResult && invoiceResult.invoice) || {};
+            const ids = {
+                workOrderId: (invoiceResult && invoiceResult.workOrderId) || ctx.workOrderId,
+                salesOrderId: (invoiceResult && invoiceResult.salesOrderId) || ctx.salesOrderId,
+                invoiceId: inv.id || ctx.invoiceId,
+            };
+            if (ids.workOrderId || ids.invoiceId) {
+                await RobawsAPI.setBetalingOnAllDocs(ids, 'Terminal');
+                ctx.paymentMethod = 'Terminal';
+                ctx.timestamp = Date.now();
+                localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
+            }
+        } catch (e) {
+            console.warn('[Terminal] Betaling-veld bijwerken faalde (niet erg):', e && e.message);
+        }
+    },
+
     // (v226-foto-bewijssysteem verwijderd in v229 — vervangen door de
     //  betaald/niet-betaald-statusknoppen hierboven.)
 
@@ -6930,6 +7197,7 @@ const app = {
                     ? mkBtnHtml('Mollie Tap', this.icon('card', { size: 20 }), 'Bancontact / kaart (Mollie Tap)')
                     : '') +
                 mkBtnHtml('QR code',       this.icon('card', { size: 20 }), 'QR code (scan & betaal)') +
+                mkBtnHtml('Terminal',      this.icon('card', { size: 20 }), 'Terminal (bedrag verschijnt op de terminal)') +
                 mkBtnHtml('Viva wallet',   this.icon('card', { size: 20 }), 'Viva Wallet (legacy)') +
                 mkBtnHtml('Cash',          this.icon('cash', { size: 20 }), 'Cash') +
                 mkBtnHtml('Overschrijving',this.icon('bank', { size: 20 }), 'Overschrijving ter plaatse') +
@@ -6988,6 +7256,9 @@ const app = {
             } else if (newMethod === 'QR code' && ctx.invoiceResult) {
                 // v229: betaallink-QR met live bevestiging
                 this.showQrBetaalScherm(ctx.invoiceResult);
+            } else if (newMethod === 'Terminal' && ctx.invoiceResult) {
+                // v254: opnieuw naar de terminal pushen
+                this.showTerminalBetaalScherm(ctx.invoiceResult);
             } else if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
@@ -7042,6 +7313,9 @@ const app = {
             } else if (newMethod === 'QR code' && ctx.invoiceResult) {
                 // v229: betaallink-QR met live bevestiging
                 this.showQrBetaalScherm(ctx.invoiceResult);
+            } else if (newMethod === 'Terminal' && ctx.invoiceResult) {
+                // v254: pointofsale-push naar een terminal
+                this.showTerminalBetaalScherm(ctx.invoiceResult);
             } else if (newMethod === 'Viva wallet' && ctx.invoiceResult) {
                 this.showPaymentScreen(ctx.invoiceResult);
             } else if (newMethod === 'Overschrijving' && ctx.invoiceResult) {
@@ -10726,6 +11000,15 @@ const app = {
         const s = String(ogm || '').replace(/[^0-9]/g, '');
         if (s.length !== 12) return '';
         return '+++' + s.substr(0, 3) + '/' + s.substr(3, 4) + '/' + s.substr(7, 5) + '+++';
+    },
+
+    /** v254: de gestructureerde mededeling als KALE 12 cijfers (zonder
+     *  +++ en /) uit een payment-/invoice-object — voor Mollie-descriptions. */
+    _ogmDigits(pay, inv) {
+        const raw = (pay && (pay.paymentInstruction || pay.ogm || pay.formattedOgm))
+            || (inv && (inv.paymentInstruction || inv.ogm || inv.formattedOgm)) || '';
+        const digits = String(raw).replace(/\D/g, '');
+        return digits.length === 12 ? digits : '';
     },
 
     // ================================================================
