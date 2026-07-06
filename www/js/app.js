@@ -643,7 +643,7 @@ const app = {
         this.currentUser = null;
         // v231: terug naar de gedeelde API-key (volgende gebruiker krijgt
         // zijn eigen key pas weer bij showApp).
-        try { if (window.RobawsAPI && RobawsAPI.clearActiveCredentials) RobawsAPI.clearActiveCredentials(); } catch (e) {}
+        try { if (typeof RobawsAPI !== 'undefined' && RobawsAPI && RobawsAPI.clearActiveCredentials) RobawsAPI.clearActiveCredentials(); } catch (e) {}
         location.reload();
     },
 
@@ -695,7 +695,7 @@ const app = {
         // herstellen van een bestaande sessie na een herstart).
         try {
             if (this.currentUser && this.currentUser.email &&
-                window.RobawsAPI && RobawsAPI.setActiveCredentialsFor) {
+                typeof RobawsAPI !== 'undefined' && RobawsAPI && RobawsAPI.setActiveCredentialsFor) {
                 RobawsAPI.setActiveCredentialsFor(this.currentUser.email);
             }
         } catch (e) { console.warn('[App] API-identiteit zetten faalde:', e); }
@@ -2694,7 +2694,7 @@ const app = {
     // Warm de artikel-catalogus (1x laden) zodat zoeken + onderhoud-prijzen instant zijn.
     _warmArticleCache() {
         try {
-            if (window.RobawsAPI && RobawsAPI._loadAllArticles && !RobawsAPI._articleCache && !RobawsAPI._articleCacheLoading) {
+            if (typeof RobawsAPI !== 'undefined' && RobawsAPI && RobawsAPI._loadAllArticles && !RobawsAPI._articleCache && !RobawsAPI._articleCacheLoading) {
                 RobawsAPI._loadAllArticles().catch(() => {});
             }
         } catch (e) {}
@@ -6573,8 +6573,13 @@ const app = {
     /** v229: betaalmethode "QR code" — Mollie-BETAALLINK als QR op het
      *  scherm. De klant scant met de camera of bank-app, kiest op de
      *  Mollie-pagina zelf de methode (Bancontact, kaart, Apple Pay…) en
-     *  betaalt. De webhook boekt automatisch in Robaws (description =
-     *  factuurnummer) en de app pollt tot "✅ Betaald". */
+     *  betaalt. De webhook boekt automatisch in Robaws en de app pollt
+     *  tot "✅ Betaald".
+     *  v250: description = GESTRUCTUREERDE MEDEDELING (+++xxx/xxxx/xxxxx+++)
+     *  i.p.v. het factuurnummer — dat is wat de klant en de boekhouding op
+     *  de betaling zien. Het factuurnummer gaat apart mee (logicId) zodat
+     *  de Worker de factuur blijft vinden; polling gebeurt op exact de
+     *  gebruikte description. VEREIST Worker v250 (eerst deployen!). */
     async showQrBetaalScherm(invoiceResult) {
         if (this._qrStartBusy) return;
         this._qrStartBusy = true;
@@ -6589,18 +6594,25 @@ const app = {
             const bedrag = parseFloat(inv.totalInclVat || pay.amount || 0);
             if (!(bedrag > 0)) throw new Error('geen geldig bedrag gevonden');
             if (!inv.logicId) throw new Error('geen factuurnummer gevonden');
+            // v250: gestructureerde mededeling als omschrijving; factuur
+            // zonder OGM (zou niet mogen) → fallback op het factuurnummer.
+            const ogm = pay.formattedOgm || inv.formattedOgm
+                || this._formatOgm(pay.paymentInstruction || inv.paymentInstruction
+                    || pay.ogm || inv.ogm || '');
+            const qrDesc = ogm || inv.logicId;
             if (container) {
                 container.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#666">' +
                     'QR code aanmaken…</div>';
             }
             const link = await MollieAPI.createPaymentLink({
                 amountCents: Math.round(bedrag * 100),
-                description: inv.logicId,
+                description: qrDesc,
                 invoiceId: inv.id || null,
+                logicId: inv.logicId,
             });
             if (!link.paymentLinkUrl) throw new Error('geen betaallink ontvangen');
-            this._renderQrBetaalScherm(link, bedrag, invoiceResult);
-            this._beginQrPoll(inv.logicId, invoiceResult);
+            this._renderQrBetaalScherm(link, bedrag, invoiceResult, ogm);
+            this._beginQrPoll(qrDesc, invoiceResult);
         } catch (e) {
             console.error('[QRcode] start mislukt:', e);
             this.toast('QR code niet beschikbaar: ' + ((e && e.message) || e), true);
@@ -6621,8 +6633,10 @@ const app = {
     },
 
     /** Toon de betaallink als QR — zelfde QR-dienst als de EPC-QR, dus
-     *  visueel identiek aan wat Mollie's dashboard zelf toont. */
-    _renderQrBetaalScherm(link, bedrag, invoiceResult) {
+     *  visueel identiek aan wat Mollie's dashboard zelf toont.
+     *  v250: toont ook de gestructureerde mededeling die op de betaling
+     *  meegaat, zodat de technieker dit kan verifiëren met de klant. */
+    _renderQrBetaalScherm(link, bedrag, invoiceResult, ogm) {
         const container = document.getElementById('overschrijvingContent');
         if (!container) return;
         const inv = (invoiceResult && invoiceResult.invoice) || {};
@@ -6633,6 +6647,8 @@ const app = {
                 '<h2 style="margin:4px 0 2px">QR code</h2>' +
                 '<p style="color:#666;margin:0 0 2px;font-size:13.5px">Factuur ' +
                     this.escapeHtml(inv.logicId || '') + '</p>' +
+                (ogm ? '<p style="color:#666;margin:0 0 2px;font-size:13px;font-family:monospace;letter-spacing:1px">' +
+                    this.escapeHtml(ogm) + '</p>' : '') +
                 '<p style="font-size:26px;font-weight:700;margin:4px 0 14px">€ ' + bedrag.toFixed(2) + '</p>' +
                 '<img src="' + qrUrl + '" alt="Betaal QR" ' +
                     'style="width:280px;height:280px;max-width:82vw;border:1px solid #ddd;' +
@@ -6648,7 +6664,7 @@ const app = {
             '</div>';
     },
 
-    _beginQrPoll(logicId, invoiceResult) {
+    _beginQrPoll(pollDesc, invoiceResult) {
         this._stopQrPoll();
         const startedAt = Date.now();
         const MAX_MS = 30 * 60 * 1000;  // betaallinks verlopen pas na 24u; poll max 30 min
@@ -6667,8 +6683,9 @@ const app = {
             }
             let s = null;
             try {
-                // Betaallinks hebben geen metadata → lookup op factuurnummer
-                s = await MollieAPI.fetchPaymentStatus({ description: logicId });
+                // Betaallinks hebben geen metadata → lookup op de description
+                // (v250: de gestructureerde mededeling; voorheen factuurnummer)
+                s = await MollieAPI.fetchPaymentStatus({ description: pollDesc });
             } catch (e) { /* tijdelijke netwerkfout — volgende tick */ }
             if (!s || !s.found) return;
             if (s.status === 'paid') {
@@ -6698,6 +6715,11 @@ const app = {
                 QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · QR code' });
             }
         } catch (e) { /* celebratie mag de betaling nooit breken */ }
+        // v250: eerlijk zijn over de boeking — betaald is zeker (Mollie),
+        // maar als de Worker de kasbeweging (nog) niet kon boeken tonen we
+        // dat i.p.v. blind "automatisch geboekt" (Mollie retry't de webhook,
+        // dus meestal komt dit vanzelf goed).
+        const geboekt = !(status && status.robawsMarked === false && status.robawsError);
         const container = document.getElementById('overschrijvingContent');
         if (container) {
             container.innerHTML =
@@ -6705,12 +6727,16 @@ const app = {
                     '<div style="font-size:64px">✅</div>' +
                     '<h2 style="color:#2e7d32;margin:10px 0 4px">Betaald!</h2>' +
                     '<p style="color:#444">€ ' + (status.amount || '') + ' via QR code — ' +
-                        'automatisch geboekt in Robaws.</p>' +
+                        (geboekt ? 'automatisch geboekt in Robaws.'
+                                 : 'boeking in Robaws volgt automatisch (nog bezig).') + '</p>' +
+                    (geboekt ? '' :
+                        '<p style="color:#e65100;font-size:13px">Nog niet zichtbaar in Robaws? ' +
+                        'Meld het aan bureel — de betaling zelf is zeker gelukt.</p>') +
                     '<button class="btn btn-primary btn-full" style="margin-top:24px;padding:14px" ' +
                         'onclick="app.closePaymentScreen()">✓ Klaar — terug naar planning</button>' +
                 '</div>';
         }
-        this.toast('Betaling gelukt — automatisch geboekt');
+        this.toast(geboekt ? 'Betaling gelukt — automatisch geboekt' : 'Betaling gelukt — boeking volgt');
         // Best effort: Betaling-veld op de docs bijwerken + context sluiten.
         // (De boeking zelf deed de Worker al — de app boekt hier bewust NIETS.)
         try {

@@ -110,10 +110,12 @@ const MollieAPI = {
 
     /** v227: Maak een Bancontact-QR-betaling aan via onze Worker.
      *  De Mollie API-key blijft op de Worker — de app stuurt alleen bedrag,
-     *  omschrijving (factuur-logicId!) en referenceId. De webhook boekt de
-     *  betaling daarna automatisch in Robaws, identiek aan Tap-to-Pay.
+     *  omschrijving en referenceId. De webhook boekt de betaling daarna
+     *  automatisch in Robaws, identiek aan Tap-to-Pay.
+     *  v250: description mag de gestructureerde mededeling zijn; logicId
+     *  (factuurnummer) gaat apart mee voor de KV/Robaws-koppeling.
      *  @returns {paymentId, status, qrSrc, checkoutUrl, expiresAt, referenceId} */
-    async createQrPayment({ amountCents, description, invoiceId, workOrderId, method }) {
+    async createQrPayment({ amountCents, description, invoiceId, workOrderId, method, logicId }) {
         const value = (Math.round(amountCents) / 100).toFixed(2);
         const referenceId = invoiceId
             ? ('inv_' + invoiceId + '_' + Date.now())
@@ -129,6 +131,7 @@ const MollieAPI = {
                     description: String(description || '').slice(0, 255),
                     referenceId: referenceId,
                     invoiceId: invoiceId || null,
+                    logicId: logicId || null,
                     // v228: 'bancontact' (QR voor de bank-app) of 'any'
                     // (betaallink: Mollie-checkout, klant kiest de methode)
                     method: method === 'any' ? 'any' : 'bancontact',
@@ -147,11 +150,15 @@ const MollieAPI = {
     },
 
     /** v229: Maak een Mollie-BETAALLINK aan via de Worker; de app toont de
-     *  link-URL als QR. description MOET het factuurnummer zijn — daarop
-     *  matchen de webhook, de KV-status en de automatische Robaws-boeking
-     *  (betaallinks ondersteunen geen metadata).
+     *  link-URL als QR.
+     *  v250: description = de GESTRUCTUREERDE MEDEDELING (wat klant en
+     *  boekhouding op de betaling zien). Omdat betaallinks geen metadata
+     *  ondersteunen gaan invoiceId en logicId (factuurnummer) apart mee:
+     *  de Worker bewaart ze in KV en matcht de webhook daarop voor de
+     *  automatische Robaws-boeking. Polling: op exact deze description.
+     *  VEREIST Worker v250+.
      *  @returns {paymentLinkId, paymentLinkUrl, expiresAt} */
-    async createPaymentLink({ amountCents, description, invoiceId }) {
+    async createPaymentLink({ amountCents, description, invoiceId, logicId }) {
         const value = (Math.round(amountCents) / 100).toFixed(2);
         const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         const timer = controller ? setTimeout(() => controller.abort(), 20000) : null;
@@ -163,6 +170,7 @@ const MollieAPI = {
                     amountValue: value,
                     description: String(description || '').slice(0, 255),
                     invoiceId: invoiceId || null,
+                    logicId: logicId || null,
                 }),
                 signal: controller ? controller.signal : undefined,
             });
