@@ -111,6 +111,28 @@
             '    <div class="mb-wipeline"></div>' +
             '  </div>' +
             '</div>' +
+            /* dagoverzicht na uitklokken — weekdag (prototype "DAGOVERZICHT") */
+            '<div id="mbDay" style="display:none">' +
+            '  <div class="mb-daycircle"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#F9B25E" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5 10-11" stroke-dasharray="60" class="mb-checkpath"></path></svg></div>' +
+            '  <div class="mb-daytitle">Dag afgerond</div>' +
+            '  <div class="mb-daysub" id="mbDaySub"></div>' +
+            '  <div class="mb-dayline"></div>' +
+            '  <div class="mb-dayhint">Tik om te sluiten</div>' +
+            '</div>' +
+            /* vrijdag: einde van de werkweek (prototype "VRIJDAG") */
+            '<div id="mbFri" style="display:none">' +
+            '  <div id="mbFriDeco"></div>' +
+            '  <div class="mb-frisun">' +
+            '    <div class="mb-frisun-glow"></div>' +
+            '    <div class="mb-frisun-rays"><svg width="190" height="190" viewBox="0 0 190 190"><g stroke="#F9B25E" stroke-width="2" stroke-linecap="round"><path d="M95 6v20M95 164v20M6 95h20M164 95h20M32 32l14 14M144 144l14 14M158 32l-14 14M46 144l-14 14"></path></g></svg></div>' +
+            '    <div class="mb-frisun-ball"></div>' +
+            '    <div class="mb-frisun-hor"></div>' +
+            '  </div>' +
+            '  <div class="mb-fritit" id="mbFriTitle">Prettig weekend</div>' +
+            '  <div class="mb-frisub" id="mbFriSub"></div>' +
+            '  <div class="mb-dayline mb-friline"></div>' +
+            '  <div class="mb-dayhint mb-frihint">Tik om te sluiten</div>' +
+            '</div>' +
             /* tutorial */
             '<div id="mbTut" style="display:none">' +
             '  <div id="mbTutScrim"></div>' +
@@ -160,7 +182,7 @@
             ['Ondertekenen', 'De knop onderaan opent de handtekening; daarna wordt alles naar Robaws gestuurd.']
         ] },
         screenClock: { name: 'KLOK', steps: [
-            ['NFC in- en uitklokken', 'Tik op de kaart en houd je telefoon tegen een NFC-tag: bureau, camionet of laden & lossen.', '#clockNfcCard'],
+            ['NFC in- en uitklokken', 'Houd je telefoon tegen een NFC-tag: bureau, camionet of laden & lossen. De kaart toont je status en kleurt mee.', '#clockHeroCard'],
             ['Afronding', 'Kwartieren met 4 min tolerantie: 06:48 → 06:45, maar 06:50 → 07:00. Uitklokken rondt naar beneden met dezelfde tolerantie.'],
             ['Je startuur', 'Vroeger inklokken dan je startuur telt pas vanaf je startuur — behalve in de camionet op vraag van de projectleider.'],
             ['Weeklog', 'Onderaan zie je je afgeronde registraties. Weekend telt altijd als overuren.', '#clockCompletedSection']
@@ -316,14 +338,89 @@
 
     /* ---------- succes-overlay ---------- */
     var flashT = null;
-    function flash(title, sub, ms) {
+    function flash(title, sub, ms, onDone) {
         var el = document.getElementById('mbSucces');
         document.getElementById('mbSucTitle').textContent = title || 'Gelukt';
         document.getElementById('mbSucSub').textContent = sub || '';
         el.style.display = 'none'; void el.offsetWidth;
         el.style.display = 'flex';
+        try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+        var done = false;
+        var close = function () {
+            if (done) return; done = true;
+            el.style.display = 'none';
+            el.onclick = null;
+            if (typeof onDone === 'function') { try { onDone(); } catch (e) {} }
+        };
+        el.onclick = close;
         clearTimeout(flashT);
-        flashT = setTimeout(function () { el.style.display = 'none'; }, ms || 1800);
+        flashT = setTimeout(close, ms || 1800);
+    }
+
+    /* ---------- uitklok-overlays (dagoverzicht / vrijdag) ---------- */
+    var dayT = null, friT = null;
+    function daySummary(sub, onDone) {
+        var el = document.getElementById('mbDay');
+        document.getElementById('mbDaySub').textContent = sub || '';
+        el.style.display = 'none'; void el.offsetWidth;
+        el.style.display = 'flex';
+        try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+        var done = false;
+        var close = function () {
+            if (done) return; done = true;
+            el.style.display = 'none'; el.onclick = null;
+            if (typeof onDone === 'function') { try { onDone(); } catch (e) {} }
+        };
+        el.onclick = close;
+        clearTimeout(dayT);
+        dayT = setTimeout(close, 5000);
+    }
+    function friday(sub, onDone) {
+        var el = document.getElementById('mbFri');
+        var deco = document.getElementById('mbFriDeco');
+        var name = '';
+        try { name = (window.app && app.currentUser && app.currentUser.name) ? app.currentUser.name.split(' ')[0] : ''; } catch (e) {}
+        document.getElementById('mbFriTitle').textContent = 'Prettig weekend' + (name ? ', ' + name : '');
+        document.getElementById('mbFriSub').textContent = sub || 'Dat was ’m voor deze week';
+        /* sterren + confetti in merkkleuren (deterministisch, zoals het prototype) */
+        var html = '';
+        var i;
+        for (i = 0; i < 16; i++) {
+            html += '<span class="mb-star" style="left:' + ((i * 61) % 96 + 2) + '%;top:' + ((i * 37) % 34 + 3) + '%;' +
+                'animation-duration:' + (1.8 + (i % 4) * 0.5) + 's;animation-delay:' + ((i % 5) * 0.35) + 's"></span>';
+        }
+        var colors = ['#F99D3E', '#B491CE', '#F9B25E', 'rgba(255,255,255,0.85)'];
+        for (i = 0; i < 18; i++) {
+            html += '<span class="mb-conf" style="left:' + (3 + i * 5.4) + '%;width:' + (i % 3 === 0 ? 5 : 7) + 'px;height:' + (i % 2 === 0 ? 12 : 9) + 'px;' +
+                'background:' + colors[i % 4] + ';animation-duration:' + (3.4 + (i % 5) * 0.55) + 's;animation-delay:' + ((i * 0.47) % 3.2) + 's"></span>';
+        }
+        deco.innerHTML = html;
+        el.style.display = 'none'; void el.offsetWidth;
+        el.style.display = 'flex';
+        /* de weekend-jingle speelt de motor zelf al (app._playWeekendJingle, cap 15 s) */
+        var done = false;
+        var close = function () {
+            if (done) return; done = true;
+            el.style.display = 'none'; el.onclick = null; deco.innerHTML = '';
+            if (typeof onDone === 'function') { try { onDone(); } catch (e) {} }
+        };
+        el.onclick = close;
+        clearTimeout(friT);
+        friT = setTimeout(close, 12000);
+    }
+
+    /* ---------- inklapbare blokken (prototype-chevrons) ---------- */
+    function toggleCollapse(bodyId, chevId) {
+        var body = document.getElementById(bodyId);
+        if (!body) return;
+        var open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'block';
+        if (!open) {
+            body.style.animation = 'none'; void body.offsetWidth;
+            body.style.animation = 'mbUp 0.3s cubic-bezier(0.22, 1, 0.36, 1)';
+        }
+        var chev = chevId ? document.getElementById(chevId) : null;
+        if (chev) chev.textContent = open ? '▾' : '▴';
     }
 
     /* ---------- login-wipe ---------- */
@@ -408,6 +505,27 @@
             };
             app.showApp._mb = true;
         }
+        /* scan-resultaten: succes → Marble-overlays (prototype), fout → het
+           bestaande rode kaartje (met details + langere duur). Uitklokken
+           krijgt het dagoverzicht, op vrijdagmiddag het weekend-scherm. */
+        if (app.showScanResult && !app.showScanResult._mb) {
+            var origScan = app.showScanResult.bind(app);
+            app.showScanResult = function (success, message, onDone, duration) {
+                if (!success) return origScan(success, message, onDone, duration);
+                var loading = document.getElementById('scanLoading');
+                if (loading) { try { loading.remove(); } catch (e) {} }
+                var msg = String(message || '');
+                var oneLine = msg.replace(/\s*\n\s*/g, ' · ');
+                if (/^Uitgeklokt om/i.test(msg)) {
+                    if (/weekend/i.test(msg)) friday(oneLine.replace(/\s*·\s*\S*\s*Fijn weekend!?/i, ''), onDone);
+                    else daySummary(oneLine, onDone);
+                    return;
+                }
+                var m = msg.match(/^Ingeklokt om\s*(\S+)/i);
+                flash(m ? ('Ingeklokt — ' + m[1]) : 'Gelukt', m ? oneLine.replace(/^Ingeklokt om\s*\S+\s*·?\s*/i, '') : oneLine, duration, onDone);
+            };
+            app.showScanResult._mb = true;
+        }
     }
 
     /* ---------- init ---------- */
@@ -432,6 +550,9 @@
         showLoader: showLoader,
         hideLoader: hideLoader,
         flash: flash,
+        daySummary: daySummary,
+        friday: friday,
+        toggleCollapse: toggleCollapse,
         syncHeaderStatus: syncHeaderStatus,
         animateScreen: animateScreen
     };

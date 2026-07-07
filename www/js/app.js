@@ -7654,92 +7654,59 @@ const app = {
         const isActive = session && session.active;
         const clockTime = QEClock.getClockTime();
 
-        // ── Grote status bovenaan ──
+        // ── Marble 1:1 (v267): grote klok-kaart (prototype "kl-card") ──
+        // MOTOR-SYNC: dit blok is een bewuste DESIGN-afwijking t.o.v. 1.x —
+        // dezelfde toestanden (L&L / actief / uitgeklokt / nog niet), maar
+        // geschilderd als de Marble-hero (50px tijd + accentlijn + status).
+        // clockNfcCard/clockActiveSession blijven bestaan maar verborgen.
+        const hero = document.getElementById('clockHeroCard');
+        const heroLine = document.getElementById('clockHeroLine');
         const bigStatus = document.getElementById('clockBigStatus');
         const bigText = document.getElementById('clockBigText');
         const bigTime = document.getElementById('clockBigTime');
+        const nfcCardEl = document.getElementById('clockNfcCard');
+        if (nfcCardEl) nfcCardEl.style.display = 'none';
+        const activeEl = document.getElementById('clockActiveSession');
+        if (activeEl) activeEl.style.display = 'none';
 
-        // v78: L&L active block wordt onafhankelijk gerenderd, ook als main session inactief.
-        const llActiveHtml = session && session.llActive ? `
-            <div style="margin-top:10px;padding:14px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:8px;display:flex;align-items:center;gap:12px">
-                <span style="color:#e65100">${this.icon('package', { size: 26 })}</span>
-                <div>
-                    <div style="font-size:15px;font-weight:700;color:#0d47a1">Bezig met Laden &amp; Lossen</div>
-                    <div style="font-size:12px;color:#1565c0;opacity:0.9;margin-top:2px">Gestart om ${session.llStartTime || '?'} — scan de L&amp;L tag opnieuw om te stoppen</div>
-                </div>
-            </div>` : '';
+        const nfcOff = !!(window.QEBridge && QEBridge.isNfcEnabled && !QEBridge.isNfcEnabled());
+        const setHero = (time, fg, border, txt, sub) => {
+            if (!bigTime || !bigText || !bigStatus) return;
+            bigTime.textContent = time;
+            bigTime.style.color = fg;
+            if (heroLine) heroLine.style.background = fg;
+            if (hero) hero.style.borderColor = border;
+            bigText.textContent = txt;
+            bigText.style.color = fg;
+            bigStatus.textContent = sub;
+        };
 
-        if (isActive) {
+        if (session && session.llActive) {
+            // L&L krijgt voorrang in de hero (zoals de planning-statusbar)
+            setHero(session.llStartTime || '––:––', 'var(--purple2)', 'var(--pborder)',
+                'Bezig met Laden & Lossen',
+                'Gestart om ' + (session.llStartTime || '?') + ' — scan de L&L-tag opnieuw om te stoppen');
+        } else if (isActive) {
             const isLate = session.registrationType === 'Te laat';
-            const isLL = session.registrationType === 'Laden & Lossen';
-            bigStatus.innerHTML = isLL ? this.icon('package', { size: 52 }) : (isLate ? this.icon('alert', { size: 52 }) : this.icon('check-circle', { size: 52 }));
-            bigText.textContent = isLL ? 'Laden & Lossen' : 'Ingeklokt';
-            bigText.style.color = isLate ? '#e65100' : 'var(--qe-green)';
-            const _cleanTag = this._publicRemark(session.tagName);
-            bigTime.textContent = `${session.startTime} — ${_cleanTag}${isLate ? ' (te laat)' : ''}`;
-
-            document.getElementById('clockNfcCard').style.display = 'none';
-            const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) {
-                activeEl.style.display = 'block';
-                document.getElementById('clockActiveContent').innerHTML = `
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                        <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">${this.icon('refresh', { size: 16, style: 'vertical-align:-3px' })} Actieve registratie</h3>
-                        <span style="background:${isLL ? '#e3f2fd' : '#e8f5e9'};color:${isLL ? '#1565c0' : '#2e7d32'};font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600">${session.registrationType}</span>
-                    </div>
-                    <div style="display:flex;gap:16px;margin-bottom:8px">
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Start</span><br><span style="font-size:15px;font-weight:600">${session.startTime}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Verwacht</span><br><span style="font-size:15px;font-weight:600">${QEClock.getExpectedStartTime()}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${this._publicRemark(session.tagName)}</span></div>
-                    </div>
-                    <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
-                    ${llActiveHtml}
-                `;
-            }
+            const cleanTag = this._publicRemark(session.tagName);
+            setHero(session.startTime || '––:––',
+                isLate ? 'var(--amber)' : 'var(--green2)',
+                isLate ? 'var(--aborder2)' : 'var(--gborder1)',
+                'Actief — scan een tag om uit te klokken',
+                'Ingeklokt op ' + cleanTag + (isLate ? ' · te laat' : ' · op tijd') +
+                ' · verwacht ' + QEClock.getExpectedStartTime());
+        } else if (clockTime) {
+            setHero(clockTime, 'var(--g2)', 'var(--b1)',
+                'Afgerond voor vandaag',
+                'Eerste scan ' + clockTime + ' · gesynchroniseerd met Robaws');
         } else {
             const isLateNow = QEClock.isLate();
-            if (clockTime) {
-                bigStatus.innerHTML = this.icon('flag', { size: 52 });
-                bigText.textContent = 'Uitgeklokt';
-                bigText.style.color = 'var(--qe-darkblue)';
-                bigTime.textContent = `Eerste scan: ${clockTime}`;
-            } else {
-                bigStatus.innerHTML = isLateNow ? this.icon('alert', { size: 52 }) : this.icon('clock', { size: 52 });
-                bigText.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
-                bigText.style.color = isLateNow ? '#c62828' : 'var(--qe-darkblue)';
-                bigTime.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
-            }
-
-            // Toon NFC instructie
-            const nfcCard = document.getElementById('clockNfcCard');
-            nfcCard.style.display = 'block';
-            if (window.QEBridge && !QEBridge.isNfcEnabled()) {
-                nfcCard.innerHTML = `
-                    <div style="text-align:center;padding:20px">
-                        <div style="margin-bottom:8px;color:var(--qe-grey)">${this.icon('phone-off', { size: 34 })}</div>
-                        <div style="font-size:15px;font-weight:600;margin-bottom:4px">NFC niet beschikbaar</div>
-                        <div style="font-size:13px;color:var(--qe-grey)">Zet NFC aan in je telefoon-instellingen</div>
-                        ${llActiveHtml}
-                    </div>`;
-            } else {
-                nfcCard.innerHTML = `
-                    <div style="margin-bottom:8px;color:var(--qe-purple)">${this.icon('phone', { size: 34 })}</div>
-                    <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
-                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
-                    ${llActiveHtml}
-                `;
-            }
-            // v78: actieve sessie card alleen tonen als L&L actief is (zonder main shift)
-            const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) {
-                if (session && session.llActive) {
-                    activeEl.style.display = 'block';
-                    document.getElementById('clockActiveContent').innerHTML = llActiveHtml ||
-                        '<p style="color:var(--qe-grey)">Geen actieve sessie</p>';
-                } else {
-                    activeEl.style.display = 'none';
-                }
-            }
+            setHero('––:––',
+                isLateNow ? 'var(--red2)' : 'var(--amber)',
+                'var(--aborder2)',
+                isLateNow ? 'Nog niet ingeklokt!' : 'Houd je telefoon tegen de NFC-tag',
+                nfcOff ? 'NFC staat uit — zet NFC aan in je telefoon-instellingen'
+                       : 'NFC · Bureau, camionet of laden & lossen · verwacht ' + QEClock.getExpectedStartTime());
         }
 
         // ── Voltooide sessies vandaag ──
@@ -7748,21 +7715,18 @@ const app = {
         const completed = session ? (session.completedSessions || []) : [];
         if (completed.length > 0) {
             completedSection.style.display = 'block';
+            // v267 (Marble 1:1): prototype "VANDAAG"-rijen — wash-tint per type,
+            // "Type · locatie", tijdsbereik en uren rechts in de accentkleur.
             completedList.innerHTML = completed.map(s => {
-                const typeIcon = s.type === 'Te laat' ? this.icon('alert', { size: 16 }) : (s.type === 'Laden & Lossen' ? this.icon('package', { size: 16 }) : (s.type === 'Extra uren' ? this.icon('refresh', { size: 16 }) : this.icon('check-circle', { size: 16 })));
-                const bg = s.type === 'Te laat' ? '#fff8e1' : '#f1f8e9';
-                return `<div class="card" style="padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;background:${bg}">
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span>${typeIcon}</span>
-                        <div>
-                            <div style="font-size:14px;font-weight:500">${s.type}</div>
-                            <div style="font-size:11px;color:var(--qe-grey)">${this._publicRemark(s.tagName)}</div>
-                        </div>
-                    </div>
-                    <div style="text-align:right">
-                        <div style="font-size:14px;font-weight:600">${s.startTime} → ${s.endTime}</div>
-                        <div style="font-size:11px;color:var(--qe-grey)">${s.hours} uur</div>
-                    </div>
+                let wash, border, accent;
+                if (s.type === 'Te laat') { wash = 'var(--awash)'; border = 'var(--aborder)'; accent = 'var(--amber2)'; }
+                else if (s.type === 'Laden & Lossen') { wash = 'var(--awash2)'; border = 'var(--aborder2)'; accent = 'var(--amber2)'; }
+                else if (s.type === 'Extra uren') { wash = 'var(--pwash)'; border = 'var(--pborder)'; accent = 'var(--purple2)'; }
+                else { wash = 'var(--gwash)'; border = 'var(--gborder2)'; accent = 'var(--green2)'; }
+                return `<div style="display:flex;align-items:baseline;gap:12px;padding:13px 16px;border-radius:12px;background:${wash};border:1px solid ${border};margin-bottom:6px">
+                    <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;color:var(--ink)">${s.type} · ${this._publicRemark(s.tagName)}</span>
+                    <span style="font-size:13px;color:var(--g2);font-variant-numeric:tabular-nums;flex-shrink:0">${s.startTime} – ${s.endTime}</span>
+                    <span style="font:500 15px var(--font);color:${accent};font-variant-numeric:tabular-nums;flex-shrink:0">${s.hours}</span>
                 </div>`;
             }).join('');
         } else {
