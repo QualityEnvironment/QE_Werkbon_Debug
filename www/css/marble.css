@@ -1,0 +1,424 @@
+﻿/* =========================================================
+   QE WERKBON 2.0 — MARBLE DESIGN-LAAG  (v260)
+   Bron: "QE Werkbon 2.0 Marble.dc.html" + "Handoff QE Werkbon 2.0"
+   (Claude Designer-project, juli 2026).
+
+   Geladen NA app.css en redesign.css. Werkwijze: de bestaande
+   --qe-*-variabelen worden geREMAPT naar de Marble-tokens en de
+   kerncomponenten worden herstijld — de JS-motor, alle id's en
+   klassen blijven ongewijzigd (zelfde app, nieuw kleed).
+
+   Thema's: licht (default) en donker (body.dark-mode).
+   Werf-modus: body.werf-modus (UI-schaal ×1,12, hit-targets ≥48px).
+   Merk-accent #F99D3E blijft identiek in beide thema's.
+   QR-codes blijven ALTIJD op puur wit (scanbaarheid).
+   ========================================================= */
+
+/* ----- FONT: Archivo (variabel, gebundeld — werkt offline) ----- */
+@font-face {
+    font-family: 'Archivo';
+    src: url('../assets/fonts/archivo-var.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* =========================================================
+   1 · TOKENS (licht)
+   ========================================================= */
+:root {
+    /* Marble-kern */
+    --bg:      #F4F2ED;
+    --card:    #FDFCFA;
+    --ink:     #26334B;
+    --txt2:    #3A4356;
+    --wash:    #EFEDE6;
+    --g1:      #85847C;
+    --g2:      #5F5E56;
+    --g3:      #A3A29A;
+    --l1:      #E4E1D9;
+    --l2:      #EBE8E0;
+    --cb:      #E9E6DE;
+    --b1:      #DCD9D0;
+    --b2:      #CAC7BE;
+    --b3:      #BFBDB4;
+    --btn:     #26334B;
+    --btnfg:   #FFFFFF;
+    --purple2: #6A2C91;
+    --pwash:   #F4EFF8;
+    --pborder: #D9CFE4;
+    --green2:  #3E7A54;
+    --gwash:   #EDF3EE;
+    --amber:   #D97E24;
+    --amber2:  #A65E12;
+    --awash2:  #F7E9D8;
+    --aborder2:#E9CBA6;
+    --red2:    #B4372F;
+    --rwash:   #F6E7E5;
+    --accent:  #F99D3E;   /* merk-accent — identiek in beide thema's */
+    --scrim:   rgba(38,51,75,0.45);
+
+    /* Bestaande --qe-* hermappen → alle inline styles volgen vanzelf */
+    --qe-orange:       #F99D3E;
+    --qe-orange-light: var(--awash2);
+    --qe-orange-dark:  var(--amber2);
+    --qe-purple:       var(--purple2);
+    --qe-purple-light: var(--pwash);
+    --qe-darkblue:     var(--ink);
+    --qe-light:        var(--wash);
+    --qe-white:        var(--card);
+    --qe-grey:         var(--g1);
+    --qe-grey-light:   var(--l1);
+    --qe-green:        var(--green2);
+    --qe-green-light:  var(--gwash);
+    --qe-red:          var(--red2);
+    --qe-red-light:    var(--rwash);
+
+    /* redesign.css-laag mee hermappen */
+    --qe-hairline:      var(--l1);
+    --qe-hairline-soft: var(--l2);
+    --qe-ink:           var(--ink);
+    --qe-muted:         var(--g2);
+    --qe-hint:          var(--g3);
+
+    --font: 'Archivo', 'Roboto', sans-serif;
+    --ease-marble: cubic-bezier(0.22, 1, 0.36, 1);
+    --shadow-sm: 0 1px 4px rgba(38,51,75,0.04);
+    --shadow-md: 0 2px 10px rgba(38,51,75,0.05);   /* kaart-schaduw uit de spec */
+    --shadow-lg: 0 12px 32px rgba(38,51,75,0.14);
+    --r-sm: 10px;   /* inputs */
+    --r-md: 14px;   /* kaarten */
+    --r-lg: 14px;
+}
+
+/* ----- TOKENS (donker) — zelfde UI, alleen variabelen omgezet ----- */
+body.dark-mode {
+    --bg:      #1B1C19;
+    --card:    #242522;
+    --ink:     #E6E4DB;
+    --txt2:    #C9C7BC;
+    --wash:    #232420;
+    --g1:      #98968A;
+    --g2:      #B3B1A5;
+    --g3:      #6E6D65;
+    --l1:      #34352F;
+    --l2:      #2E2F2A;
+    --cb:      #323330;
+    --b1:      #3A3B36;
+    --b2:      #45463F;
+    --b3:      #52534B;
+    --btn:     #E6E4DB;
+    --btnfg:   #1B1C19;
+    --purple2: #B491CE;
+    --pwash:   #2C2733;
+    --pborder: #453A52;
+    --green2:  #7FB894;
+    --gwash:   #222A24;
+    --amber:   #E09B52;
+    --amber2:  #DFA35F;
+    --awash2:  #322A1F;
+    --aborder2:#54452E;
+    --red2:    #D97A70;
+    --rwash:   #332423;
+    --scrim:   rgba(0,0,0,0.55);
+    --shadow-sm: 0 1px 4px rgba(0,0,0,0.3);
+    --shadow-md: 0 2px 10px rgba(0,0,0,0.35);
+    --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
+}
+
+/* =========================================================
+   2 · BASIS — typografie & vlakken
+   ========================================================= */
+body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--ink);
+}
+h1, h2, h3 { font-weight: 500; letter-spacing: -0.4px; }
+/* Cijfers springen nooit (uren, bedragen, timers) */
+.he-duration, .wo-time, .t-hour, #timerValue, .qe-countup,
+.day-hours-row span:last-child, .ws-total, td.text-right {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Werf-modus: alles ×1,12 → hit-targets ≥ 48px (toggle op Profiel) */
+body.werf-modus { zoom: 1.12; }
+
+/* =========================================================
+   3 · TOPBAR — licht en minimaal (was navy)
+   ========================================================= */
+.app-header {
+    background: var(--bg);
+    color: var(--ink);
+    box-shadow: none;
+    border-bottom: 1px solid var(--l1);
+}
+.app-header .header-title { color: var(--ink); font-weight: 600; letter-spacing: 0.2px; }
+.app-header .header-back {
+    background: none;
+    border: 1px solid var(--b1);
+    color: var(--g2);
+}
+/* elementen die op de navy balk wit waren → ink */
+.app-header [style*="color:#fff"], .app-header [style*="color: #fff"],
+.app-header [style*="color:white"], .app-header [style*="color: white"] {
+    color: var(--ink) !important;
+}
+.app-header [style*="rgba(255,255,255"] { background: var(--wash) !important; }
+
+/* =========================================================
+   4 · BOTTOM-NAV — vlak, hairline, ink-actief
+   ========================================================= */
+.bottom-nav {
+    background: var(--card);
+    border-top: 1px solid var(--l1);
+    box-shadow: none;
+}
+.nav-item { color: var(--g3); }
+.nav-item.active { color: var(--ink); }
+.nav-item.active::after { background: var(--accent); }
+
+/* =========================================================
+   5 · KAARTEN & LIJSTEN
+   ========================================================= */
+.card {
+    background: var(--card);
+    border: 1px solid var(--cb);
+    border-radius: 14px;
+    box-shadow: var(--shadow-md);
+}
+.card-clickable:active { background: var(--wash); transform: scale(0.994); }
+
+/* Planning: terug LOSSE kaarten met ruime tijd-kolom (Marble) —
+   de v187 vlakke-lijst-look wordt hier bewust teruggedraaid. */
+#workorderList { background: transparent; border: 0; border-radius: 0; overflow: visible; }
+#workorderList > .card {
+    border: 1px solid var(--cb);
+    border-radius: 14px;
+    margin: 0 0 12px;
+    background: var(--card);
+    box-shadow: var(--shadow-md);
+    padding: 18px;
+}
+#workorderList > .card:active { background: var(--wash); }
+.wo-time .t-hour {
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: -0.5px;
+    color: var(--ink);
+}
+.wo-time .t-label { color: var(--g3); }
+.wo-info h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; color: var(--ink); }
+.wo-info .wo-address { color: var(--g2); }
+.wo-type { background: transparent !important; color: var(--g1) !important; font-weight: 600; padding-left: 0; }
+.wo-type.onderhoud   { background: transparent !important; color: var(--green2) !important; }
+.wo-type.herstelling { background: transparent !important; color: var(--amber) !important; }
+.wo-type.installatie { background: transparent !important; color: var(--purple2) !important; }
+.wo-regie-tag { color: var(--amber); }
+.wo-nav-btn { border: 1px solid var(--b1); color: var(--g2); background: none; border-radius: 50%; }
+
+/* Sectielabels: 12px 600, kapitaal, letterspacing 0.5 */
+.section-header .section-title, .ws-header, .ua-group-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--g1);
+}
+.werkbon-summary { border: 1px solid var(--cb); border-radius: 14px; background: var(--card); }
+.werkbon-summary .ws-header {
+    background: var(--card) !important;
+    color: var(--g1) !important;
+    border-bottom: 1px solid var(--l2);
+}
+
+/* Hairline-lijsten binnen schermen (geen geneste kaarten) */
+.hour-entry, .material-item {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--l2);
+    border-radius: 0;
+    box-shadow: none;
+}
+.info-row { border-bottom: 1px solid var(--l2); }
+
+/* =========================================================
+   6 · KNOPPEN — primair bewust hoekig (2px), ink op licht
+   ========================================================= */
+.btn { border-radius: 2px; box-shadow: none; font-weight: 600; }
+.btn-primary { background: var(--btn); color: var(--btnfg); }
+.btn-primary:active { background: var(--txt2); transform: scale(0.98); }
+body.dark-mode .btn-primary:active { background: #CFCDC2; }
+.btn-outline {
+    background: none;
+    border: 1px solid var(--b2);
+    color: var(--ink);
+}
+.btn-outline:active { background: var(--wash); }
+.btn-success { background: var(--green2) !important; color: #fff; }
+.btn-danger, .btn-red { background: var(--red2); color: #fff; }
+/* Chips en ronde knoppen behouden hun ronding */
+.date-chip, .payment-method-btn, .qty-btn, .nav-item, .wo-nav-btn { border-radius: 24px; }
+.payment-method-btn { border-radius: 12px; border-color: var(--b1); }
+.payment-method-btn[style*="background: var(--qe-purple)"] { border-radius: 12px; }
+
+/* Datumchips: rond 24px, actief = wash + ink-rand */
+.date-chip {
+    background: var(--card);
+    border: 1px solid var(--b1);
+    color: var(--g2);
+    box-shadow: none;
+}
+.date-chip.active {
+    background: var(--wash);
+    border-color: var(--ink);
+    color: var(--ink);
+    font-weight: 600;
+}
+
+/* =========================================================
+   7 · TABS — tekst + 2px underline in ink
+   ========================================================= */
+.tabs { border-bottom: 1px solid var(--l1); background: transparent; }
+.tab-btn { color: var(--g1); font-weight: 600; }
+.tab-btn.active { color: var(--ink); background: transparent; }
+.tab-btn.active::after { background: var(--ink); height: 2px; }
+
+/* =========================================================
+   8 · FORMULIEREN
+   ========================================================= */
+.form-input, input[type="text"], input[type="time"], input[type="date"],
+input[type="number"], input[type="email"], input[type="password"], select, textarea {
+    background: var(--card);
+    border: 1px solid var(--b1);
+    border-radius: 10px;
+    color: var(--ink);
+    font-family: var(--font);
+}
+.form-input:focus, input:focus, select:focus, textarea:focus {
+    border-color: var(--ink);
+    box-shadow: 0 0 0 3px rgba(38,51,75,0.08);
+}
+::placeholder { color: var(--g3); }
+
+/* =========================================================
+   9 · MODALS, TOASTS, OVERLAYS
+   ========================================================= */
+#modalOverlay, .qe-scan-backdrop { background: var(--scrim); backdrop-filter: blur(4px); }
+.modal-content, .qe-scan-card {
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--cb);
+    border-radius: 14px;
+    box-shadow: var(--shadow-lg);
+}
+.toast {
+    background: var(--ink);
+    color: var(--bg);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    font-weight: 500;
+}
+body.dark-mode .toast { background: var(--card); color: var(--ink); border: 1px solid var(--cb); }
+
+/* QR-codes ALTIJD op puur wit — ook in dark-mode (scanbaarheid) */
+img[src*="qrserver"], img[src*="quickchart"], img[alt*="QR"] {
+    background: #FFFFFF !important;
+    border-radius: 12px;
+    padding: 8px;
+}
+
+/* =========================================================
+   10 · SKELETONS & EMPTY STATES
+   ========================================================= */
+.qe-skel { background: linear-gradient(100deg, var(--l2) 30%, var(--wash) 50%, var(--l2) 70%); background-size: 200% 100%; }
+body.dark-mode .qe-skel { background: linear-gradient(100deg, #2A2B27 30%, #32332E 50%, #2A2B27 70%); background-size: 200% 100%; }
+.qe-skel-row { border-bottom: 1px solid var(--l2); }
+.empty-state { color: var(--g1); }
+.empty-state h3 { color: var(--g2); font-weight: 500; }
+.empty-state .empty-icon svg { color: var(--b2); }
+
+/* =========================================================
+   11 · MOTION — Marble-specs
+   ========================================================= */
+@keyframes mbIn   { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes mbUp   { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes mbSoft { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Schermwissel: 18px slide-in van rechts + fade, 450ms */
+.screen { animation: mbIn 0.45s var(--ease-marble); }
+
+/* Lijstitems staggeren 80ms */
+#workorderList > .card { animation: mbUp 0.5s var(--ease-marble) both; }
+#workorderList > .card:nth-child(1) { animation-delay: 0.00s; }
+#workorderList > .card:nth-child(2) { animation-delay: 0.08s; }
+#workorderList > .card:nth-child(3) { animation-delay: 0.16s; }
+#workorderList > .card:nth-child(4) { animation-delay: 0.24s; }
+#workorderList > .card:nth-child(5) { animation-delay: 0.32s; }
+#workorderList > .card:nth-child(6) { animation-delay: 0.40s; }
+#workorderList > .card:nth-child(n+7) { animation-delay: 0.46s; }
+
+/* Klok-status stip pulseert zachtjes */
+#clockStatusIcon { animation: mbSoft 2.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+    .screen, #workorderList > .card, #clockStatusIcon { animation: none !important; }
+}
+
+/* =========================================================
+   12 · SCHERMTITELS & DETAIL-KOP (Marble-typografie)
+   ========================================================= */
+#headerDate { color: var(--g1); font-size: 13px; }
+#detailTitle { font-weight: 600; letter-spacing: -0.4px; }
+#detailRegieBanner {
+    background: var(--awash2) !important;
+    color: var(--amber2) !important;
+    border-radius: 10px 10px 0 0;
+    font-size: 12.5px;
+    letter-spacing: 0.3px;
+}
+#wbOrderBanner { background: var(--ink) !important; color: var(--bg) !important; }
+
+/* Login: navy paneel blijft — met Marble-tinten */
+.login-screen, #loginScreen { background: var(--ink); }
+.login-card { background: var(--card); border-radius: 14px; box-shadow: var(--shadow-lg); }
+
+/* Statusbalk-kaarten (klok) volgen kaartstijl */
+#clockStatusBar { border: 1px solid var(--cb); box-shadow: var(--shadow-md); }
+
+/* =========================================================
+   13 · DARK-MODE OVERRIDES
+   De oude dark-mode-laag in app.css (v1) zet hardgecodeerde
+   navy-tinten op componenten; hier zetten we die om naar de
+   Marble-donkertokens (deze file laadt als laatste → wint).
+   ========================================================= */
+body.dark-mode .app-header { background: var(--bg) !important; color: var(--ink); border-bottom-color: var(--l1); }
+body.dark-mode .login-screen, body.dark-mode #loginScreen { background: #14151A; }
+body.dark-mode .card,
+body.dark-mode .login-card { background: var(--card); border-color: var(--cb); box-shadow: var(--shadow-md); }
+body.dark-mode .form-input,
+body.dark-mode select.form-input,
+body.dark-mode input, body.dark-mode select, body.dark-mode textarea {
+    background: var(--card); border-color: var(--b1); color: var(--ink);
+}
+body.dark-mode .form-input::placeholder { color: var(--g3); }
+body.dark-mode .btn-outline { border-color: var(--b2); color: var(--ink); }
+body.dark-mode .btn-outline:hover { background: var(--wash); }
+body.dark-mode .tab-btn { color: var(--g1); }
+body.dark-mode .tab-btn.active { color: var(--ink); border-bottom-color: var(--ink); }
+body.dark-mode .tab-btn.active::after { background: var(--ink); }
+body.dark-mode .tabs { border-bottom-color: var(--l1); }
+body.dark-mode .date-strip button, body.dark-mode .date-chip { color: var(--g2); background: var(--card); border-color: var(--b1); }
+body.dark-mode .date-strip button.active, body.dark-mode .date-chip.active { background: var(--wash); border-color: var(--ink); color: var(--ink); }
+body.dark-mode .hour-entry, body.dark-mode .material-item { background: transparent; border-color: var(--l2); }
+body.dark-mode .timer-display { background: var(--card); }
+body.dark-mode .section-header h2, body.dark-mode .section-header h3 { color: var(--ink); }
+body.dark-mode .info-row { border-color: var(--l2); }
+body.dark-mode a { color: var(--purple2); }
+body.dark-mode .werkbon-summary { background: var(--card); border-color: var(--cb); }
+body.dark-mode .ws-header { background: var(--card); color: var(--g1); }
+body.dark-mode table th { background: var(--wash); color: var(--g1); }
+body.dark-mode table td { border-color: var(--l2); color: var(--txt2); }
+body.dark-mode #detailHeader { background: var(--card) !important; }
+body.dark-mode .search-box { background: var(--card); }
+body.dark-mode .qty-btn { background: var(--wash); color: var(--ink); border-color: var(--b1); }

@@ -77,6 +77,16 @@ const MollieAPI = {
         };
     },
 
+    /** v263: de deep-link terug naar DEZE app (build-afhankelijk scheme).
+     *  Wordt als redirectUrl meegestuurd met QR-/betaallink-betalingen: na
+     *  het betalen springt het toestel rechtstreeks terug naar de app, en
+     *  de lopende status-poll toont meteen "Betaald" of "Mislukt".
+     *  MainActivity vangt qewerkbon[debug]://mollie-payment-complete op. */
+    getAppRedirectUrl() {
+        const scheme = this.getAppId() === this.APP_ID_DEBUG ? 'qewerkbondebug' : 'qewerkbon';
+        return scheme + '://mollie-payment-complete?source=redirect';
+    },
+
     /** Check of de Mollie Tap app aanwezig is via de Java bridge. */
     isInstalled() {
         try {
@@ -132,6 +142,7 @@ const MollieAPI = {
                     referenceId: referenceId,
                     invoiceId: invoiceId || null,
                     logicId: logicId || null,
+                    redirectUrl: this.getAppRedirectUrl(),  // v263: direct terug naar de app
                     // v228: 'bancontact' (QR voor de bank-app) of 'any'
                     // (betaallink: Mollie-checkout, klant kiest de methode)
                     method: method === 'any' ? 'any' : 'bancontact',
@@ -172,6 +183,7 @@ const MollieAPI = {
                     description: String(description || '').slice(0, 255),
                     invoiceId: invoiceId || null,
                     logicId: logicId || null,
+                    redirectUrl: this.getAppRedirectUrl(),  // v263: direct terug naar de app
                 }),
                 signal: controller ? controller.signal : undefined,
             });

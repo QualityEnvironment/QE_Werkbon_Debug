@@ -1,4 +1,4 @@
-/**
+﻿/**
  * QE Werkbon App — Main Application Logic
  * Quality Environment bvba
  */
@@ -626,6 +626,8 @@ const app = {
         this.startPlanningPoll();
         // Dark mode herstellen
         if (localStorage.getItem('qe_dark_mode') === '1') document.body.classList.add('dark-mode');
+        // v260 (2.0): werf-modus herstellen (UI ×1,12 — zie marble.css)
+        if (localStorage.getItem('qe_werf_modus') === '1') document.body.classList.add('werf-modus');
     },
 
     // ========================================
@@ -714,6 +716,9 @@ const app = {
         // Dark mode toggle synchroniseren
         const dmToggle = document.getElementById('darkModeToggle');
         if (dmToggle) dmToggle.checked = document.body.classList.contains('dark-mode');
+        // v260 (2.0): werf-modus toggle synchroniseren
+        const wmToggle = document.getElementById('werfModusToggle');
+        if (wmToggle) wmToggle.checked = document.body.classList.contains('werf-modus');
         // App-versie tonen — Web (= www/git versie uit version.json)
         // en APK-versie (uit native bridge, vereist v106+ APK; degradeert sierlijk).
         const versionEl = document.getElementById('appVersionInfo');
@@ -1224,6 +1229,12 @@ const app = {
     async checkAndHandleOpenWorkordersBeforeClockOut(session) {
         if (!this.currentUser) return true; // safety: geen user → laat door
 
+        // v259 (op vraag van Levi): BUREEL klokt altijd vrij uit — geen
+        // werkbon-check, geen planning-fetch en zelfs geen herinnering.
+        // Werkbonnen zijn voor bureel geen voorwaarde om de dag te eindigen.
+        // (v165 toonde bureel nog een bevestigingsdialoog — die is weg.)
+        if (this._activeRole() === 'bureel') return true;
+
         // v126: loading-spinner tijdens de planning-fetch
         if (typeof this.showScanLoading === 'function') {
             try { this.showScanLoading('Openstaande werkbons checken…'); } catch(_) {}
@@ -1260,10 +1271,11 @@ const app = {
 
         const activeRole = this._activeRole();
 
-        // v165: Bureel én technieker mogen de dag eindigen met open werkbons —
-        // via een bevestigingsdialog. De werkbons blijven open zoals ze zijn en
-        // kunnen later verder afgewerkt worden. (Voorheen blokkeerde bureel altijd.)
-        if (activeRole === 'technieker' || activeRole === 'bureel') {
+        // v165: technieker mag de dag eindigen met open werkbons — via een
+        // bevestigingsdialog. De werkbons blijven open zoals ze zijn en kunnen
+        // later verder afgewerkt worden. (v259: bureel komt hier niet meer —
+        // die klokt hierboven al vrij uit, zonder check of herinnering.)
+        if (activeRole === 'technieker') {
             const accepted = await this._showTechniekerEndDayConfirm(openItems);
             return accepted;   // true = dag beëindigen, false = blijf ingeklokt
         }
@@ -2245,6 +2257,16 @@ const app = {
         if (!this.woData[woId]) {
             this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
         }
+
+        // v258: foto's van deze werkbon lazy herstellen uit IndexedDB —
+        // fire-and-forget, rendert opnieuw als er iets hersteld is en we
+        // nog steeds op dezelfde werkbon staan.
+        this._idbRestoreWO(woId).then(n => {
+            if (n > 0 && this.currentWO && String(this.currentWO.id) === String(woId)) {
+                this.renderPhotos();
+                this.toast(n + " foto('s) hersteld van vorige sessie");
+            }
+        }).catch(() => {});
 
         this.navigate('screenDetail');
 
@@ -4542,12 +4564,159 @@ const app = {
     // ========================================
     // FOTO'S
     // ========================================
+    // v258: foto-persistentie via IndexedDB — VEILIGE herintroductie (de
+    // v101-versie is in v103 verwijderd wegens camera-crashes; die schreef
+    // synchroon binnen de camera-flow). Nu:
+    //  - schrijven gebeurt UITGESTELD (setTimeout ná de render), fire-and-forget
+    //  - élke IDB-operatie zit in try/catch — een fout kan de foto-flow of de
+    //    app nooit breken; bij een open-fout stopt de opslag stil (alleen
+    //    in-memory, zoals v103-v257)
+    //  - herstel is lazy per werkbon in openWorkorder, niet bij init
+    //  - opruiming: bij verwijderen, bij versturen (_markWOSubmitted) en
+    //    automatisch alles ouder dan 14 dagen
+    _IDB_NAME: 'qe_werkbon_fotos',
+    _IDB_STORE: 'photos',
+    _idbDb: null,
+    _idbFailed: false,
+
+    async _idbOpen() {
+        if (this._idbDb) return this._idbDb;
+        if (this._idbFailed || !window.indexedDB) return null;
+        try {
+            this._idbDb = await new Promise((resolve, reject) => {
+                const req = indexedDB.open(this._IDB_NAME, 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(this._IDB_STORE)) {
+                        const st = db.createObjectStore(this._IDB_STORE, { keyPath: 'key' });
+                        st.createIndex('woId', 'woId', { unique: false });
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error || new Error('IDB open error'));
+                req.onblocked = () => reject(new Error('IDB geblokkeerd'));
+            });
+            // housekeeping: oude rijen (>14 dagen) opruimen, fire-and-forget
+            setTimeout(() => { try { this._idbCleanupOld(); } catch (_) {} }, 5000);
+            return this._idbDb;
+        } catch (e) {
+            this._idbFailed = true;  // deze sessie niet opnieuw proberen
+            console.warn('[Foto-IDB] open faalde — foto\'s alleen in-memory:', e && e.message);
+            return null;
+        }
+    },
+
+    /** Uitgesteld bewaren — wordt NA de render aangeroepen, nooit erin. */
+    _idbSavePhotoLater(woId, photo) {
+        setTimeout(async () => {
+            try {
+                const db = await this._idbOpen();
+                if (!db) return;
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(this._IDB_STORE, 'readwrite');
+                    tx.objectStore(this._IDB_STORE).put({
+                        key: String(woId) + '|' + String(photo.id),
+                        woId: String(woId),
+                        id: String(photo.id),
+                        name: photo.name || '',
+                        data: photo.data,
+                        addedAt: Date.now(),
+                    });
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch (e) {
+                console.warn('[Foto-IDB] bewaren faalde (foto blijft in-memory):', e && e.message);
+            }
+        }, 250);
+    },
+
+    _idbDeletePhoto(woId, photoId) {
+        setTimeout(async () => {
+            try {
+                const db = await this._idbOpen();
+                if (!db) return;
+                const tx = db.transaction(this._IDB_STORE, 'readwrite');
+                tx.objectStore(this._IDB_STORE).delete(String(woId) + '|' + String(photoId));
+            } catch (_) {}
+        }, 0);
+    },
+
+    _idbDeleteWO(woId) {
+        setTimeout(async () => {
+            try {
+                const db = await this._idbOpen();
+                if (!db) return;
+                const tx = db.transaction(this._IDB_STORE, 'readwrite');
+                const idx = tx.objectStore(this._IDB_STORE).index('woId');
+                const req = idx.openCursor(IDBKeyRange.only(String(woId)));
+                req.onsuccess = () => {
+                    const cur = req.result;
+                    if (cur) { cur.delete(); cur.continue(); }
+                };
+            } catch (_) {}
+        }, 0);
+    },
+
+    async _idbRestoreWO(woId) {
+        try {
+            const db = await this._idbOpen();
+            if (!db) return 0;
+            const rows = await new Promise((resolve, reject) => {
+                const tx = db.transaction(this._IDB_STORE, 'readonly');
+                const req = tx.objectStore(this._IDB_STORE).index('woId').getAll(IDBKeyRange.only(String(woId)));
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => reject(req.error);
+            });
+            if (!rows.length) return 0;
+            if (!this.woData[woId]) {
+                this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
+            }
+            const data = this.woData[woId];
+            data.photos = data.photos || [];
+            let added = 0;
+            for (const row of rows) {
+                if (!data.photos.some(p => String(p.id) === String(row.id))) {
+                    const numId = Number(row.id);
+                    data.photos.push({ id: isNaN(numId) ? row.id : numId, data: row.data, name: row.name });
+                    added++;
+                }
+            }
+            if (added > 0) console.log('[Foto-IDB]', added, 'foto(\'s) hersteld voor WO', woId);
+            return added;
+        } catch (e) {
+            console.warn('[Foto-IDB] herstel faalde:', e && e.message);
+            return 0;
+        }
+    },
+
+    _idbCleanupOld() {
+        const cutoff = Date.now() - 14 * 24 * 3600 * 1000;
+        try {
+            const db = this._idbDb;
+            if (!db) return;
+            const tx = db.transaction(this._IDB_STORE, 'readwrite');
+            const req = tx.objectStore(this._IDB_STORE).openCursor();
+            req.onsuccess = () => {
+                const cur = req.result;
+                if (cur) {
+                    if ((cur.value.addedAt || 0) < cutoff) cur.delete();
+                    cur.continue();
+                }
+            };
+        } catch (_) {}
+    },
+
     takePhoto() { document.getElementById('photoInput').click(); },
     pickPhoto() { document.getElementById('galleryInput').click(); },
 
     handlePhotos(input) {
         if (!input.files || !input.files.length || !this.currentWO) return;
         const files = Array.from(input.files);
+        // v258: woId vastklikken — de compress-callbacks zijn async en
+        // this.currentWO kan intussen een andere werkbon zijn (zelfde
+        // race-klasse als de v252 submit-snapshot).
+        const woId = this.currentWO.id;
         let loaded = 0;
         let failed = 0;
 
@@ -4565,20 +4734,23 @@ const app = {
                         name: name,
                     };
                     try {
-                        this.woData[this.currentWO.id].photos.push(photo);
+                        if (!this.woData[woId]) this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
+                        this.woData[woId].photos.push(photo);
                     } catch (errPush) {
                         console.error('[App] photo push faalde:', errPush);
                     }
-                    // v103+: foto's worden NIET meer in IndexedDB bewaard
-                    // (veroorzaakte camera-crash). Native MainActivity slaat
-                    // camera-foto's nu op in de Pictures/QE galerij, zodat
-                    // monteurs ze handmatig terug kunnen toevoegen na refresh.
+                    // v258: uitgesteld naar IndexedDB (fire-and-forget, ná de
+                    // render) zodat foto's een app-herstart overleven. De
+                    // v101-opslag crashte omdat hij ín de camera-flow schreef;
+                    // dit pad kan de flow niet meer raken. De native
+                    // Pictures/QE-galerijkopie (v103) blijft ook bestaan.
+                    this._idbSavePhotoLater(woId, photo);
                 } else {
                     failed++;
                 }
                 loaded++;
                 if (loaded === files.length) {
-                    this.renderPhotos();
+                    if (this.currentWO && String(this.currentWO.id) === String(woId)) this.renderPhotos();
                     if (failed > 0) {
                         this.toast(`${files.length - failed} foto('s) toegevoegd, ${failed} mislukt`);
                     } else {
@@ -4661,6 +4833,7 @@ const app = {
     removePhoto(photoId) {
         if (!this.currentWO) return;
         this.woData[this.currentWO.id].photos = this.woData[this.currentWO.id].photos.filter(p => p.id !== photoId);
+        this._idbDeletePhoto(this.currentWO.id, photoId);  // v258
         this.renderPhotos();
         this._saveWoData();
     },
@@ -5723,6 +5896,7 @@ const app = {
         if (!this.submittedHours[woId]) this.submittedHours[woId] = [];
         this.submittedHours[woId].push(...data.hours);
         this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
+        this._idbDeleteWO(woId);  // v258: bewaarde foto's opruimen na versturen
         if (!this.submittedWOs.includes(String(woId))) this.submittedWOs.push(String(woId));
         this._saveSubmittedWOs();
     },
@@ -7001,6 +7175,15 @@ const app = {
                 terminalId: terminal.id,
             });
             try { localStorage.setItem('qe_last_terminal_id', terminal.id); } catch (_) {}
+            // v261: staat Mollie Tap op DIT toestel (= dit toestel is zelf de
+            // terminal), dan openen we hem automatisch — de technieker hoeft
+            // de push-melding niet meer zelf open te tikken. Voor een terminal
+            // op een ánder toestel kan dat uiteraard niet vanaf hier.
+            let tapHier = false;
+            try {
+                tapHier = typeof QEBridge !== 'undefined'
+                    && QEBridge.isMollieTapInstalled && QEBridge.isMollieTapInstalled();
+            } catch (_) {}
             const tNaam = this.escapeHtml(terminal.description || terminal.serialNumber || terminal.id);
             if (container) {
                 container.innerHTML =
@@ -7013,12 +7196,21 @@ const app = {
                         '<div class="spinner" style="margin:14px auto"></div>' +
                         '<p id="terminalPayStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
                             'Bedrag staat op de terminal — de klant kan de kaart aanbieden…</p>' +
+                        (tapHier
+                            ? '<button class="btn btn-primary btn-full" style="margin-bottom:10px;padding:13px" ' +
+                                'onclick="try{QEBridge.bringMollieTapToFront()}catch(_){}">Mollie Tap openen (dit toestel)</button>'
+                            : '') +
                         '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
                             'padding:10px 16px;color:#444;font-size:13.5px" ' +
                             'onclick="app.closePaymentScreen()">Terug naar planning</button>' +
                     '</div>';
             }
             this._beginTerminalPoll(r.referenceId, invoiceResult);
+            // Auto-open ná het renderen — de poll loopt gewoon door en toont
+            // "✅ Betaald" zodra de technieker terugwisselt (webhook → KV).
+            if (tapHier) {
+                try { QEBridge.bringMollieTapToFront(); } catch (_) {}
+            }
         } catch (e) {
             // v254-review-fix: volwaardig foutscherm i.p.v. alleen een toast —
             // vanuit het keuzepad bleef anders een doodlopend scherm zonder
@@ -7862,6 +8054,10 @@ const app = {
                     statusHtml = `<span style="color:var(--qe-orange);font-weight:600">${this.escapeHtml(a.tijd)}</span>`;
                 } else if (a.uitgeklokt) {
                     statusHtml = `<span style="color:var(--qe-grey)">uitgeklokt om ${this.escapeHtml(a.uitgeklokt)}</span>`;
+                    // v257: extra blok toevoegen na de uitklok (bv. vergeten
+                    // namiddag) — van/tot-prompt, dag-split + aanvulling worden
+                    // automatisch herrekend. Kon voorheen enkel via Robaws.
+                    btnHtml = `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px;flex-shrink:0" onclick="app._manualClockPrompt('${safeEmail}','extra')">Extra blok</button>`;
                 } else if (a.ingeklokt) {
                     const inMin = toMin(a.ingeklokt);
                     const worked = (inMin != null) ? Math.max(0, nowMin - inMin) : null;
@@ -8028,18 +8224,28 @@ const app = {
         this._manualCtx = { email, mode };
         const nu = new Date();
         const defTime = String(nu.getHours()).padStart(2, '0') + ':' + String(nu.getMinutes()).padStart(2, '0');
+        const titel = mode === 'in' ? 'Inklokken' : mode === 'extra' ? 'Extra blok' : 'Uitklokken';
+        const uitleg = mode === 'in'
+            ? 'Maakt de tijdsregistratie in Robaws aan — de telefoon van ' + this.escapeHtml(a.name) + ' pikt dit vanzelf op.'
+            : mode === 'extra'
+                ? 'Voegt een extra tijdsblok toe ná de uitklok van ' + this.escapeHtml(a.uitgeklokt || '?') +
+                  '. De dag-split werk/overuren en de 8u-aanvulling worden automatisch herrekend.'
+                : 'Sluit de dag af met de normale regels (kwartierafronding, pauze, 8u-aanvulling, weekend).';
+        // v257: extra blok vraagt VAN én TOT; in/uit blijft één tijdveld
+        const vanVeld = mode === 'extra'
+            ? `<label style="font-size:13px;font-weight:600">Van</label>
+               <input type="time" id="manualClockVan" value=""
+                   style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:16px;box-sizing:border-box;margin:6px 0 12px">`
+            : '';
         this.showModal(`
-            <h3>${mode === 'in' ? 'Inklokken' : 'Uitklokken'}: ${this.escapeHtml(a.name)}</h3>
-            <p style="font-size:13px;color:var(--qe-grey);margin:6px 0 12px">
-                ${mode === 'in'
-                    ? 'Maakt de tijdsregistratie in Robaws aan — de telefoon van ' + this.escapeHtml(a.name) + ' pikt dit vanzelf op.'
-                    : 'Sluit de dag af met de normale regels (kwartierafronding, pauze, 8u-aanvulling, weekend).'}
-            </p>
-            <label style="font-size:13px;font-weight:600">Tijd</label>
+            <h3>${titel}: ${this.escapeHtml(a.name)}</h3>
+            <p style="font-size:13px;color:var(--qe-grey);margin:6px 0 12px">${uitleg}</p>
+            ${vanVeld}
+            <label style="font-size:13px;font-weight:600">${mode === 'extra' ? 'Tot' : 'Tijd'}</label>
             <input type="time" id="manualClockTime" value="${defTime}"
                 style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:16px;box-sizing:border-box;margin:6px 0 14px">
             <button class="btn btn-primary btn-full" onclick="app._manualClockConfirm()" style="margin-bottom:8px">
-                ${mode === 'in' ? 'Inklokken' : 'Uitklokken'}
+                ${titel}
             </button>
             <button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>
         `);
@@ -8056,14 +8262,24 @@ const app = {
             this.toast('Geef een geldige tijd (UU:MM)', true);
             return;
         }
+        // v257: extra blok heeft ook een geldige VAN-tijd nodig
+        let vanVal = null;
+        if (ctx.mode === 'extra') {
+            vanVal = document.getElementById('manualClockVan')?.value || '';
+            if (!/^\d{2}:\d{2}$/.test(vanVal)) {
+                this.toast('Geef een geldige VAN-tijd (UU:MM)', true);
+                return;
+            }
+        }
         if (this._manualClockBusy) return;  // dubbeltik-guard
         this._manualClockBusy = true;
         try {
             this.closeModal();
-            this.toast((ctx.mode === 'in' ? 'Inklokken' : 'Uitklokken') + ' van ' + a.name + '...');
+            const label = ctx.mode === 'in' ? 'Inklokken' : ctx.mode === 'extra' ? 'Extra blok' : 'Uitklokken';
+            this.toast(label + ' van ' + a.name + '...');
             const res = (ctx.mode === 'in')
                 ? await QEClock.manualClockIn(a, timeVal, user.name || 'bureel')
-                : await QEClock.manualClockOut(a, timeVal, user.name || 'bureel');
+                : await QEClock.manualClockOut(a, timeVal, user.name || 'bureel', vanVal);
             this.toast(res.message, !res.ok);
             this.loadClockAdmin();
         } finally {
@@ -12409,6 +12625,15 @@ const app = {
     toggleDarkMode(enabled) {
         document.body.classList.toggle('dark-mode', enabled);
         localStorage.setItem('qe_dark_mode', enabled ? '1' : '0');
+    },
+
+    // ========================================
+    // v260 (Werkbon 2.0): WERF-MODUS — UI-schaal ×1,12 (marble.css),
+    // alle hit-targets ≥ 48px; bedienbaar met handschoenen.
+    // ========================================
+    toggleWerfModus(enabled) {
+        document.body.classList.toggle('werf-modus', enabled);
+        localStorage.setItem('qe_werf_modus', enabled ? '1' : '0');
     },
 };
 
