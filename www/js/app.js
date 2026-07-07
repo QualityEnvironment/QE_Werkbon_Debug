@@ -10243,40 +10243,42 @@ const app = {
 
             let html = '';
 
-            // v179: maand-navigatie. "Volgende" is uitgeschakeld op de huidige
-            // maand (geen toekomst). Knoppen herladen met de nieuwe offset.
+            // v266 (Marble 1:1, prototype "UREN"): kop met maandlabel + grote
+            // "Uren"-titel + ‹ ›-pijltjes, daarna de 4-stats-grid met 2px
+            // ink-onderlijn (Totaal · Werkuren · Overuren · Dagen).
+            // MOTOR-SYNC: alleen de HTML-opmaak wijkt af van 1.x — alle
+            // databerekening hierboven is identiek gebleven.
+            const monthLabelNice = monthNames[target.getMonth()].charAt(0).toUpperCase()
+                + monthNames[target.getMonth()].slice(1) + ' ' + yyyy;
             html += `
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
-                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset - 1})" style="font-size:13px;padding:6px 12px">◀ Vorige maand</button>
-                    <span style="font-size:13px;font-weight:600;color:var(--qe-darkblue);flex:1;text-align:center">${monthLabel}</span>
-                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset + 1})" ${isCurrentMonth ? 'disabled' : ''} style="font-size:13px;padding:6px 12px;${isCurrentMonth ? 'opacity:0.4;pointer-events:none' : ''}">Volgende ▶</button>
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                        <div style="font-size:13px;color:var(--g1);margin-bottom:2px">${monthLabelNice}</div>
+                        <div style="font:400 34px var(--font);letter-spacing:-1px;margin-bottom:24px;color:var(--ink)">Uren</div>
+                    </div>
+                    <div style="display:flex;gap:6px;padding-top:6px">
+                        <button onclick="app.loadDagoverzicht(${offset - 1})" style="width:32px;height:32px;border:1px solid var(--b1);border-radius:2px;background:none;color:var(--g2);cursor:pointer;font-size:15px">‹</button>
+                        <button onclick="app.loadDagoverzicht(${offset + 1})" ${isCurrentMonth ? 'disabled' : ''} style="width:32px;height:32px;border:1px solid var(--b1);border-radius:2px;background:none;color:${isCurrentMonth ? 'var(--b2)' : 'var(--g2)'};cursor:pointer;font-size:15px;${isCurrentMonth ? 'pointer-events:none' : ''}">›</button>
+                    </div>
                 </div>`;
 
-            // Samenvatting kaart — v83: Totaal, Werkuren, Overuren, Werkdagen, Te laat
             html += `
-                <div class="card" style="margin-bottom:16px;padding:20px;background:var(--qe-darkblue);color:#fff;border-radius:16px;border:none">
-                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
-                    <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px">
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalHours}" data-dec="2">${fmt2(totalHours)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Totaal</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${werkurenTotal}" data-dec="2">${fmt2(werkurenTotal)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Werkuren</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${overurenTotal}" data-dec="2">${fmt2(overurenTotal)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Overuren</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalDays}" data-dec="0">${totalDays}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Werkdagen</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${lateCount}" data-dec="0">${lateCount}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Te laat</div>
-                        </div>
+                <div id="mbUrenStats" style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;padding-bottom:22px;border-bottom:2px solid var(--ink);margin-bottom:8px">
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${totalHours}" data-dec="2">${fmt2(totalHours)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">TOTAAL</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${werkurenTotal}" data-dec="2">${fmt2(werkurenTotal)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">WERKUREN</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--purple2)"><span class="qe-countup" data-count="${overurenTotal}" data-dec="2">${fmt2(overurenTotal)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">OVERUREN</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${totalDays}" data-dec="0">${totalDays}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">DAGEN</div>
                     </div>
                 </div>`;
 
@@ -10310,10 +10312,13 @@ const app = {
                             dayTotal += parseFloat(te.hours || te.billableHours || 0) || 0;
                         }
                     }
-                    html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
-                        <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
-                        <div style="font-size:12px;color:var(--qe-grey)">${fmt1(dayTotal)} uur</div>
-                    </div>`;
+                    // v266 (Marble): dag = één blok met hairline-onderlijn;
+                    // vetgedrukte dag links, totaal rechts (tabular-nums).
+                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
+                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
+                            <span style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${fmt1(dayTotal)} u</span>
+                        </div>`;
 
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
                     //   Werkuren (hourTypeId=1, article 185)  → ✅ groen, klant-werk
@@ -10330,14 +10335,14 @@ const app = {
                         const isAbsence = this._isAbsenceTijd(tijd);
                         // v197: afwezigheid → toon enkel het type, géén (forfaitaire) uren
                         if (isAbsence) {
-                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${tijdStyle.bg}">
-                                <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex;align-items:center">${tijdIcon || this.icon('calendar', { size: 18 })}</span>
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:500;color:${tijdColor}">${tijdStyle.label}</div>
-                                        <div style="font-size:11px;color:${tijdColor}">Geen uren gerekend</div>
-                                    </div>
+                            // Marble-blokrij: 30px chip + type + "Geen uren gerekend"
+                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px">
+                                <span style="width:30px;height:30px;border-radius:9px;background:var(--rwash);color:var(--red2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${tijdIcon || this.icon('calendar', { size: 15 })}</span>
+                                <div style="flex:1;min-width:0">
+                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">${tijdStyle.label}</div>
+                                    <div style="font-size:12px;color:var(--g1)">Geen uren gerekend</div>
                                 </div>
+                                <span style="font:500 14px var(--font);color:var(--red2)">—</span>
                             </div>`;
                             continue;
                         }
@@ -10349,15 +10354,13 @@ const app = {
                         });
 
                         if (teList.length === 0) {
-                            // Open werkbon zonder entries (nog niet uitgeklokt)
+                            // Open werkbon zonder entries (nog niet uitgeklokt) — Marble-blokrij
                             const ingeklokt = getField(wo, 'Ingeklokt') || '?';
-                            html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:#f1f8e9;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex">${this.icon('clock', { size: 18 })}</span>
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:500">${ingeklokt} → ...</div>
-                                        <div style="font-size:11px;color:${tijdColor}">${tijdIcon} ${tijd} — nog ingeklokt</div>
-                                    </div>
+                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:30px;height:30px;border-radius:9px;background:var(--gwash);color:var(--green2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('clock', { size: 15 })}</span>
+                                <div style="flex:1;min-width:0">
+                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">Nog ingeklokt · ${tijd}</div>
+                                    <div style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${ingeklokt} → …</div>
                                 </div>
                             </div>`;
                             continue;
@@ -10379,62 +10382,57 @@ const app = {
                                 : null;
                             const timeBlockTxt = (sStr && eStr) ? (sStr + ' → ' + eStr) : null;
 
-                            // v87: Styling per type — compensatie duidelijker als "overuren aftrek"
-                            // v166: bij afwezigheidstype (Ziek / Verlof / Feestdag / Inhaal / Sociaal verlof)
-                            // wordt de werkuren-styling overruled door de afwezigheids-kleur
-                            let icon, bg, fg, label;
-                            if (isAbsence) {
-                                icon = tijdStyle.icon || this.icon('calendar', { size: 18 });
-                                bg = tijdStyle.bg;
-                                fg = tijdStyle.color;
-                                label = tijdStyle.label;
-                            } else if (isCompensatie) {
+                            // v266 (Marble 1:1): blokrij per time-entry — 30px chip in
+                            // wash-tint, typelabel 13px/600, tijdsbereik 12px grijs,
+                            // waarde rechts in de typekleur (prototype typeMeta).
+                            // v180-logica (echte hourType-naam) blijft behouden.
+                            let icon, chipBg, chipFg, valFg, label;
+                            if (isCompensatie) {
                                 // Negatieve overuren — wordt afgetrokken van overuren-bank
                                 // omdat L&L gebruikt is om de 8u-baseline te vullen.
-                                icon = this.icon('minus', { size: 18 }); bg = '#ffebee'; fg = '#c62828';
-                                label = 'Overuren aftrek';
+                                icon = this.icon('minus', { size: 15 }); chipBg = 'var(--rwash)'; chipFg = 'var(--red2)'; valFg = 'var(--red2)';
+                                label = 'Aftrek overuren';
                             } else if (isLL) {
-                                icon = this.icon('package', { size: 18 }); bg = '#fff3e0'; fg = '#e65100';
+                                icon = this.icon('package', { size: 15 }); chipBg = 'var(--awash2)'; chipFg = 'var(--amber2)'; valFg = 'var(--amber2)';
                                 label = 'Laden & lossen';
                             } else if (isOveruren) {
-                                icon = this.icon('clock', { size: 18 }); bg = '#fff8e1'; fg = '#ef6c00';
+                                icon = this.icon('clock', { size: 15 }); chipBg = 'var(--pwash)'; chipFg = 'var(--purple2)'; valFg = 'var(--purple2)';
                                 label = htName || 'Overuren';   // v180: toon echte tag (bv "Overuren zaterdag")
                             } else {
-                                icon = this.icon('check-circle', { size: 18 }); bg = '#f1f8e9'; fg = '#2e7d32';
+                                icon = this.icon('check-circle', { size: 15 }); chipBg = 'var(--gwash)'; chipFg = 'var(--green2)'; valFg = 'var(--ink)';
                                 label = htName || 'Werkuren';
                             }
                             const absHrs = Math.abs(hours).toFixed(2);
-                            const headerLine = timeBlockTxt
+                            const range = timeBlockTxt
                                 ? timeBlockTxt
-                                : (isCompensatie ? '−' + absHrs + ' uur (aftrek)' : absHrs + ' uur');
-                            const subLine = timeBlockTxt
-                                ? (label + ' · ' + hours.toFixed(2) + 'u')
-                                : label;
-                            const rightTxt = isCompensatie ? '−' + absHrs + 'u' : hours.toFixed(2) + 'u';
+                                : (isCompensatie ? 'Correctie aanvulling' : 'Zonder tijdsblok');
+                            const rightTxt = isCompensatie ? '−' + absHrs : hours.toFixed(2);
 
-                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${bg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <div style="display:flex;align-items:center;justify-content:space-between">
-                                    <div style="display:flex;align-items:center;gap:10px;flex:1">
-                                        <span style="font-size:18px;color:${fg};display:inline-flex;align-items:center">${icon}</span>
-                                        <div>
-                                            <div style="font-size:14px;font-weight:500">${headerLine}</div>
-                                            <div style="font-size:11px;color:${fg}">${subLine}</div>
-                                        </div>
-                                    </div>
-                                    <div style="font-size:14px;color:${fg};font-weight:600">${rightTxt}</div>
+                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:30px;height:30px;border-radius:9px;background:${chipBg};color:${chipFg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</span>
+                                <div style="flex:1;min-width:0">
+                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">${label}</div>
+                                    <div style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${range}</div>
                                 </div>
+                                <span style="font:500 14px var(--font);font-variant-numeric:tabular-nums;color:${valFg};flex-shrink:0">${rightTxt}</span>
                             </div>`;
                         }
                     }
+                    html += `</div>`; // Marble: dag-blok sluiten
                 } else {
-                    const opacity = isWeekend ? '0.4' : '0.6';
-                    const label = isWeekend ? 'Weekend' : 'Geen registratie';
-                    html += `<div style="margin-bottom:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:#fafafa;border-radius:8px;opacity:${opacity}">
-                        <div style="font-size:13px;font-weight:500;color:var(--qe-grey)">${dayName} ${dateStr}</div>
-                        <div style="font-size:11px;color:var(--qe-grey);font-style:italic">${label}</div>
+                    // v266 (Marble): lege dag = zelfde blokstructuur, gedimd
+                    const opacity = isWeekend ? '0.55' : '0.75';
+                    const label = isWeekend ? 'Weekend' : 'Geen registraties';
+                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2);opacity:${opacity}">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between">
+                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
+                            <span style="font-size:12px;color:var(--g1)">${label}</span>
+                        </div>
                     </div>`;
                 }
             }
+
+            html += `<div style="font-size:12px;color:var(--g1);margin-top:14px">Tik op een registratie om een aanpassing aan te vragen.</div>`;
 
             container.innerHTML = html;
             this._animateCountUps(container);

@@ -16,82 +16,69 @@
 </head>
 <body>
 
-<!-- ========== LOGIN SCREEN ========== -->
-<div id="loginScreen" class="login-screen">
-    <!-- Liquid-achtergrond uit Claude Design "Animated Login" (decoratief, achter de inhoud) -->
-    <div class="login-blob login-blob-a" aria-hidden="true"></div>
-    <div class="login-blob login-blob-b" aria-hidden="true"></div>
-    <div id="loginLogoStage" class="login-logo-stage" aria-label="Quality Environment">
-        <div class="login-logo-tile"></div>
-        <svg class="login-logo-mark" viewBox="0 0 200 200" aria-hidden="true">
-            <rect x="44" y="35" width="110" height="110" rx="2" fill="var(--qe-orange)"></rect>
-            <path d="M91.9 147 L96.8 143.3 L103.5 140 L110.1 138.4 L116.8 138 L123.4 139.4 L130 141.3 L136.6 144 L143.2 146.6 L149.8 148.6 L156.4 150 L163 151 L164.7 152 L163 153.3 L156.4 155.6 L149.8 157 L143.2 156.6 L136.6 155 L130 152.3 L123.4 150 L116.8 148 L110.1 147.3 L103.5 147.3 L96.8 148 Z" fill="var(--qe-purple)"></path>
-            <circle cx="80.5" cy="89.8" r="37" fill="none" stroke="var(--qe-purple)" stroke-width="21"></circle>
-        </svg>
+<!-- ========== LOGIN SCREEN (Marble 1:1 — prototype "LOGIN") ========== -->
+<div id="loginScreen" class="login-screen mb-login">
+    <div class="mb-login-strip" aria-hidden="true"></div>
+    <svg class="mb-login-logo" viewBox="0 0 200 200" aria-label="Quality Environment">
+        <rect x="44" y="35" width="110" height="110" rx="2" fill="#F99D3E"></rect>
+        <path d="M91.9 147 L96.8 143.3 L103.5 140 L110.1 138.4 L116.8 138 L123.4 139.4 L130 141.3 L136.6 144 L143.2 146.6 L149.8 148.6 L156.4 150 L163 151 L164.7 152 L163 153.3 L156.4 155.6 L149.8 157 L143.2 156.6 L136.6 155 L130 152.3 L123.4 150 L116.8 148 L110.1 147.3 L103.5 147.3 L96.8 148 Z" fill="#6A2C91"></path>
+        <circle cx="80.5" cy="89.8" r="37" fill="none" stroke="#6A2C91" stroke-width="21"></circle>
+    </svg>
+    <div class="mb-login-title">Werkbon</div>
+    <div class="mb-login-sub">Quality Environment</div>
+
+    <!-- STAP 1: e-mail (motor-flow blijft: e-mail → PIN) -->
+    <div id="loginStepEmail" class="mb-login-form">
+        <input type="email" class="mb-login-input" id="loginEmail" placeholder="naam@qe.be"
+               autocomplete="email" autocapitalize="none"
+               onkeydown="if(event.key==='Enter') app.loginCheckEmail()">
+        <div id="loginError" class="mb-login-error"></div>
+        <button class="mb-login-btn" id="loginBtn" onclick="app.loginCheckEmail()">Volgende →</button>
     </div>
-    <p id="loginSubtitle" class="login-subtitle">Werkbon App</p>
-    <div class="login-card">
-        <h2 id="loginCardTitle">Inloggen</h2>
 
-        <!-- STAP 1: e-mail -->
-        <div id="loginStepEmail">
-            <div class="form-group">
-                <label>Email</label>
-                <input type="email" class="form-input" id="loginEmail" placeholder="naam@qe.be"
-                       autocomplete="email" autocapitalize="none"
-                       onkeydown="if(event.key==='Enter') app.loginCheckEmail()">
-            </div>
-            <div id="loginError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
-            <button class="btn btn-primary btn-full btn-lg" id="loginBtn" onclick="app.loginCheckEmail()">Volgende</button>
+    <!-- STAP 2: PIN invoeren -->
+    <div id="loginStepPin" class="mb-login-form" style="display:none">
+        <div class="mb-login-step2head">
+            <span id="loginPinSubtitle">Voer je PIN in</span>
+            <span id="loginEmailDisplay"></span>
         </div>
-
-        <!-- STAP 2: PIN invoeren -->
-        <div id="loginStepPin" style="display:none">
-            <div style="text-align:center;margin-bottom:12px;color:var(--qe-grey);font-size:13px">
-                <span id="loginPinSubtitle">Voer je PIN in</span><br>
-                <span id="loginEmailDisplay" style="color:var(--qe-darkblue);font-weight:500"></span>
-            </div>
-            <div class="form-group">
-                <label id="loginPinLabel">PIN (4–6 cijfers)</label>
-                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
-                       id="loginPin" placeholder="••••" autocomplete="off"
-                       style="text-align:center;font-size:24px;letter-spacing:8px"
-                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
-            </div>
-            <div id="loginPinConfirmGroup" class="form-group" style="display:none">
-                <label>Bevestig PIN</label>
-                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
-                       id="loginPinConfirm" placeholder="••••" autocomplete="off"
-                       style="text-align:center;font-size:24px;letter-spacing:8px"
-                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
-            </div>
-            <div id="loginPinError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
-            <button class="btn btn-primary btn-full btn-lg" id="loginPinBtn" onclick="app.loginSubmitPin()">Inloggen</button>
-            <button class="btn btn-outline btn-full btn-sm" style="margin-top:8px" onclick="app.loginBack()">Terug</button>
+        <label id="loginPinLabel" class="mb-login-label">PIN (4–6 cijfers)</label>
+        <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+               class="mb-login-input mb-login-pin" id="loginPin" placeholder="PIN" autocomplete="off"
+               onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+        <div id="loginPinConfirmGroup" style="display:none">
+            <label class="mb-login-label">Bevestig PIN</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="mb-login-input mb-login-pin" id="loginPinConfirm" placeholder="PIN" autocomplete="off"
+                   onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
         </div>
+        <div id="loginPinError" class="mb-login-error"></div>
+        <button class="mb-login-btn" id="loginPinBtn" onclick="app.loginSubmitPin()">Inloggen →</button>
+        <button class="mb-login-back" onclick="app.loginBack()">← Ander e-mailadres</button>
     </div>
 </div>
 
-<!-- ========== APP HEADER ========== -->
+<!-- ========== APP HEADER (Marble 1:1 — minimale topbar: QE · status · i · avatar) ========== -->
 <header class="app-header" id="appHeader">
     <button class="header-back" id="headerBack" onclick="app.goBack()">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
     </button>
+    <span class="header-qe">QE</span>
+    <!-- oude titel/datum blijven bestaan voor de motor (JS zet ze), maar zijn verborgen -->
     <span class="header-title" id="headerTitle">Dagplanning</span>
     <span class="header-date" id="headerDate"></span>
 
-    <!-- Profielblok rechts: foto + naam, klikbaar om profielscherm te openen -->
-    <button class="header-profile" id="headerProfile" onclick="app.openProfile()" title="Mijn profiel">
-        <span class="header-user-text" id="headerUser"></span>
-        <span class="header-avatar" id="headerAvatar">
-            <img id="headerAvatarImg" alt="" style="display:none">
-            <span id="headerAvatarFallback" class="header-avatar-fallback">?</span>
-        </span>
-    </button>
-
-    <button class="header-action" onclick="app.logout()" title="Uitloggen">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-    </button>
+    <span class="header-right">
+        <span id="headerClockStatus"></span>
+        <button class="header-info" onclick="QEMarble.tutOpen()" title="Uitleg over dit scherm">i</button>
+        <button class="header-profile" id="headerProfile" onclick="app.openProfile()" title="Mijn profiel">
+            <span class="header-user-text" id="headerUser"></span>
+            <span class="header-avatar" id="headerAvatar">
+                <img id="headerAvatarImg" alt="" style="display:none">
+                <span id="headerAvatarFallback" class="header-avatar-fallback">?</span>
+            </span>
+        </button>
+    </span>
 </header>
 
 <!-- ========== OFFLINE BAR ========== -->
@@ -99,6 +86,11 @@
 
 <!-- ========== SCREEN: PLANNING ========== -->
 <div class="screen active" id="screenPlanning">
+    <!-- Marble 1:1 volgorde: eerst de datumchips, dan de klok-kaart -->
+    <div class="date-strip" id="dateStrip">
+        <!-- Gevuld door JS -->
+    </div>
+
     <!-- Clock-in/out status bar -->
     <div id="clockStatusBar" style="display:none;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer" onclick="app.navigate('screenClock')">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -111,10 +103,6 @@
             </div>
             <div id="clockStatusAction" style="font-size:12px;opacity:0.6">Tik voor details →</div>
         </div>
-    </div>
-
-    <div class="date-strip" id="dateStrip">
-        <!-- Gevuld door JS -->
     </div>
 
     <div id="pendingPaymentsBanner"></div>
@@ -999,6 +987,9 @@
         <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
         <button class="btn btn-primary btn-full" onclick="app.profileChangePin()">PIN wijzigen</button>
     </div>
+
+    <!-- Marble: uitloggen hoort op Profiel (de topbar heeft geen uitlog-knop meer) -->
+    <button class="btn btn-outline" style="margin:4px 0 10px;padding:14px 30px" onclick="app.logout()">Uitloggen</button>
 </div>
 
 <!-- ========== SCREEN: ADMIN (alleen bureel) ========== -->
@@ -1052,10 +1043,8 @@
 
 <!-- ========== SCREEN: TIJDSREGISTRATIES OVERZICHT ========== -->
 <div class="screen" id="screenDagoverzicht">
-    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
-        <h2>Mijn registraties</h2>
-        <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht()" style="font-size:12px;padding:4px 10px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
-    </div>
+    <!-- Marble: de volledige kop (maandlabel + "Uren" + pijltjes) wordt door
+         loadDagoverzicht gerenderd — geen statische section-header meer. -->
     <div id="dagoverzichtContent">
         <div class="spinner"></div>
     </div>
@@ -1125,7 +1114,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
-        Uitgevoerd
+        Klaar
     </button>
 </nav>
 
@@ -1332,12 +1321,14 @@
 <!-- Clock-in/out systeem (NFC + GPS) -->
 <script src="js/clock.js"></script>
 <!-- Vloeibare login-animatie (Claude Design "Animated Login") -->
-<script src="js/liquid-login.js"></script>
+<!-- Marble: liquid-login vervangen door de Marble-login + wipe (marble-ui.js) -->
 <script src="js/qe-celebrations.js"></script>
 <!-- Hoofdapplicatie -->
 <script src="js/xlsx-writer.js"></script>
 <script src="js/uren-analyse.js"></script>
 <script src="js/app.js"></script>
+<!-- Marble UI-runtime (tutorial, wipe, loader, overgangen) — NA app.js laden -->
+<script src="js/marble-ui.js"></script>
 <script>
     // Service Worker (alleen als beschikbaar — voor offline gebruik)
     if ('serviceWorker' in navigator) {
