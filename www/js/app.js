@@ -7566,49 +7566,43 @@ const app = {
         // v79: planning statusbar moet 4 staten kunnen tonen:
         //   - Nog niet ingeklokt (NFC niet gescand vandaag)
         //   - Ingeklokt (actief, hoofd-shift loopt)
-        //   - L&L actief (📦 prominent)
-        //   - Uitgeklokt (🏁 finish-vlag)
+        //   - L&L actief
+        //   - Uitgeklokt
+        // v265 (Marble): rustige kaart + gekleurde status-dot i.p.v. gradients.
+        // MOTOR-SYNC: dit blok is een bewuste DESIGN-afwijking t.o.v. 1.x —
+        // bij het overzetten van motor-fixes deze Marble-versie laten staan.
+        bar.style.cssText = 'display:block;padding:14px 16px;border-radius:14px;margin-bottom:14px;cursor:pointer;' +
+            'background:var(--card);border:1px solid var(--cb);box-shadow:var(--shadow-md)';
+        const dot = (c) => '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;background:' + c + '"></span>';
+        text.style.color = 'var(--ink)';
+        sub.style.color = 'var(--g1)';
         const llActive = session && session.llActive;
         const llStartTxt = session && session.llStartTime ? session.llStartTime : '';
         if (llActive) {
             // L&L actief — krijgt voorrang in de statusbar
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-left:4px solid #1565c0';
-            icon.innerHTML = this.icon('package', { size: 22 });
+            icon.innerHTML = dot('var(--purple2)');
             text.textContent = 'Bezig met Laden & Lossen';
-            text.style.color = '#0d47a1';
             sub.textContent = llStartTxt ? ('Gestart om ' + llStartTxt) : 'Actief';
-            sub.style.color = '#1565c0';
         } else if (isActive) {
             // Ingeklokt (hoofd-shift)
-            const lateClass = isLate ? 'background:linear-gradient(135deg,#fff3e0,#ffccbc)' : 'background:linear-gradient(135deg,#e8f5e9,#c8e6c9)';
-            bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
-            icon.innerHTML = isLate ? this.icon('alert', { size: 22 }) : this.icon('check-circle', { size: 22 });
+            icon.innerHTML = dot(isLate ? 'var(--amber)' : 'var(--green2)');
             const activeTag = QEClock.getActiveTagName();
             const cleanTag = this._publicRemark(activeTag);
             text.textContent = `Actief sinds ${session.startTime}`;
-            text.style.color = isLate ? '#e65100' : '#2e7d32';
             sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Ingeklokt');
-            sub.style.color = isLate ? '#e65100' : '#2e7d32';
+            if (isLate) sub.style.color = 'var(--amber2)';
         } else if (clockTime) {
-            // Uitgeklokt — 🏁 finish-vlag
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e8eaf6,#c5cae9);border-left:4px solid #001E45';
-            icon.innerHTML = this.icon('flag', { size: 22 });
+            // Uitgeklokt
+            icon.innerHTML = dot('var(--g3)');
             text.textContent = `Uitgeklokt — ${clockTime}`;
-            text.style.color = '#001E45';
             sub.textContent = 'Klaar voor vandaag';
-            sub.style.color = '#3f51b5';
         } else {
             // Nog niet ingeclockt
             const isLateNow = QEClock.isLate();
-            const bg = isLateNow ? 'background:linear-gradient(135deg,#fce4ec,#ffcdd2)' : 'background:linear-gradient(135deg,#e3f2fd,#bbdefb)';
-            bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${bg}`;
-            icon.innerHTML = isLateNow ? this.icon('alert', { size: 22 }) : this.icon('clock', { size: 22 });
+            icon.innerHTML = dot(isLateNow ? 'var(--red2)' : 'var(--amber)');
             text.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
-            text.style.color = isLateNow ? '#c62828' : '#1565c0';
             sub.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
-            sub.style.color = isLateNow ? '#c62828' : '#1565c0';
+            if (isLateNow) sub.style.color = 'var(--red2)';
         }
     },
 

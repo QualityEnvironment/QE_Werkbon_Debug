@@ -422,3 +422,101 @@ body.dark-mode table td { border-color: var(--l2); color: var(--txt2); }
 body.dark-mode #detailHeader { background: var(--card) !important; }
 body.dark-mode .search-box { background: var(--card); }
 body.dark-mode .qty-btn { background: var(--wash); color: var(--ink); border-color: var(--b1); }
+
+/* =========================================================
+   14 · SCHERM-FIJNSLIJP (v265)
+   Correcties op JS-gegenereerde inline-styles en app.css-
+   regels die de token-remap niet raakte (screenshots Levi
+   7 juli): header-leesbaarheid, datumchips, sectielabels,
+   paarse CTA's → Marble.
+   ========================================================= */
+
+/* --- Topbar: alles wat op de navy balk wit was → Marble-grijs.
+       De naam ("Levi — Bureel") verhuist naar Profiel: alleen de
+       avatar blijft, zodat de titel niet meer afkapt. --- */
+.app-header .header-profile { color: var(--ink); }
+.app-header .header-profile:active { background: var(--wash); }
+.app-header .header-user-text { display: none; }
+.app-header .header-date { color: var(--g1); opacity: 1; margin-right: 12px; }
+.app-header .header-avatar { background: var(--wash); border: 1px solid var(--b2); }
+.header-avatar-fallback { color: var(--g1); }
+.app-header .header-back:active { background: var(--wash); }
+.app-header .header-title { font-size: 15px; }
+
+/* --- Datumchips: compacte horizontale pills i.p.v. hoge blokken --- */
+.date-strip { gap: 8px; padding: 4px 0 14px; }
+.date-chip {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 9px 14px;
+    border-radius: 24px;
+    border-width: 1px;
+    text-align: left;
+    box-shadow: none;
+}
+.date-chip .d-day { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; color: var(--g1); }
+.date-chip .d-num { font-size: 14px; font-weight: 600; line-height: 1; color: var(--ink); }
+.date-chip .d-month { display: none; }
+.date-chip .d-label { font-size: 12px; font-weight: 500; margin-top: 0; color: var(--g2); }
+.date-chip.active .d-day, .date-chip.active .d-label { color: var(--ink); }
+.date-chip.today .d-num { color: var(--accent); }
+
+/* --- Sectielabels: overal 12px 600 kapitaal grijs (Marble) —
+       ook de plain <h2>/<h3> zonder .section-title en de paarse
+       .detail-section h3 ("KLANTGEGEVENS") --- */
+.section-header h2, .section-header h3, .detail-section h3 {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--g1) !important;
+}
+body.dark-mode .section-header h2, body.dark-mode .section-header h3,
+body.dark-mode .detail-section h3 { color: var(--g1) !important; }
+.section-header .badge {
+    background: transparent;
+    color: var(--g1);
+    border: 1px solid var(--b1);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 8px;
+}
+
+/* --- Toggles: aan = ink (was paars) --- */
+.toggle-switch input:checked + .toggle-slider { background: var(--ink); }
+
+/* --- Klok-statusbar: neutrale basis (JS zet de status-dot) --- */
+#clockStatusText { color: var(--ink); }
+#clockStatusSub { color: var(--g1); opacity: 1 !important; }
+#clockStatusAction { color: var(--g2); opacity: 1 !important; font-weight: 500; }
+
+/* --- Paarse CTA's uit JS-templates → Marble-knoppen ---
+       "Navigeer" (werfadres) en terminal-bevestigen: navy hoekig;
+       "BTW tarief aanpassen": outline hoekig; BTW-rij: wash. */
+#clientInfo a[href*="maps"] {
+    background: var(--btn) !important;
+    color: var(--btnfg) !important;
+    border-radius: 2px !important;
+    padding: 8px 12px !important;
+}
+#btnConfirmTerminal {
+    background: var(--btn) !important;
+    color: var(--btnfg) !important;
+    border-radius: 2px !important;
+}
+.btw-change-btn {
+    border: 1px solid var(--b2) !important;
+    border-radius: 2px !important;
+    background: none !important;
+    color: var(--ink) !important;
+}
+.info-row.btw-row { background: var(--wash) !important; }
+#clientVatDisplay { color: var(--ink) !important; }
+
+/* --- Betaalmethode-wissel-kaart (blauwe gradient) → wash-kaart --- */
+.card[onclick*="openChangePaymentMethodModal"] {
+    background: var(--wash) !important;
+    border-left: 3px solid var(--ink) !important;
+}
