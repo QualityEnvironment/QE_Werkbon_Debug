@@ -34,6 +34,8 @@ const app = {
         'Inhaal rustdag':       { color: '#00695c', bg: '#e0f2f1', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 14A8 8 0 0 1 10 4a7 7 0 1 0 10 10z"/></svg>', label: 'Inhaal rustdag' },
         'Sociaal verlof':       { color: '#6a1b9a', bg: '#f3e5f5', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.2a3 3 0 0 1 0 5.6M21 20a6 6 0 0 0-4.5-5.8"/></svg>', label: 'Sociaal verlof' },
         'Tijdelijke werkloosheid': { color: '#455a64', bg: '#eceff1', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></svg>', label: 'Tijdelijke werkloosheid' },
+        // v256: onbetaalde, ongewettigde afwezigheid — donkerrood met slash-cirkel
+        'Onwettig afwezig':     { color: '#8e0000', bg: '#fbe9e7', icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6 18.4 18.4"/></svg>', label: 'Onwettig afwezig' },
     },
 
     _getTijdStyle(tijd) {
@@ -46,7 +48,8 @@ const app = {
     _isAbsenceTijd(tijd) {
         return tijd === 'Ziek' || tijd === 'Verlof'
             || tijd === 'Betaalde feestdag' || tijd === 'Inhaal rustdag'
-            || tijd === 'Sociaal verlof' || tijd === 'Tijdelijke werkloosheid';
+            || tijd === 'Sociaal verlof' || tijd === 'Tijdelijke werkloosheid'
+            || tijd === 'Onwettig afwezig';  // v256
     },
 
     _localDateStr(d, offsetDays) {
@@ -538,11 +541,16 @@ const app = {
         location.reload();
     },
 
-    // === Kaartbetaling: Mollie (debug) of Viva (release) ===
-    // Mollie Tap is in de RELEASE tijdelijk vergrendeld (werkt nog niet
-    // betrouwbaar op alle toestellen — zie Mollie-support). In debug blijft
-    // Mollie zichtbaar om te testen. Zet ENABLE_MOLLIE_IN_RELEASE op true en
-    // push via git om Mollie ook in de release weer te activeren.
+    // === Kaartbetaling ===
+    // v255 (op vraag van Levi): Mollie Tap (app-to-app, de rechtstreekse
+    // terminal-openingspoging op het eigen toestel) is OVERAL vergrendeld —
+    // ook in debug — tot de Softpay-attestatiekwestie is opgelost (zie
+    // MOLLIE-TAP-OPLOSSING.md). Viva Wallet is uit de betaalmethodes
+    // verwijderd; de veldmethodes zijn QR/betaallink en Terminal
+    // (pointofsale-push via de Worker, v254 — geen app-to-app nodig).
+    // Weer aanzetten: ENABLE_MOLLIE_TAP op true (debug) en voor release ook
+    // ENABLE_MOLLIE_IN_RELEASE op true, dan pushen.
+    ENABLE_MOLLIE_TAP: false,          // v255: masterschakelaar app-to-app Tap
     ENABLE_MOLLIE_IN_RELEASE: false,
     _isDebugBuild() {
         try {
@@ -552,17 +560,20 @@ const app = {
         } catch (e) {}
         return false; // onbekend → behandel als release (Mollie verborgen — veiligst)
     },
-    _mollieActive() { return this._isDebugBuild() || this.ENABLE_MOLLIE_IN_RELEASE === true; },
+    _mollieActive() {
+        return this.ENABLE_MOLLIE_TAP === true
+            && (this._isDebugBuild() || this.ENABLE_MOLLIE_IN_RELEASE === true);
+    },
     _applyCardPaymentMode() {
-        const on = this._mollieActive();
+        const on = this._mollieActive();   // v255: momenteel altijd false
         const set = (id, show, flex) => {
             const el = document.getElementById(id);
             if (el) el.style.display = show ? (flex ? 'flex' : '') : 'none';
         };
-        set('payMollieBtn', on, false);     // Mollie actief (debug / indien ingeschakeld)
-        set('payMollieLocked', !on, true);  // Mollie vergrendeld (release)
-        set('payVivaBtn', !on, false);      // Viva actief (release)
-        set('payVivaLocked', on, true);     // Viva vergrendeld (debug)
+        set('payMollieBtn', on, false);     // Mollie Tap actief (alleen na heractivering)
+        set('payMollieLocked', !on, true);  // Mollie Tap vergrendeld (huidige stand)
+        set('payVivaBtn', false, false);    // v255: Viva verwijderd uit de methodes
+        set('payVivaLocked', false, true);  // v255: ook de vergrendeld-kaart weg
     },
 
     // Login-succes → vloeibare overgang: het QE-logo smelt weg tot een draaiend
@@ -7198,7 +7209,8 @@ const app = {
                     : '') +
                 mkBtnHtml('QR code',       this.icon('card', { size: 20 }), 'QR code (scan & betaal)') +
                 mkBtnHtml('Terminal',      this.icon('card', { size: 20 }), 'Terminal (bedrag verschijnt op de terminal)') +
-                mkBtnHtml('Viva wallet',   this.icon('card', { size: 20 }), 'Viva Wallet (legacy)') +
+                // v255: Viva Wallet verwijderd uit de keuzes (code blijft slapend
+                // voor oude betaalcontexten met paymentMethod 'Viva wallet').
                 mkBtnHtml('Cash',          this.icon('cash', { size: 20 }), 'Cash') +
                 mkBtnHtml('Overschrijving',this.icon('bank', { size: 20 }), 'Overschrijving ter plaatse') +
                 mkBtnHtml('Via factuur',   this.icon('file', { size: 20 }), 'Via factuur') +
@@ -8418,11 +8430,12 @@ const app = {
 
     /** Start de Mollie Tap-to-Pay flow: bouw payload + launch via Java bridge. */
     async payWithMollieTap(invoiceResult) {
-        // v252: beleidsgate — 'Release-app: Mollie Tap vergrendeld'. Laatste
-        // verdedigingslinie voor alle aanroepende paden.
+        // v252: beleidsgate — Mollie Tap vergrendeld. Laatste verdedigings-
+        // linie voor alle aanroepende paden. v255: fallback naar het
+        // betaalmethode-scherm i.p.v. het (verwijderde) Viva-scherm.
         if (!this._mollieActive()) {
             this.toast('Mollie Tap is niet beschikbaar in deze app-versie', true);
-            this.showPaymentScreen(invoiceResult);
+            this.openChangePaymentMethodModal();
             return;
         }
         if (typeof MollieAPI === 'undefined') {
@@ -9365,7 +9378,6 @@ const app = {
     retryPendingPayment(invoiceId) {
         const pp = this._loadPendingPayments().find(p => String(p.invoiceId) === String(invoiceId));
         if (!pp) { this.toast('Factuur niet gevonden'); return; }
-        // Open betaalscherm met dezelfde factuur
         const invoiceResult = {
             invoice: {
                 id: pp.invoiceId,
@@ -9376,8 +9388,30 @@ const app = {
                 date: pp.date,
             },
             workOrder: { id: pp.workOrderId, logicId: pp.logicId },
+            workOrderId: pp.workOrderId,
         };
-        this.showPaymentScreen(invoiceResult);
+        // v255: het Viva-betaalscherm is verwijderd — bied voor déze factuur
+        // de actuele methodes aan: Terminal (pointofsale-push) of QR.
+        this._terminalCtx = invoiceResult;
+        this._mollieQrCtx = invoiceResult;
+        this.navigate('screenOverschrijving', false);
+        this.screenHistory = [];
+        const container = document.getElementById('overschrijvingContent');
+        if (container) {
+            const bedrag = parseFloat(pp.totalInclVat || 0);
+            container.innerHTML =
+                '<div style="text-align:center;padding:16px 12px 28px">' +
+                    '<h2 style="margin:4px 0 2px">Openstaande betaling</h2>' +
+                    '<p style="color:#666;margin:0 0 2px;font-size:13.5px">Factuur ' + this.escapeHtml(pp.logicId || '') + '</p>' +
+                    '<p style="font-size:26px;font-weight:700;margin:4px 0 18px">€ ' + (bedrag > 0 ? bedrag.toFixed(2) : '?') + '</p>' +
+                    '<button class="btn btn-primary btn-full" style="padding:14px;margin-bottom:10px" ' +
+                        'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Terminal — bedrag op de terminal</button>' +
+                    '<button class="btn btn-primary btn-full" style="padding:14px;margin-bottom:10px" ' +
+                        'onclick="app.showQrBetaalScherm(app._mollieQrCtx)">QR code — klant scant en betaalt</button>' +
+                    '<button style="margin-top:6px;background:none;border:1px solid #bbb;border-radius:8px;' +
+                        'padding:10px 16px;color:#444" onclick="app.closePaymentScreen()">Terug naar planning</button>' +
+                '</div>';
+        }
     },
 
     // Banner boven de planning met openstaande facturen

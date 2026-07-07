@@ -67,7 +67,8 @@ const RobawsAPI = {
 
     // v219: Tijd-types die een AFWEZIGHEID zijn (de Robaws-keuzelijst minus
     // "Op tijd"/"Te laat"). Eén bron voor klok, aanwezigheid en dagoverzicht.
-    ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof', 'Tijdelijke werkloosheid'],
+    // v256: + 'Onwettig afwezig' (door Levi toegevoegd aan de Robaws Tijd-lijst).
+    ABSENCE_TIJD: ['Ziek', 'Betaalde feestdag', 'Inhaal rustdag', 'Verlof', 'Sociaal verlof', 'Tijdelijke werkloosheid', 'Onwettig afwezig'],
 
     // v222b: vaste ontvangers voor automatische taken — één plek i.p.v.
     // losse hardcoded id's. Facturen & betalingen → Els (boekhouding),

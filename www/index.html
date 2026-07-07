@@ -608,13 +608,15 @@
     <div id="wbPaymentMethodSection" class="werkbon-summary mb-16">
         <div class="ws-header">Betaalmethode</div>
         <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px" id="paymentMethodBtns">
-            <!-- Kaartbetaling — Mollie (debug) of Viva (release). app._applyCardPaymentMode()
-                 toont de juiste op basis van de build. Release vergrendelt Mollie tot
-                 Mollie Tap betrouwbaar werkt (zet ENABLE_MOLLIE_IN_RELEASE in app.js op
-                 true + push via git om Mollie ook in de release weer aan te zetten). -->
+            <!-- v255: Mollie Tap (app-to-app) is OVERAL vergrendeld tot de
+                 Softpay-attestatiekwestie is opgelost (ENABLE_MOLLIE_TAP in
+                 app.js). Viva Wallet is verwijderd uit de betaalmethodes.
+                 De veldmethodes zijn QR/betaallink en Terminal (pointofsale-
+                 push via de Worker, v254). app._applyCardPaymentMode() toont
+                 hieronder de juiste Mollie Tap-kaart (actief/vergrendeld). -->
             <button id="payMollieBtn" class="btn btn-outline btn-full payment-method-btn" data-method="Mollie Tap"
                 onclick="app.selectPaymentMethod('Mollie Tap')"
-                style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
+                style="display:none;padding:12px 14px;font-size:15px;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
                 <span style="display:flex;flex-direction:column;line-height:1.3">
                     <span>Bancontact / kaart (Mollie)</span>                </span>
@@ -627,23 +629,8 @@
                 </span>
                 <span style="font-size:11px;background:#e8eaf0;color:#6a2c91;padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap">Uit</span>
             </div>
-            <button id="payVivaBtn" class="btn btn-outline btn-full payment-method-btn" data-method="Viva wallet"
-                onclick="app.selectPaymentMethod('Viva wallet')"
-                style="display:none;padding:12px 14px;font-size:15px;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
-                <span style="display:flex;flex-direction:column;line-height:1.3">
-                    <span>Viva Wallet (terminal)</span>
-                    <span style="font-size:11px;color:#1565c0">Kaartbetaling via terminal</span>
-                </span>
-            </button>
-            <div id="payVivaLocked" style="width:100%;padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;text-align:left;border:1px solid #e6e8ee;border-radius:12px;background:#f5f6f8;color:#9aa1ad;box-sizing:border-box">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6 14.5h4"/></svg>
-                <span style="display:flex;flex-direction:column;line-height:1.3;flex:1">
-                    <span>Viva Wallet (terminal)</span>
-                    <span style="font-size:11px;color:#b0b0b0">vergrendeld</span>
-                </span>
-                <span style="font-size:11px;background:#e8eaf0;color:#6a2c91;padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap">Uit</span>
-            </div>
+            <!-- v255: Viva Wallet-knoppen verwijderd (payVivaBtn/payVivaLocked) —
+                 de VivaAPI-code blijft slapend aanwezig voor oude betaalcontexten. -->
             <button class="btn btn-outline btn-full payment-method-btn" data-method="QR code"
                 onclick="app.selectPaymentMethod('QR code')"
                 style="padding:12px 14px;font-size:15px;display:flex;align-items:center;gap:10px;justify-content:flex-start;text-align:left">
@@ -844,6 +831,7 @@
                 <option>Verlof</option>
                 <option>Sociaal verlof</option>
                 <option>Tijdelijke werkloosheid</option>
+                <option>Onwettig afwezig</option><!-- v256: exact zoals in de Robaws Tijd-keuzelijst -->
             </select>
             <label style="font-size:13px;font-weight:600">Van</label>
             <input type="date" id="afwVan" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin:6px 0 12px;box-sizing:border-box">

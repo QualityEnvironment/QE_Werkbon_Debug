@@ -20,7 +20,8 @@
   'use strict';
 
   // ---- config (spiegelt de .env defaults van de PHP-tool) ----
-  var ABSENCE_CLASSES = ['sick', 'feestdag', 'rustdag', 'verlof', 'sociaalverlof'];
+  // v256: + 'onwettig' (Onwettig afwezig — onbetaald, 0 uren)
+  var ABSENCE_CLASSES = ['sick', 'feestdag', 'rustdag', 'verlof', 'sociaalverlof', 'onwettig'];
   var OVERTIME_HOURTYPE_IDS = { 2: true }; // 1 = werkuren, 2 = overuren
 
   /** v251: overuren-classificatie met de uursoort-namenmap. clock.js boekt
@@ -76,6 +77,7 @@
   function classifyTijd(tijd) {
     if (!tijd) return 'unknown';
     var low = String(tijd).toLowerCase();
+    if (low.indexOf('onwettig') !== -1) return 'onwettig';  // v256
     if (low.indexOf('ziek') !== -1) return 'sick';
     if (low.indexOf('feest') !== -1) return 'feestdag';
     if (low.indexOf('rust') !== -1) return 'rustdag';
@@ -370,14 +372,15 @@
       if (!D.ingeklokt && r.ingeklokt) D.ingeklokt = r.ingeklokt;
       if (r.uitgeklokt) D.uitgeklokt = r.uitgeklokt;
       if (r.tijd) D.tijd = r.tijd;
-      // class-prioriteit: sick > feestdag > rustdag > sociaalverlof > verlof > late > ontime
+      // class-prioriteit: sick > onwettig > feestdag > rustdag > sociaalverlof > verlof > late > ontime
       var c = r.tijdClass;
       if (c === 'sick') D.class = 'sick';
-      else if (c === 'feestdag' && D.class !== 'sick') D.class = 'feestdag';
-      else if (c === 'rustdag' && ['sick', 'feestdag'].indexOf(D.class) === -1) D.class = 'rustdag';
-      else if (c === 'sociaalverlof' && ['sick', 'feestdag', 'rustdag'].indexOf(D.class) === -1) D.class = 'sociaalverlof';
-      else if (c === 'verlof' && ['sick', 'feestdag', 'rustdag', 'sociaalverlof'].indexOf(D.class) === -1) D.class = 'verlof';
-      else if (c === 'late' && ['sick', 'feestdag', 'rustdag', 'sociaalverlof', 'verlof'].indexOf(D.class) === -1) D.class = 'late';
+      else if (c === 'onwettig' && D.class !== 'sick') D.class = 'onwettig';  // v256
+      else if (c === 'feestdag' && ['sick', 'onwettig'].indexOf(D.class) === -1) D.class = 'feestdag';
+      else if (c === 'rustdag' && ['sick', 'onwettig', 'feestdag'].indexOf(D.class) === -1) D.class = 'rustdag';
+      else if (c === 'sociaalverlof' && ['sick', 'onwettig', 'feestdag', 'rustdag'].indexOf(D.class) === -1) D.class = 'sociaalverlof';
+      else if (c === 'verlof' && ['sick', 'onwettig', 'feestdag', 'rustdag', 'sociaalverlof'].indexOf(D.class) === -1) D.class = 'verlof';
+      else if (c === 'late' && ['sick', 'onwettig', 'feestdag', 'rustdag', 'sociaalverlof', 'verlof'].indexOf(D.class) === -1) D.class = 'late';
 
       E.tot_work += r.workHours;
       E.tot_over += r.overtimeHours;
@@ -502,6 +505,7 @@
           if (cell3 && !wk3) {
             switch (cell3.class) {
               case 'sick': row.push({ v: 'Ziek', t: 's', s: 23 }); break;
+              case 'onwettig': row.push({ v: 'Onwettig afw.', t: 's', s: 23 }); break;  // v256: zelfde rode stijl als Ziek
               case 'feestdag': row.push({ v: 'Feestdag', t: 's', s: 26 }); break;
               case 'rustdag': row.push({ v: 'Rustdag', t: 's', s: 27 }); break;
               case 'verlof': row.push({ v: 'Verlof', t: 's', s: 28 }); break;
