@@ -544,12 +544,14 @@ body.dark-mode .detail-section h3 { color: var(--g1) !important; }
 .mb-head-sub { font-size: 13px; color: var(--g1); margin-bottom: 2px; }
 .mb-head-title { font: 400 34px var(--font); letter-spacing: -1px; color: var(--ink); }
 /* Alleen de schermen waar de oude section-header een TITEL-duplicaat is —
-   op Planning/Klok zijn section-headers inhoudslabels en blijven ze staan. */
-#screenProfile > .section-header:first-of-type,
-#screenUitgevoerd > .section-header:first-of-type,
-#screenAdmin > .section-header:first-of-type,
-#screenUrenAnalyse > .section-header:first-of-type,
-#screenAfwezigheid > .section-header:first-of-type { display: none; }
+   op Planning/Klok zijn section-headers inhoudslabels en blijven ze staan.
+   (v268: zonder :first-of-type — sinds de mb-head het eerste div-kind is,
+   matchte die pseudo nooit meer en stonden er dubbele koppen.) */
+#screenProfile > .section-header,
+#screenUitgevoerd > .section-header,
+#screenAdmin > .section-header,
+#screenUrenAnalyse > .section-header,
+#screenAfwezigheid > .section-header { display: none; }
 
 /* --- schermovergang: elke navigatie glijdt binnen zoals het prototype --- */
 .screen.active { animation: mbIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }

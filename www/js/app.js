@@ -6945,7 +6945,7 @@ const app = {
                 '<p style="font-size:14px;color:#444;margin:14px 6px 4px"><b>Scan om te betalen</b> — ' +
                     'de klant scant met de camera of bank-app en kiest zelf de betaalmethode ' +
                     '(Bancontact, kaart, Apple Pay…).</p>' +
-                '<p id="mollieQrStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
+                '<p id="mollieQrStatus" style="font-weight:600;color:var(--ink);margin:10px 0 16px">' +
                     'Wachten op betaling…</p>' +
                 '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
                     'padding:10px 16px;color:#444;font-size:13.5px" ' +
@@ -7194,7 +7194,7 @@ const app = {
                         '<p style="font-size:26px;font-weight:700;margin:4px 0 6px">€ ' + bedrag.toFixed(2) + '</p>' +
                         '<p style="color:#444;font-size:14px;margin:0 0 14px">op <b>' + tNaam + '</b></p>' +
                         '<div class="spinner" style="margin:14px auto"></div>' +
-                        '<p id="terminalPayStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
+                        '<p id="terminalPayStatus" style="font-weight:600;color:var(--ink);margin:10px 0 16px">' +
                             'Bedrag staat op de terminal — de klant kan de kaart aanbieden…</p>' +
                         (tapHier
                             ? '<button class="btn btn-primary btn-full" style="margin-bottom:10px;padding:13px" ' +
@@ -7374,9 +7374,9 @@ const app = {
 
         const mkBtnHtml = (key, icon, label) => {
             const isCurrent = (key === cur) || (key === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
-            const bg = isCurrent ? '#e3f2fd' : '#ffffff';
-            const border = isCurrent ? '#1565C0' : '#cfd8dc';
-            const tag = isCurrent ? ' <span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;font-weight:600;margin-left:6px">HUIDIG</span>' : '';
+            const bg = isCurrent ? 'var(--wash)' : 'var(--card)';
+            const border = isCurrent ? 'var(--ink)' : 'var(--b1)';
+            const tag = isCurrent ? ' <span style="font-size:10px;background:var(--btn);color:var(--btnfg);padding:2px 6px;border-radius:8px;font-weight:600;margin-left:6px">HUIDIG</span>' : '';
             return '<div onclick="app.changeLastPaymentMethod(\'' + key + '\')" ' +
                 'style="display:flex;align-items:center;gap:12px;padding:18px 16px;margin-bottom:10px;' +
                 'border:2px solid ' + border + ';border-radius:12px;background:' + bg + ';' +
@@ -10276,12 +10276,13 @@ const app = {
                             dayTotal += parseFloat(te.hours || te.billableHours || 0) || 0;
                         }
                     }
-                    // v266 (Marble): dag = één blok met hairline-onderlijn;
-                    // vetgedrukte dag links, totaal rechts (tabular-nums).
+                    // v266 (Marble): dag = één blok met hairline-onderlijn.
+                    // v268: het DAGTOTAAL is de hoofdzaak (groot, ink, rechts);
+                    // de opsplitsing eronder is bijzaak (compact, grijs).
                     html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)">
-                        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
                             <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
-                            <span style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${fmt1(dayTotal)} u</span>
+                            <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u</span>
                         </div>`;
 
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
@@ -10299,14 +10300,13 @@ const app = {
                         const isAbsence = this._isAbsenceTijd(tijd);
                         // v197: afwezigheid → toon enkel het type, géén (forfaitaire) uren
                         if (isAbsence) {
-                            // Marble-blokrij: 30px chip + type + "Geen uren gerekend"
-                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px">
-                                <span style="width:30px;height:30px;border-radius:9px;background:var(--rwash);color:var(--red2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${tijdIcon || this.icon('calendar', { size: 15 })}</span>
-                                <div style="flex:1;min-width:0">
-                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">${tijdStyle.label}</div>
-                                    <div style="font-size:12px;color:var(--g1)">Geen uren gerekend</div>
-                                </div>
-                                <span style="font:500 14px var(--font);color:var(--red2)">—</span>
+                            // v268: compacte bijzaak-rij (22px chip, grijze tekst).
+                            // Rood alleen voor Ziek/Onwettig; Verlof/Feestdag e.d. neutraal.
+                            const isRood = /ziek|onwettig/i.test(tijdStyle.label || '');
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px">
+                                <span style="width:22px;height:22px;border-radius:7px;background:${isRood ? 'var(--rwash)' : 'var(--wash)'};color:${isRood ? 'var(--red2)' : 'var(--g2)'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('calendar', { size: 12 })}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2)">${tijdStyle.label} <span style="color:var(--g3)">· geen uren gerekend</span></div>
+                                <span style="font-size:12.5px;color:${isRood ? 'var(--red2)' : 'var(--g3)'}">—</span>
                             </div>`;
                             continue;
                         }
@@ -10318,14 +10318,11 @@ const app = {
                         });
 
                         if (teList.length === 0) {
-                            // Open werkbon zonder entries (nog niet uitgeklokt) — Marble-blokrij
+                            // Open werkbon zonder entries (nog niet uitgeklokt) — compacte rij
                             const ingeklokt = getField(wo, 'Ingeklokt') || '?';
-                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <span style="width:30px;height:30px;border-radius:9px;background:var(--gwash);color:var(--green2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('clock', { size: 15 })}</span>
-                                <div style="flex:1;min-width:0">
-                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">Nog ingeklokt · ${tijd}</div>
-                                    <div style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${ingeklokt} → …</div>
-                                </div>
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:22px;height:22px;border-radius:7px;background:var(--gwash);color:var(--green2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('clock', { size: 12 })}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2)">Nog ingeklokt · ${tijd} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${ingeklokt} → …</span></div>
                             </div>`;
                             continue;
                         }
@@ -10354,16 +10351,16 @@ const app = {
                             if (isCompensatie) {
                                 // Negatieve overuren — wordt afgetrokken van overuren-bank
                                 // omdat L&L gebruikt is om de 8u-baseline te vullen.
-                                icon = this.icon('minus', { size: 15 }); chipBg = 'var(--rwash)'; chipFg = 'var(--red2)'; valFg = 'var(--red2)';
+                                icon = this.icon('minus', { size: 12 }); chipBg = 'var(--rwash)'; chipFg = 'var(--red2)'; valFg = 'var(--red2)';
                                 label = 'Aftrek overuren';
                             } else if (isLL) {
-                                icon = this.icon('package', { size: 15 }); chipBg = 'var(--awash2)'; chipFg = 'var(--amber2)'; valFg = 'var(--amber2)';
+                                icon = this.icon('package', { size: 12 }); chipBg = 'var(--awash2)'; chipFg = 'var(--amber2)'; valFg = 'var(--amber2)';
                                 label = 'Laden & lossen';
                             } else if (isOveruren) {
-                                icon = this.icon('clock', { size: 15 }); chipBg = 'var(--pwash)'; chipFg = 'var(--purple2)'; valFg = 'var(--purple2)';
+                                icon = this.icon('clock', { size: 12 }); chipBg = 'var(--pwash)'; chipFg = 'var(--purple2)'; valFg = 'var(--purple2)';
                                 label = htName || 'Overuren';   // v180: toon echte tag (bv "Overuren zaterdag")
                             } else {
-                                icon = this.icon('check-circle', { size: 15 }); chipBg = 'var(--gwash)'; chipFg = 'var(--green2)'; valFg = 'var(--ink)';
+                                icon = this.icon('check-circle', { size: 12 }); chipBg = 'var(--gwash)'; chipFg = 'var(--green2)'; valFg = 'var(--ink)';
                                 label = htName || 'Werkuren';
                             }
                             const absHrs = Math.abs(hours).toFixed(2);
@@ -10372,13 +10369,12 @@ const app = {
                                 : (isCompensatie ? 'Correctie aanvulling' : 'Zonder tijdsblok');
                             const rightTxt = isCompensatie ? '−' + absHrs : hours.toFixed(2);
 
-                            html += `<div style="display:flex;align-items:center;gap:12px;padding:6px 0 6px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <span style="width:30px;height:30px;border-radius:9px;background:${chipBg};color:${chipFg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</span>
-                                <div style="flex:1;min-width:0">
-                                    <div style="font-size:13px;font-weight:600;color:var(--ink)">${label}</div>
-                                    <div style="font-size:12px;color:var(--g1);font-variant-numeric:tabular-nums">${range}</div>
-                                </div>
-                                <span style="font:500 14px var(--font);font-variant-numeric:tabular-nums;color:${valFg};flex-shrink:0">${rightTxt}</span>
+                            // v268: opsplitsing = bijzaak — één compacte grijze regel
+                            // per blok (22px chip, label · bereik, waarde klein rechts).
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:22px;height:22px;border-radius:7px;background:${chipBg};color:${chipFg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${range}</span></div>
+                                <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${valFg};flex-shrink:0">${rightTxt}</span>
                             </div>`;
                         }
                     }
@@ -10618,21 +10614,12 @@ const app = {
                         localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
                     } catch(_) {}
 
-                    const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
-                        : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Via factuur' ? this.icon('file', { size: 14, style: 'vertical-align:-2px' })
-                        : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
+                    // v268 (Marble 1:1, prototype "uit-laatste"): witte kaart met
+                    // ink-accentrand — geen blauwe gradient/iconen meer.
                     paymentBtns = `
-                        <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
-                            <div style="display:flex;align-items:center;justify-content:space-between">
-                                <div style="flex:1">
-                                    <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${logicId} — € ${amount}</div>
-                                    <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
-                                </div>
-                            </div>
+                        <div onclick="app.openChangePaymentMethodModal()" style="padding:15px 18px;border-radius:14px;background:var(--card);border:1px solid var(--cb);border-left:3px solid var(--ink);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;margin-bottom:12px">
+                            <div style="font-size:13.5px;font-weight:600;color:var(--ink)">Laatste betaling · ${method}</div>
+                            <div style="font-size:12.5px;color:var(--g1);margin-top:3px">Factuur ${logicId} — € ${amount} · tik om de betaalwijze aan te passen</div>
                         </div>`;
                 } else {
                     // Fallback: localStorage context tonen als Robaws-fetch faalt of geen match
@@ -10642,61 +10629,45 @@ const app = {
                         const cInv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
                         const amount = parseFloat(cInv.totalInclVat || 0).toFixed(2);
                         const method = ctx.paymentMethod || '?';
-                        const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                            : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                            : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
-                            : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
-                            : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
                         paymentBtns = `
-                            <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
-                                <div style="display:flex;align-items:center;justify-content:space-between">
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
-                                        <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${ctx.invoiceLogicId || cInv.logicId || ''} — € ${amount}</div>
-                                        <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
-                                    </div>
-                                </div>
+                            <div onclick="app.openChangePaymentMethodModal()" style="padding:15px 18px;border-radius:14px;background:var(--card);border:1px solid var(--cb);border-left:3px solid var(--ink);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;margin-bottom:12px">
+                                <div style="font-size:13.5px;font-weight:600;color:var(--ink)">Laatste betaling · ${method}</div>
+                                <div style="font-size:12.5px;color:var(--g1);margin-top:3px">Factuur ${ctx.invoiceLogicId || cInv.logicId || ''} — € ${amount} · tik om de betaalwijze aan te passen</div>
                             </div>`;
                     }
                 }
             } catch(e) { console.warn('[App] Laatste betaling fetch fout:', e && e.message); }
 
+            // v268 (Marble 1:1, prototype "UITGEVOERD"): pwash-infokaart +
+            // platte werkbon-rijen met hairline i.p.v. kaarten/emoji's.
+            // MOTOR-SYNC: alleen de HTML-opmaak wijkt af van 1.x.
             let html = paymentBtns + `
-                <div class="card" style="margin-bottom:12px;background:rgba(106,44,145,0.06);border-left:3px solid var(--qe-purple)">
-                    <div style="font-size:13px;color:var(--qe-purple);font-weight:600">${this.icon('edit', { size: 14, style: 'vertical-align:-2px' })} Correctie-modus</div>
-                    <div style="font-size:12px;color:var(--qe-grey);margin-top:4px">Klik op een planning om uren of materialen te corrigeren. De originele werkbon blijft staan; er wordt een correctie-werkbon met het verschil aangemaakt.</div>
+                <div style="padding:13px 18px;border-radius:12px;background:var(--pwash);border:1px solid var(--pborder);margin-bottom:20px">
+                    <div style="font-size:12.5px;font-weight:600;color:var(--purple2)">Correctie-modus</div>
+                    <div style="font-size:12px;color:var(--g2);margin-top:3px;line-height:1.5">Tik op een werkbon om uren of materialen te corrigeren. De originele werkbon blijft staan; het verschil gaat in een correctie-werkbon.</div>
                 </div>`;
 
             Object.keys(grouped).sort().reverse().forEach(dateStr => {
                 const d = new Date(dateStr + 'T12:00:00');
                 const isToday = dateStr === this._localDateStr();
-                const label = isToday ? 'Vandaag' : `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}`;
+                const label = isToday ? 'VANDAAG' : `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}`.toUpperCase();
 
-                html += `<div class="section-header mt-16"><h3 style="font-size:14px">${label}</h3></div>`;
+                html += `<div style="font-size:12px;font-weight:600;color:var(--g1);letter-spacing:0.5px;margin:16px 0 4px">${label}</div>`;
 
                 grouped[dateStr].forEach(p => {
                     const totH = (p.cumulatief && p.cumulatief.totalHours) || 0;
                     const matCount = (p.cumulatief && p.cumulatief.materials && p.cumulatief.materials.length) || 0;
                     const corrBadge = p.aantalWerkbonnen > 1
-                        ? `<span style="background:var(--qe-orange);color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;margin-left:6px">${p.aantalWerkbonnen - 1} correctie${p.aantalWerkbonnen > 2 ? 's' : ''}</span>`
+                        ? `<span style="font-size:10.5px;font-weight:600;color:var(--amber2);border:1px solid var(--aborder2);border-radius:10px;padding:1px 8px;margin-left:8px;white-space:nowrap">${p.aantalWerkbonnen - 1} correctie${p.aantalWerkbonnen > 2 ? 's' : ''}</span>`
                         : '';
 
                     html += `
-                        <div class="card" style="margin-bottom:8px;cursor:pointer" onclick="app.openCorrectie('${p.planningItemId}')">
-                            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                                <div style="flex:1">
-                                    <div style="font-size:15px;font-weight:500">${this.escapeHtml(p.clientName || 'Onbekend')}${corrBadge}</div>
-                                    ${p.clientAddress ? `<div style="font-size:12px;color:var(--qe-grey);margin-top:2px">📍 ${this.escapeHtml(p.clientAddress)}</div>` : ''}
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:4px">
-                                        ⏱ ${this.formatDecimalHours(totH)} · 📦 ${matCount} item${matCount !== 1 ? 's' : ''}
-                                    </div>
-                                </div>
-                                <div style="text-align:right">
-                                    ${p.origineelLogicId ? `<div style="font-size:13px;font-weight:600;color:var(--qe-purple)">${this.escapeHtml(p.origineelLogicId)}</div>` : ''}
-                                    ${p.orderLogicId ? `<div style="font-size:11px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(p.orderLogicId)}</div>` : ''}
-                                    <div style="font-size:18px;color:var(--qe-purple);margin-top:6px">${this.icon('edit', { size: 18 })}</div>
-                                </div>
+                        <div style="padding:15px 0;border-bottom:1px solid var(--l1);cursor:pointer" onclick="app.openCorrectie('${p.planningItemId}')">
+                            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+                                <span style="font-size:15.5px;font-weight:500;color:var(--ink);min-width:0">${this.escapeHtml(p.clientName || 'Onbekend')}${corrBadge}</span>
+                                <span style="font-size:12px;font-weight:600;color:var(--purple2);flex-shrink:0">${this.escapeHtml(p.origineelLogicId || p.orderLogicId || '')}</span>
                             </div>
+                            <div style="font-size:12.5px;color:var(--g1);margin-top:4px">${this.formatDecimalHours(totH)} · ${matCount} item${matCount !== 1 ? 's' : ''}</div>
                         </div>`;
                 });
             });
