@@ -1,84 +1,96 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="nl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#26334B">
-    <title>QE Werkbon 2.0</title>
+    <meta name="theme-color" content="#001E45">
+    <title>QE Werkbon</title>
     <link rel="manifest" href="manifest.json">
-    <!-- v260 (Werkbon 2.0): Archivo is gebundeld in assets/fonts (offline);
-         de Google Fonts-CDN-links zijn vervangen door de Marble-laag. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/app.css">
     <link rel="stylesheet" href="css/redesign.css">
-    <link rel="stylesheet" href="css/marble.css">
 </head>
 <body>
 
-<!-- ========== LOGIN SCREEN (Marble 1:1 — prototype "LOGIN") ========== -->
-<div id="loginScreen" class="login-screen mb-login">
-    <div class="mb-login-strip" aria-hidden="true"></div>
-    <svg class="mb-login-logo" viewBox="0 0 200 200" aria-label="Quality Environment">
-        <rect x="44" y="35" width="110" height="110" rx="2" fill="#F99D3E"></rect>
-        <path d="M91.9 147 L96.8 143.3 L103.5 140 L110.1 138.4 L116.8 138 L123.4 139.4 L130 141.3 L136.6 144 L143.2 146.6 L149.8 148.6 L156.4 150 L163 151 L164.7 152 L163 153.3 L156.4 155.6 L149.8 157 L143.2 156.6 L136.6 155 L130 152.3 L123.4 150 L116.8 148 L110.1 147.3 L103.5 147.3 L96.8 148 Z" fill="#6A2C91"></path>
-        <circle cx="80.5" cy="89.8" r="37" fill="none" stroke="#6A2C91" stroke-width="21"></circle>
-    </svg>
-    <div class="mb-login-title">Werkbon</div>
-    <div class="mb-login-sub">Quality Environment</div>
-
-    <!-- STAP 1: e-mail (motor-flow blijft: e-mail → PIN) -->
-    <div id="loginStepEmail" class="mb-login-form">
-        <input type="email" class="mb-login-input" id="loginEmail" placeholder="naam@qe.be"
-               autocomplete="email" autocapitalize="none"
-               onkeydown="if(event.key==='Enter') app.loginCheckEmail()">
-        <div id="loginError" class="mb-login-error"></div>
-        <button class="mb-login-btn" id="loginBtn" onclick="app.loginCheckEmail()">Volgende →</button>
+<!-- ========== LOGIN SCREEN ========== -->
+<div id="loginScreen" class="login-screen">
+    <!-- Liquid-achtergrond uit Claude Design "Animated Login" (decoratief, achter de inhoud) -->
+    <div class="login-blob login-blob-a" aria-hidden="true"></div>
+    <div class="login-blob login-blob-b" aria-hidden="true"></div>
+    <div id="loginLogoStage" class="login-logo-stage" aria-label="Quality Environment">
+        <div class="login-logo-tile"></div>
+        <svg class="login-logo-mark" viewBox="0 0 200 200" aria-hidden="true">
+            <rect x="44" y="35" width="110" height="110" rx="2" fill="var(--qe-orange)"></rect>
+            <path d="M91.9 147 L96.8 143.3 L103.5 140 L110.1 138.4 L116.8 138 L123.4 139.4 L130 141.3 L136.6 144 L143.2 146.6 L149.8 148.6 L156.4 150 L163 151 L164.7 152 L163 153.3 L156.4 155.6 L149.8 157 L143.2 156.6 L136.6 155 L130 152.3 L123.4 150 L116.8 148 L110.1 147.3 L103.5 147.3 L96.8 148 Z" fill="var(--qe-purple)"></path>
+            <circle cx="80.5" cy="89.8" r="37" fill="none" stroke="var(--qe-purple)" stroke-width="21"></circle>
+        </svg>
     </div>
+    <p id="loginSubtitle" class="login-subtitle">Werkbon App</p>
+    <div class="login-card">
+        <h2 id="loginCardTitle">Inloggen</h2>
 
-    <!-- STAP 2: PIN invoeren -->
-    <div id="loginStepPin" class="mb-login-form" style="display:none">
-        <div class="mb-login-step2head">
-            <span id="loginPinSubtitle">Voer je PIN in</span>
-            <span id="loginEmailDisplay"></span>
+        <!-- STAP 1: e-mail -->
+        <div id="loginStepEmail">
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" class="form-input" id="loginEmail" placeholder="naam@qe.be"
+                       autocomplete="email" autocapitalize="none"
+                       onkeydown="if(event.key==='Enter') app.loginCheckEmail()">
+            </div>
+            <div id="loginError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
+            <button class="btn btn-primary btn-full btn-lg" id="loginBtn" onclick="app.loginCheckEmail()">Volgende</button>
         </div>
-        <label id="loginPinLabel" class="mb-login-label">PIN (4–6 cijfers)</label>
-        <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-               class="mb-login-input mb-login-pin" id="loginPin" placeholder="PIN" autocomplete="off"
-               onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
-        <div id="loginPinConfirmGroup" style="display:none">
-            <label class="mb-login-label">Bevestig PIN</label>
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-login-input mb-login-pin" id="loginPinConfirm" placeholder="PIN" autocomplete="off"
-                   onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+
+        <!-- STAP 2: PIN invoeren -->
+        <div id="loginStepPin" style="display:none">
+            <div style="text-align:center;margin-bottom:12px;color:var(--qe-grey);font-size:13px">
+                <span id="loginPinSubtitle">Voer je PIN in</span><br>
+                <span id="loginEmailDisplay" style="color:var(--qe-darkblue);font-weight:500"></span>
+            </div>
+            <div class="form-group">
+                <label id="loginPinLabel">PIN (4–6 cijfers)</label>
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
+                       id="loginPin" placeholder="••••" autocomplete="off"
+                       style="text-align:center;font-size:24px;letter-spacing:8px"
+                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+            </div>
+            <div id="loginPinConfirmGroup" class="form-group" style="display:none">
+                <label>Bevestig PIN</label>
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="form-input"
+                       id="loginPinConfirm" placeholder="••••" autocomplete="off"
+                       style="text-align:center;font-size:24px;letter-spacing:8px"
+                       onkeydown="if(event.key==='Enter') app.loginSubmitPin()">
+            </div>
+            <div id="loginPinError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:12px"></div>
+            <button class="btn btn-primary btn-full btn-lg" id="loginPinBtn" onclick="app.loginSubmitPin()">Inloggen</button>
+            <button class="btn btn-outline btn-full btn-sm" style="margin-top:8px" onclick="app.loginBack()">Terug</button>
         </div>
-        <div id="loginPinError" class="mb-login-error"></div>
-        <button class="mb-login-btn" id="loginPinBtn" onclick="app.loginSubmitPin()">Inloggen →</button>
-        <button class="mb-login-back" onclick="app.loginBack()">← Ander e-mailadres</button>
     </div>
 </div>
 
-<!-- ========== APP HEADER (Marble 1:1 — minimale topbar: QE · status · i · avatar) ========== -->
+<!-- ========== APP HEADER ========== -->
 <header class="app-header" id="appHeader">
     <button class="header-back" id="headerBack" onclick="app.goBack()">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
     </button>
-    <span class="header-qe">QE</span>
-    <!-- oude titel/datum blijven bestaan voor de motor (JS zet ze), maar zijn verborgen -->
     <span class="header-title" id="headerTitle">Dagplanning</span>
     <span class="header-date" id="headerDate"></span>
 
-    <span class="header-right">
-        <span id="headerClockStatus"></span>
-        <button class="header-info" onclick="QEMarble.tutOpen()" title="Uitleg over dit scherm">i</button>
-        <button class="header-profile" id="headerProfile" onclick="app.openProfile()" title="Mijn profiel">
-            <span class="header-user-text" id="headerUser"></span>
-            <span class="header-avatar" id="headerAvatar">
-                <img id="headerAvatarImg" alt="" style="display:none">
-                <span id="headerAvatarFallback" class="header-avatar-fallback">?</span>
-            </span>
-        </button>
-    </span>
+    <!-- Profielblok rechts: foto + naam, klikbaar om profielscherm te openen -->
+    <button class="header-profile" id="headerProfile" onclick="app.openProfile()" title="Mijn profiel">
+        <span class="header-user-text" id="headerUser"></span>
+        <span class="header-avatar" id="headerAvatar">
+            <img id="headerAvatarImg" alt="" style="display:none">
+            <span id="headerAvatarFallback" class="header-avatar-fallback">?</span>
+        </span>
+    </button>
+
+    <button class="header-action" onclick="app.logout()" title="Uitloggen">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>
 </header>
 
 <!-- ========== OFFLINE BAR ========== -->
@@ -86,11 +98,6 @@
 
 <!-- ========== SCREEN: PLANNING ========== -->
 <div class="screen active" id="screenPlanning">
-    <!-- Marble 1:1 volgorde: eerst de datumchips, dan de klok-kaart -->
-    <div class="date-strip" id="dateStrip">
-        <!-- Gevuld door JS -->
-    </div>
-
     <!-- Clock-in/out status bar -->
     <div id="clockStatusBar" style="display:none;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer" onclick="app.navigate('screenClock')">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -103,6 +110,10 @@
             </div>
             <div id="clockStatusAction" style="font-size:12px;opacity:0.6">Tik voor details →</div>
         </div>
+    </div>
+
+    <div class="date-strip" id="dateStrip">
+        <!-- Gevuld door JS -->
     </div>
 
     <div id="pendingPaymentsBanner"></div>
@@ -697,56 +708,80 @@
     </div>
 </div>
 
-<!-- ========== SCREEN: KLOK (Marble 1:1 — prototype "KLOK") ========== -->
+<!-- ========== SCREEN: KLOK (inclocken) ========== -->
 <div class="screen" id="screenClock">
-    <!-- Grote klok-kaart (prototype kl-card) — gevuld door _renderClockSessionUI -->
-    <div id="clockHeroCard" style="text-align:center;padding:34px 20px;border:1px solid var(--cb);border-radius:14px;background:var(--card);box-shadow:0 2px 10px rgba(38,51,75,0.05);margin-bottom:20px;transition:border-color 0.3s">
-        <div id="clockBigTime" style="font:400 50px var(--font);letter-spacing:-2px;font-variant-numeric:tabular-nums;color:var(--ink)">––:––</div>
-        <div id="clockHeroLine" style="width:44px;height:2px;background:var(--amber);margin:12px auto 14px"></div>
-        <div id="clockBigText" style="font-size:13px;font-weight:600;color:var(--amber)"></div>
-        <div id="clockBigStatus" style="font-size:12px;color:var(--g1);margin-top:6px"></div>
+    <div style="text-align:center;padding:20px 16px 0">
+        <div id="clockBigStatus" style="font-size:64px;margin-bottom:8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <div id="clockBigText" style="font-size:22px;font-weight:700;color:var(--qe-darkblue);margin-bottom:4px"></div>
+        <div id="clockBigTime" style="font-size:16px;color:var(--qe-grey);margin-bottom:20px"></div>
     </div>
 
-    <!-- Legacy-containers: blijven bestaan voor de motor, Marble verbergt ze -->
-    <div class="card mb-16" id="clockNfcCard" style="display:none;text-align:center;padding:20px"></div>
+    <!-- NFC instructie (verborgen als al ingeclockt) -->
+    <div class="card mb-16" id="clockNfcCard" style="text-align:center;padding:20px">
+        <div style="font-size:32px;margin-bottom:8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M11 18h2"/></svg></div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
+        <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
+    </div>
+
+    <!-- Actieve sessie info (verschijnt na inclocken) -->
     <div class="card mb-16" id="clockActiveSession" style="display:none;padding:16px">
         <div id="clockActiveContent"></div>
     </div>
 
-    <!-- Voltooide sessies vandaag (prototype "VANDAAG") -->
+    <!-- Voltooide sessies vandaag -->
     <div id="clockCompletedSection" style="display:none">
-        <div style="font-size:12px;font-weight:600;color:var(--g1);letter-spacing:0.5px;margin-bottom:8px">VANDAAG</div>
+        <div class="section-header">
+            <h3 style="font-size:14px">Registraties vandaag</h3>
+        </div>
         <div id="clockCompletedList" class="mb-16"></div>
     </div>
 
-    <!-- Afronding-uitleg: inklapbaar zoals het prototype (kl-round) -->
-    <div onclick="QEMarble.toggleCollapse('mbRoundBody','mbRoundChev')" style="padding:14px 16px;border-radius:12px;background:var(--awash);border:1px solid var(--aborder);cursor:pointer;margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:13px;font-weight:600;color:var(--amber2)">Hoe wordt mijn tijd afgerond?</span>
-            <span id="mbRoundChev" style="color:var(--amber2);font-size:12px">▾</span>
-        </div>
-        <div id="mbRoundBody" style="display:none;font-size:12.5px;color:var(--ambertxt);line-height:1.65;margin-top:10px">
-            Kwartier-afronding met <b>4 minuten tolerantie</b>. Inklokken rondt naar boven
-            (06:48 → 06:45, 06:50 → 07:00), uitklokken naar beneden (15:28 → 15:30,
-            15:25 → 15:15).<br><br>
-            <b>Je startuur:</b> klok je vroeger in dan je startuur, dan tellen je uren pas
-            vanaf je startuur. Vroeger gevraagd door de projectleider? Klok dan in
-            <b>in de camionet</b> — dan tellen je uren wél vanaf je scan.
-        </div>
-    </div>
-
-    <!-- Mijn week (prototype "DEZE WEEK") -->
-    <div style="font-size:12px;font-weight:600;color:var(--g1);letter-spacing:0.5px;border-bottom:2px solid var(--ink);padding-bottom:8px">DEZE WEEK</div>
-    <div id="clockHistory" class="mb-16">
-        <p class="text-grey text-sm text-center">Laden...</p>
-    </div>
-
-    <!-- Sync (prototype: rustige outline-knop onderaan) -->
-    <div id="clockSyncCard" style="margin-bottom:16px">
-        <button onclick="QEClock.syncPending()" style="width:100%;padding:13px;border:1px solid var(--b1);border-radius:2px;background:none;color:var(--g2);font:500 12.5px var(--font);cursor:pointer">Offline registraties synchroniseren</button>
-        <div style="font-size:11px;color:var(--g1);margin-top:6px;text-align:center" id="clockPendingCount">
+    <!-- Sync knop -->
+    <div class="card mb-16" id="clockSyncCard" style="padding:12px;text-align:center">
+        <button class="btn btn-full" onclick="QEClock.syncPending()"
+            style="padding:10px;font-size:13px;font-weight:500;background:var(--qe-grey-light);color:var(--qe-dark);border:1px solid #ddd;border-radius:8px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg> Offline registraties synchroniseren
+        </button>
+        <div style="font-size:11px;color:var(--qe-grey);margin-top:4px" id="clockPendingCount">
             Synchroniseert niet-geüploade registraties naar Robaws
         </div>
+    </div>
+
+    <!-- v94+: Uitleg afronding voor de monteurs -->
+    <div class="card mb-16" style="padding:14px;background:#fff8e1;border-left:4px solid #f9a825">
+        <div style="font-size:14px;font-weight:600;color:#e65100;margin-bottom:6px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.6h.01"/></svg> Hoe wordt mijn tijd afgerond?</div>
+        <div style="font-size:13px;color:#5d4037;line-height:1.5">
+            Je geklokte uren worden afgerond op kwartieren met een <strong>4-minuten tolerantie</strong>:
+            <ul style="margin:8px 0 0 18px;padding:0;font-size:12px;color:#5d4037">
+                <li><strong>Inklokken</strong> rondt normaal naar boven, behalve als je binnen 4 min van een kwartier zit:
+                    <ul style="margin-top:2px">
+                        <li>06:48 → <strong>06:45</strong> (3 min over → omlaag)</li>
+                        <li>06:50 → <strong>07:00</strong> (5 min over → naar boven)</li>
+                    </ul>
+                </li>
+                <li style="margin-top:4px"><strong>Uitklokken</strong> rondt normaal naar beneden, behalve als je binnen 4 min van een kwartier zit:
+                    <ul style="margin-top:2px">
+                        <li>15:28 → <strong>15:30</strong> (2 min onder → omhoog)</li>
+                        <li>15:25 → <strong>15:15</strong> (5 min onder → naar beneden)</li>
+                    </ul>
+                </li>
+            </ul>
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid #f0d9a0">
+                <strong style="color:#e65100">Je startuur</strong><br>
+                Je wordt om je persoonlijke <strong>startuur</strong> verwacht. Klok je vroeger in dan je startuur, dan beginnen je uren pas te tellen <strong>vanaf je startuur</strong> — niet vroeger.
+                <div style="margin-top:6px">
+                    Heeft de <strong>projectleider</strong> gevraagd om vroeger te komen? Klok dan in <strong>in de camionet</strong> — dan tellen je uren wél vanaf het moment dat je inklokt.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mijn week (laatste 7 dagen) -->
+    <div class="section-header">
+        <h3 style="font-size:14px">Mijn week</h3>
+    </div>
+    <div id="clockHistory" class="mb-16">
+        <p class="text-grey text-sm text-center">Laden...</p>
     </div>
 
     <!-- v217: Team aanwezigheid BOVEN NFC-tags (alleen voor kantoor) -->
@@ -854,19 +889,19 @@
 <div class="screen" id="screenProfile">
     <div class="section-header"><h2>Mijn profiel</h2></div>
 
-    <!-- Foto (Marble 1:1: rij met 56px avatar, naam + meta, foto-knoppen rechts) -->
-    <div class="card mb-prowcard" style="margin-bottom:14px;display:flex;align-items:center;gap:16px;padding:18px">
-        <div class="profile-photo mb-avatar56" id="profilePhotoWrap">
-            <img id="profilePhotoImg" alt="" style="display:none">
-            <span id="profilePhotoFallback" class="profile-photo-fallback">?</span>
+    <!-- Foto -->
+    <div class="card" style="margin-bottom:12px;text-align:center;padding:20px">
+        <div style="position:relative;display:inline-block;margin-bottom:12px">
+            <div class="profile-photo" id="profilePhotoWrap">
+                <img id="profilePhotoImg" alt="" style="display:none">
+                <span id="profilePhotoFallback" class="profile-photo-fallback">?</span>
+            </div>
         </div>
-        <div style="flex:1;min-width:0">
-            <div style="font-size:16px;font-weight:600" id="profileName"></div>
-            <div style="font-size:12.5px;color:var(--g1)" id="profileMeta"></div>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-            <button class="mb-minibtn" onclick="app.profilePickPhoto('camera')">Camera</button>
-            <button class="mb-minibtn" onclick="app.profilePickPhoto('gallery')">Galerij</button>
+        <div style="font-size:18px;font-weight:600" id="profileName"></div>
+        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:16px" id="profileMeta"></div>
+        <div style="display:flex;gap:8px;justify-content:center">
+            <button class="btn btn-primary btn-sm" onclick="app.profilePickPhoto('camera')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.2"/></svg> Camera</button>
+            <button class="btn btn-outline btn-sm" onclick="app.profilePickPhoto('gallery')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 16-5-5L5 20"/></svg> Galerij</button>
         </div>
         <input type="file" id="profilePhotoInputCamera" accept="image/*" capture="user" style="display:none" onchange="app.profileHandlePhoto(this)">
         <input type="file" id="profilePhotoInputGallery" accept="image/*" style="display:none" onchange="app.profileHandlePhoto(this)">
@@ -884,91 +919,73 @@
         </label>
     </div>
 
-    <!-- v260 (Werkbon 2.0): werf-modus — UI-schaal ×1,12, hit-targets ≥48px -->
-    <div class="card" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:16px">
-        <div>
-            <div style="font-size:14px;font-weight:600"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="3.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6 7.7 7.7M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg> Werf-modus</div>
-            <div style="font-size:12px;color:var(--qe-grey)">Grotere knoppen en tekst — met handschoenen bedienbaar</div>
+    <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet) -->
+    <div class="card" id="roleSwitchCard" style="margin-bottom:12px;display:none">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></svg> Actieve rol</div>
+        <div style="font-size:12px;color:var(--qe-grey);margin-bottom:10px;line-height:1.4">
+            Wissel tijdelijk naar een andere rol om de bijhorende app-flow te
+            gebruiken. Een technieker werkt soms ook als monteur op een werkbon.
         </div>
-        <label class="toggle-switch">
-            <input type="checkbox" id="werfModusToggle" onchange="app.toggleWerfModus(this.checked)">
-            <span class="toggle-slider"></span>
-        </label>
+        <select class="form-input" id="roleSwitchSelect" onchange="app.switchActiveRole(this.value)">
+            <!-- opties worden dynamisch ingevuld via app.renderRoleSwitch() -->
+        </select>
+        <div id="roleSwitchNote" style="font-size:12px;color:var(--qe-orange);margin-top:8px;display:none;font-weight:500"></div>
     </div>
 
-    <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet)
-         Marble 1:1: rij met de select rechts (prototype "Actieve rol") -->
-    <div class="card mb-prowcard" id="roleSwitchCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Actieve rol</div>
-                <div class="mb-prow-s">Wissel tijdelijk van app-flow</div>
-            </div>
-            <select id="roleSwitchSelect" onchange="app.switchActiveRole(this.value)"
-                style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
-                <!-- opties worden dynamisch ingevuld via app.renderRoleSwitch() -->
-            </select>
+    <!-- v233: Admin (alleen bureel) -->
+    <div class="card" id="adminCard" style="margin-bottom:12px;display:none">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 2a3 3 0 0 0-3 3v1H7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2V5a3 3 0 0 0-3-3z"/><circle cx="12" cy="13" r="2.5"/></svg> Beheer</div>
+        <div style="font-size:12px;color:var(--qe-grey);margin-bottom:10px;line-height:1.4">
+            Werknemers beheren: PIN resetten, rol wijzigen, stopzetten of een nieuwe werknemer toevoegen.
         </div>
-        <div id="roleSwitchNote" style="font-size:12px;color:var(--amber2);margin:-6px 0 12px;display:none;font-weight:500"></div>
+        <button class="btn btn-primary btn-full" onclick="app.navigate('screenAdmin')">Admin openen</button>
     </div>
 
-    <!-- v233/v247: Beheer + Afwezigheid + Uren-analyse als Marble-rijen met → -->
-    <div class="card mb-prowcard" id="adminCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" onclick="app.navigate('screenAdmin')">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Beheer</div>
-                <div class="mb-prow-s">PIN reset, rollen, werknemers</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
+    <!-- v247: Uren-analyse (alleen geselecteerd bureel — Levi & Vince) -->
+    <div class="card" id="urenAnalyseCard" style="margin-bottom:12px;display:none">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M3 3v18h18"/><rect x="7" y="11" width="3" height="6"/><rect x="12" y="7" width="3" height="10"/><rect x="17" y="13" width="3" height="4"/></svg> Uren-analyse</div>
+        <div style="font-size:12px;color:var(--qe-grey);margin-bottom:10px;line-height:1.4">
+            Maandoverzicht van alle klok-uren per werknemer (werkuren, overuren, km, afwezigheden) met Excel-export.
         </div>
-        <div class="mb-prow" onclick="app.openAfwezigheid()" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Afwezigheid melden</div>
-                <div class="mb-prow-s">Ziekte, verlof, feestdag — per werknemer</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-    </div>
-    <div class="card mb-prowcard" id="urenAnalyseCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" onclick="app.navigate('screenUrenAnalyse')" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Uren-analyse</div>
-                <div class="mb-prow-s">Maandoverzicht + Excel-export · Levi &amp; Vince</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
+        <button class="btn btn-primary btn-full" onclick="app.navigate('screenUrenAnalyse')">Uren-analyse openen</button>
     </div>
 
-    <!-- App bijwerken + PIN wijzigen in één Marble-kaart (prototype-rijen) -->
-    <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
-        <div class="mb-prow" style="cursor:default">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">App bijwerken</div>
-                <div class="mb-prow-s" id="appVersionInfo" onclick="window._toggleDebug && _toggleDebug()">Versie laden...</div>
+    <!-- App update -->
+    <div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+                <div style="font-size:14px;font-weight:600"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg> App bijwerken</div>
+                <div style="font-size:12px;color:var(--qe-grey)" id="appVersionInfo" onclick="window._toggleDebug && _toggleDebug()">Versie laden...</div>
             </div>
-            <button class="mb-minibtn" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
+            <button class="btn btn-primary btn-sm" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
         </div>
-        <div id="updateStatus" style="font-size:13px;text-align:center;margin:0 0 12px;display:none"></div>
+        <div id="updateStatus" style="font-size:13px;text-align:center;margin-top:8px;display:none"></div>
+    </div>
 
-        <!-- PIN wijzigen: inklapbaar zoals het prototype -->
-        <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
-            <div class="mb-prow-t" style="flex:1">PIN wijzigen</div>
-            <span id="mbPinChev" class="mb-prow-arrow">▾</span>
-        </div>
-        <div id="mbPinBody" style="display:none;padding:0 0 16px">
+    <!-- PIN wijzigen -->
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px">PIN wijzigen</div>
+        <div class="form-group">
+            <label>Huidige PIN</label>
             <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileOldPin" placeholder="Huidige PIN">
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileNewPin" placeholder="Nieuwe PIN">
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileNewPinConfirm" placeholder="Bevestig nieuwe PIN">
-            <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
-            <button style="width:100%;padding:13px;border:none;border-radius:2px;background:var(--btn);color:var(--btnfg);font:600 12.5px var(--font);cursor:pointer" onclick="app.profileChangePin()">PIN wijzigen</button>
+                   class="form-input" id="profileOldPin" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
         </div>
+        <div class="form-group">
+            <label>Nieuwe PIN (4–6 cijfers)</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="form-input" id="profileNewPin" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
+        </div>
+        <div class="form-group">
+            <label>Bevestig nieuwe PIN</label>
+            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                   class="form-input" id="profileNewPinConfirm" placeholder="••••"
+                   style="text-align:center;font-size:20px;letter-spacing:6px">
+        </div>
+        <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
+        <button class="btn btn-primary btn-full" onclick="app.profileChangePin()">PIN wijzigen</button>
     </div>
-
-    <!-- Marble: uitloggen hoort op Profiel (de topbar heeft geen uitlog-knop meer) -->
-    <button class="btn btn-outline" style="margin:4px 0 10px;padding:14px 30px" onclick="app.logout()">Uitloggen</button>
 </div>
 
 <!-- ========== SCREEN: ADMIN (alleen bureel) ========== -->
@@ -1022,8 +1039,10 @@
 
 <!-- ========== SCREEN: TIJDSREGISTRATIES OVERZICHT ========== -->
 <div class="screen" id="screenDagoverzicht">
-    <!-- Marble: de volledige kop (maandlabel + "Uren" + pijltjes) wordt door
-         loadDagoverzicht gerenderd — geen statische section-header meer. -->
+    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h2>Mijn registraties</h2>
+        <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht()" style="font-size:12px;padding:4px 10px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
+    </div>
     <div id="dagoverzichtContent">
         <div class="spinner"></div>
     </div>
@@ -1093,7 +1112,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
-        Klaar
+        Uitgevoerd
     </button>
 </nav>
 
@@ -1300,14 +1319,12 @@
 <!-- Clock-in/out systeem (NFC + GPS) -->
 <script src="js/clock.js"></script>
 <!-- Vloeibare login-animatie (Claude Design "Animated Login") -->
-<!-- Marble: liquid-login vervangen door de Marble-login + wipe (marble-ui.js) -->
+<script src="js/liquid-login.js"></script>
 <script src="js/qe-celebrations.js"></script>
 <!-- Hoofdapplicatie -->
 <script src="js/xlsx-writer.js"></script>
 <script src="js/uren-analyse.js"></script>
 <script src="js/app.js"></script>
-<!-- Marble UI-runtime (tutorial, wipe, loader, overgangen) — NA app.js laden -->
-<script src="js/marble-ui.js"></script>
 <script>
     // Service Worker (alleen als beschikbaar — voor offline gebruik)
     if ('serviceWorker' in navigator) {
