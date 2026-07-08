@@ -7265,19 +7265,12 @@ const app = {
                     '</div>';
             }
             this._beginTerminalPoll(r.referenceId, invoiceResult);
-            // v268/v273: Mollie Tap pas na een korte wachttijd openen — de
-            // push-melding van Mollie moet eerst op het toestel aankomen;
-            // direct openen toonde een LEGE Tap-app en de technieker moest
-            // alsnog de melding zelf opentikken. Na ±4 s staat de betaling
-            // er vrijwel altijd op. We openen alleen als het terminal-
-            // scherm nog zichtbaar is; de knop blijft voor handmatig.
-            if (tapHier) {
-                setTimeout(() => {
-                    try {
-                        if (document.getElementById('terminalPayStatus')) QEBridge.bringMollieTapToFront();
-                    } catch (_) {}
-                }, 4000);
-            }
+            // v269/v274: AUTOMATISCH openen van Mollie Tap verwijderd (op
+            // vraag van Levi) — ook met vertraging stond de betaling er bij
+            // het openen nog niet op (push-timing bij Mollie). De technieker
+            // opent Mollie Tap zelf: via de knop hierboven (tapHier) of via
+            // de push-melding van Mollie. De poll toont sowieso "Betaald"
+            // zodra de webhook binnenkomt.
         } catch (e) {
             // v254-review-fix: volwaardig foutscherm i.p.v. alleen een toast —
             // vanuit het keuzepad bleef anders een doodlopend scherm zonder
