@@ -901,3 +901,11 @@ body.dark-mode {
 /* --- klok: hero-kaart en week-lijst in dark-mode netjes --- */
 body.dark-mode #clockHeroCard { background: var(--card); }
 #clockHistory .card { border: 1px solid var(--cb); }
+
+/* --- FAB "Nieuwe werkbon" (techniekers): navy Marble i.p.v. oud donkerblauw --- */
+#newWoFab {
+    background: var(--btn) !important;
+    color: var(--btnfg) !important;
+    border-radius: 16px !important;
+    box-shadow: var(--shadow-lg) !important;
+}

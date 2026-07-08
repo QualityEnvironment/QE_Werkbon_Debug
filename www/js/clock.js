@@ -667,7 +667,15 @@ window.QEClock = {
                         try { await this.syncWithRobaws(); } catch(_) {}
                         try { app.updateClockUI(); } catch(_) {}
                         try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
-                        // v83: na succesvol uitklokken — kilometers-prompt
+                    };
+                    // v265/v270: kilometers-prompt VÓÓR het eindscherm (was: erna
+                    // in afterScan). Techniekers zetten hun gsm vaak meteen uit
+                    // zodra "dag afgerond" verschijnt, waardoor de km anders nooit
+                    // ingevuld raakten. De Robaws-uitklok is op dit punt al veilig
+                    // geboekt; alleen de UI-volgorde wijzigt (zoals het prototype:
+                    // scan → kilometers → dagoverzicht). Bij inklok of fout is dit
+                    // een no-op (askKm is false).
+                    const askKmFirst = async () => {
                         if (askKm && scanResult.ok && woId && empId
                                 && typeof app.promptKilometers === 'function') {
                             try { await app.promptKilometers(woId, empId); } catch(e) {
@@ -685,11 +693,13 @@ window.QEClock = {
                             const _h = Number(_c.hours) || 0;
                             _ht = Math.floor(_h) + 'u ' + Math.round((_h - Math.floor(_h)) * 60) + 'm vandaag';
                         }
-                        QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan });
+                        askKmFirst().then(() =>
+                            QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan }));
                     } else if (typeof app.showScanResult === 'function') {
-                        app.showScanResult(scanResult.ok, scanResult.message, afterScan);
+                        askKmFirst().then(() =>
+                            app.showScanResult(scanResult.ok, scanResult.message, afterScan));
                     } else {
-                        afterScan();
+                        askKmFirst().then(afterScan);
                     }
                 }
             }

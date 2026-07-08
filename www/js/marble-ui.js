@@ -505,6 +505,32 @@
             };
             app.showApp._mb = true;
         }
+        /* v269: de OUDE celebratie-laag (qe-celebrations.js) wordt hier
+           doorverwezen naar de Marble-overlays. clock.js roept bij een
+           uitklok QECeleb.clockOut rechtstreeks aan (vóór showScanResult),
+           dus zonder deze wrap bleef de oude uitklok-animatie draaien. */
+        if (window.QECeleb) {
+            if (QECeleb.clockOut && !QECeleb.clockOut._mb) {
+                QECeleb.clockOut = function (opts) {
+                    opts = opts || {};
+                    var sub = 'Uitgeklokt — ' + (opts.timeText || '') +
+                        (opts.hoursText ? ' · ' + opts.hoursText : '');
+                    if (opts.weekend) friday(sub, opts.onDone);
+                    else daySummary(sub, opts.onDone);
+                };
+                QECeleb.clockOut._mb = true;
+            }
+            if (QECeleb.paymentSuccess && !QECeleb.paymentSuccess._mb) {
+                QECeleb.paymentSuccess = function (opts) {
+                    opts = opts || {};
+                    var sub = (opts.amountText ? opts.amountText + ' — ' : '') +
+                        'automatisch geboekt in Robaws' +
+                        (opts.methodLabel ? ' · ' + opts.methodLabel : '');
+                    flash('Betaald', sub, 2600, opts.onDone);
+                };
+                QECeleb.paymentSuccess._mb = true;
+            }
+        }
         /* scan-resultaten: succes → Marble-overlays (prototype), fout → het
            bestaande rode kaartje (met details + langere duur). Uitklokken
            krijgt het dagoverzicht, op vrijdagmiddag het weekend-scherm. */

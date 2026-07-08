@@ -1,4 +1,4 @@
-/**
+﻿/**
  * QE Werkbon App — Main Application Logic
  * Quality Environment bvba
  */
@@ -626,6 +626,8 @@ const app = {
         this.startPlanningPoll();
         // Dark mode herstellen
         if (localStorage.getItem('qe_dark_mode') === '1') document.body.classList.add('dark-mode');
+        // v260 (2.0): werf-modus herstellen (UI ×1,12 — zie marble.css)
+        if (localStorage.getItem('qe_werf_modus') === '1') document.body.classList.add('werf-modus');
     },
 
     // ========================================
@@ -714,6 +716,9 @@ const app = {
         // Dark mode toggle synchroniseren
         const dmToggle = document.getElementById('darkModeToggle');
         if (dmToggle) dmToggle.checked = document.body.classList.contains('dark-mode');
+        // v260 (2.0): werf-modus toggle synchroniseren
+        const wmToggle = document.getElementById('werfModusToggle');
+        if (wmToggle) wmToggle.checked = document.body.classList.contains('werf-modus');
         // App-versie tonen — Web (= www/git versie uit version.json)
         // en APK-versie (uit native bridge, vereist v106+ APK; degradeert sierlijk).
         const versionEl = document.getElementById('appVersionInfo');
@@ -1479,7 +1484,7 @@ const app = {
                 <p style="font-size:14px;color:var(--qe-grey);margin:8px 0 14px">
                     Je hebt nog ${count} openstaande ${woordvorm}:
                 </p>
-                <div style="background:#fff8e1;border-radius:10px;padding:14px;margin-bottom:14px;border-left:4px solid #f59e0b">
+                <div style="background:var(--awash);border-radius:10px;padding:14px;margin-bottom:14px;border-left:3px solid var(--amber)">
                     ${lijst}
                     ${meer}
                 </div>
@@ -3556,23 +3561,23 @@ const app = {
         card.style.cssText = 'background:#fff;border-radius:16px;max-width:420px;width:100%;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box';
 
         card.innerHTML =
-            '<div style="font-size:18px;font-weight:700;color:#1A237E;margin-bottom:6px">' + this.icon('edit', { size: 16, style: 'vertical-align:-3px' }) + ' Eenmalig artikel</div>' +
+            '<div style="font-size:18px;font-weight:700;color:var(--ink);margin-bottom:6px">' + this.icon('edit', { size: 16, style: 'vertical-align:-3px' }) + ' Eenmalig artikel</div>' +
             '<div style="font-size:12px;color:#666;margin-bottom:16px">Voor artikels die nog niet in Robaws staan. Felicity krijgt een taakje om het artikel aan te maken.</div>' +
             '<div style="margin-bottom:12px">' +
                 '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Omschrijving</label>' +
                 '<input id="caDesc" type="text" placeholder="Bijv. Speciale flens 50mm" autocomplete="off" ' +
-                'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box">' +
+                'style="width:100%;padding:12px;font-size:15px;border:1px solid var(--b1);border-radius:10px;box-sizing:border-box">' +
             '</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">' +
                 '<div>' +
                     '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Verkoopprijs (€)</label>' +
                     '<input id="caPrice" type="number" step="0.01" min="0" value="0" ' +
-                    'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box;text-align:center">' +
+                    'style="width:100%;padding:12px;font-size:15px;border:1px solid var(--b1);border-radius:10px;box-sizing:border-box;text-align:center">' +
                 '</div>' +
                 '<div>' +
                     '<label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Aantal</label>' +
                     '<input id="caQty" type="number" step="0.01" min="0.01" value="1" ' +
-                    'style="width:100%;padding:12px;font-size:15px;border:2px solid #cfd8dc;border-radius:10px;box-sizing:border-box;text-align:center">' +
+                    'style="width:100%;padding:12px;font-size:15px;border:1px solid var(--b1);border-radius:10px;box-sizing:border-box;text-align:center">' +
                 '</div>' +
             '</div>' +
             '<div id="caError" style="font-size:12px;color:#c62828;margin-bottom:8px;display:none"></div>' +
@@ -4387,24 +4392,24 @@ const app = {
     // Slimme iconen per groepsnaam (Robaws API geeft geen afbeeldingen)
     getGroupIcon(name) {
         const n = (name || '').toLowerCase();
-        if (n.includes('verplaatsing') || n.includes('transport')) return { icon: this.icon('car', { size: 28 }), bg: 'linear-gradient(135deg,#e3f2fd,#bbdefb)' };
-        if (n.includes('koper') || n.includes('koperen') || n.includes('leiding')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
-        if (n.includes('mannesmann') || n.includes('buis') || n.includes('pijp')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
-        if (n.includes('onderhoud') || n.includes('service')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#e8f5e9,#c8e6c9)' };
-        if (n.includes('expansie') || n.includes('vat')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#fce4ec,#f8bbd0)' };
-        if (n.includes('thermostaat') || n.includes('regeling') || n.includes('temp')) return { icon: this.icon('thermometer', { size: 28 }), bg: 'linear-gradient(135deg,#e8eaf6,#c5cae9)' };
-        if (n.includes('bosch') || n.includes('junker')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fff8e1,#ffecb3)' };
-        if (n.includes('ketel') || n.includes('cv')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fbe9e7,#ffccbc)' };
-        if (n.includes('atag') || n.includes('remeha') || n.includes('vaillant')) return { icon: this.icon('home', { size: 28 }), bg: 'linear-gradient(135deg,#f3e5f5,#e1bee7)' };
-        if (n.includes('radiat') || n.includes('convect')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#e0f7fa,#b2ebf2)' };
-        if (n.includes('pomp') || n.includes('circul')) return { icon: this.icon('droplet', { size: 28 }), bg: 'linear-gradient(135deg,#e1f5fe,#b3e5fc)' };
-        if (n.includes('ventiel') || n.includes('kraan') || n.includes('afsluit')) return { icon: this.icon('tool', { size: 28 }), bg: 'linear-gradient(135deg,#eceff1,#cfd8dc)' };
-        if (n.includes('elektr') || n.includes('kabel') || n.includes('draad')) return { icon: this.icon('bolt', { size: 28 }), bg: 'linear-gradient(135deg,#fffde7,#fff9c4)' };
-        if (n.includes('sanitair') || n.includes('douche') || n.includes('bad')) return { icon: this.icon('droplet', { size: 28 }), bg: 'linear-gradient(135deg,#e0f2f1,#b2dfdb)' };
-        if (n.includes('gas') || n.includes('brandstof')) return { icon: this.icon('flame', { size: 28 }), bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' };
-        if (n.includes('filter') || n.includes('zuiver')) return { icon: this.icon('wind', { size: 28 }), bg: 'linear-gradient(135deg,#f1f8e9,#dcedc8)' };
-        if (n.includes('isolatie') || n.includes('isoleer')) return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,#efebe9,#d7ccc8)' };
-        return { icon: this.icon('package', { size: 28 }), bg: 'linear-gradient(135deg,rgba(249,157,62,0.12),rgba(106,44,145,0.1))' };
+        if (n.includes('verplaatsing') || n.includes('transport')) return { icon: this.icon('car', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('koper') || n.includes('koperen') || n.includes('leiding')) return { icon: this.icon('tool', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('mannesmann') || n.includes('buis') || n.includes('pijp')) return { icon: this.icon('tool', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('onderhoud') || n.includes('service')) return { icon: this.icon('tool', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('expansie') || n.includes('vat')) return { icon: this.icon('package', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('thermostaat') || n.includes('regeling') || n.includes('temp')) return { icon: this.icon('thermometer', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('bosch') || n.includes('junker')) return { icon: this.icon('flame', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('ketel') || n.includes('cv')) return { icon: this.icon('flame', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('atag') || n.includes('remeha') || n.includes('vaillant')) return { icon: this.icon('home', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('radiat') || n.includes('convect')) return { icon: this.icon('package', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('pomp') || n.includes('circul')) return { icon: this.icon('droplet', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('ventiel') || n.includes('kraan') || n.includes('afsluit')) return { icon: this.icon('tool', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('elektr') || n.includes('kabel') || n.includes('draad')) return { icon: this.icon('bolt', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('sanitair') || n.includes('douche') || n.includes('bad')) return { icon: this.icon('droplet', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('gas') || n.includes('brandstof')) return { icon: this.icon('flame', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('filter') || n.includes('zuiver')) return { icon: this.icon('wind', { size: 28 }), bg: 'var(--wash)' };
+        if (n.includes('isolatie') || n.includes('isoleer')) return { icon: this.icon('package', { size: 28 }), bg: 'var(--wash)' };
+        return { icon: this.icon('package', { size: 28 }), bg: 'var(--wash)' };
     },
 
     renderGroupBrowser() {
@@ -6940,7 +6945,7 @@ const app = {
                 '<p style="font-size:14px;color:#444;margin:14px 6px 4px"><b>Scan om te betalen</b> — ' +
                     'de klant scant met de camera of bank-app en kiest zelf de betaalmethode ' +
                     '(Bancontact, kaart, Apple Pay…).</p>' +
-                '<p id="mollieQrStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
+                '<p id="mollieQrStatus" style="font-weight:600;color:var(--ink);margin:10px 0 16px">' +
                     'Wachten op betaling…</p>' +
                 '<button style="background:none;border:1px solid #bbb;border-radius:8px;' +
                     'padding:10px 16px;color:#444;font-size:13.5px" ' +
@@ -7189,7 +7194,7 @@ const app = {
                         '<p style="font-size:26px;font-weight:700;margin:4px 0 6px">€ ' + bedrag.toFixed(2) + '</p>' +
                         '<p style="color:#444;font-size:14px;margin:0 0 14px">op <b>' + tNaam + '</b></p>' +
                         '<div class="spinner" style="margin:14px auto"></div>' +
-                        '<p id="terminalPayStatus" style="font-weight:600;color:#1565c0;margin:10px 0 16px">' +
+                        '<p id="terminalPayStatus" style="font-weight:600;color:var(--ink);margin:10px 0 16px">' +
                             'Bedrag staat op de terminal — de klant kan de kaart aanbieden…</p>' +
                         (tapHier
                             ? '<button class="btn btn-primary btn-full" style="margin-bottom:10px;padding:13px" ' +
@@ -7369,9 +7374,9 @@ const app = {
 
         const mkBtnHtml = (key, icon, label) => {
             const isCurrent = (key === cur) || (key === 'Overschrijving' && cur === 'Overschrijving ter plaatse');
-            const bg = isCurrent ? '#e3f2fd' : '#ffffff';
-            const border = isCurrent ? '#1565C0' : '#cfd8dc';
-            const tag = isCurrent ? ' <span style="font-size:10px;background:#1565C0;color:#fff;padding:2px 6px;border-radius:8px;font-weight:600;margin-left:6px">HUIDIG</span>' : '';
+            const bg = isCurrent ? 'var(--wash)' : 'var(--card)';
+            const border = isCurrent ? 'var(--ink)' : 'var(--b1)';
+            const tag = isCurrent ? ' <span style="font-size:10px;background:var(--btn);color:var(--btnfg);padding:2px 6px;border-radius:8px;font-weight:600;margin-left:6px">HUIDIG</span>' : '';
             return '<div onclick="app.changeLastPaymentMethod(\'' + key + '\')" ' +
                 'style="display:flex;align-items:center;gap:12px;padding:18px 16px;margin-bottom:10px;' +
                 'border:2px solid ' + border + ';border-radius:12px;background:' + bg + ';' +
@@ -7384,9 +7389,9 @@ const app = {
 
         screen.innerHTML =
             '<div style="padding:16px;max-width:600px;margin:0 auto">' +
-                '<div style="font-size:22px;font-weight:700;color:#1A237E;margin-bottom:6px">Betaalmethode aanpassen</div>' +
+                '<div style="font-size:22px;font-weight:700;color:var(--ink);margin-bottom:6px">Betaalmethode aanpassen</div>' +
                 '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
-                '<div style="font-size:18px;color:#1A237E;font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
+                '<div style="font-size:18px;color:var(--ink);font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
                 '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
                 // v252: Mollie Tap alleen tonen waar hij actief is — dit scherm
                 // omzeilde de release-vergrendeling (_applyCardPaymentMode) en
@@ -7473,7 +7478,7 @@ const app = {
         if (statusEl) {
             statusEl.style.display = 'block';
             statusEl.style.color = '#444';
-            statusEl.style.background = '#fff8e1';
+            statusEl.style.background = 'var(--awash)';
             statusEl.textContent = 'Bijwerken in Robaws…';
         }
 
@@ -7487,7 +7492,7 @@ const app = {
                 console.warn('[App] Betaling update partial fail:', res.results);
                 if (statusEl) {
                     statusEl.style.color = '#c62828';
-                    statusEl.style.background = '#ffebee';
+                    statusEl.style.background = 'var(--rwash)';
                     const failed = [];
                     if (res.results.workOrder && !res.results.workOrder.ok) failed.push('werkbon');
                     if (res.results.salesOrder && !res.results.salesOrder.ok) failed.push('order');
@@ -7528,7 +7533,7 @@ const app = {
             console.error('[App] changeLastPaymentMethod error:', e);
             if (statusEl) {
                 statusEl.style.color = '#c62828';
-                statusEl.style.background = '#ffebee';
+                statusEl.style.background = 'var(--rwash)';
                 statusEl.textContent = 'Fout: ' + (e && e.message);
             }
         }
@@ -7561,49 +7566,43 @@ const app = {
         // v79: planning statusbar moet 4 staten kunnen tonen:
         //   - Nog niet ingeklokt (NFC niet gescand vandaag)
         //   - Ingeklokt (actief, hoofd-shift loopt)
-        //   - L&L actief (📦 prominent)
-        //   - Uitgeklokt (🏁 finish-vlag)
+        //   - L&L actief
+        //   - Uitgeklokt
+        // v265 (Marble): rustige kaart + gekleurde status-dot i.p.v. gradients.
+        // MOTOR-SYNC: dit blok is een bewuste DESIGN-afwijking t.o.v. 1.x —
+        // bij het overzetten van motor-fixes deze Marble-versie laten staan.
+        bar.style.cssText = 'display:block;padding:14px 16px;border-radius:14px;margin-bottom:14px;cursor:pointer;' +
+            'background:var(--card);border:1px solid var(--cb);box-shadow:var(--shadow-md)';
+        const dot = (c) => '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;background:' + c + '"></span>';
+        text.style.color = 'var(--ink)';
+        sub.style.color = 'var(--g1)';
         const llActive = session && session.llActive;
         const llStartTxt = session && session.llStartTime ? session.llStartTime : '';
         if (llActive) {
             // L&L actief — krijgt voorrang in de statusbar
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e3f2fd,#bbdefb);border-left:4px solid #1565c0';
-            icon.innerHTML = this.icon('package', { size: 22 });
+            icon.innerHTML = dot('var(--purple2)');
             text.textContent = 'Bezig met Laden & Lossen';
-            text.style.color = '#0d47a1';
             sub.textContent = llStartTxt ? ('Gestart om ' + llStartTxt) : 'Actief';
-            sub.style.color = '#1565c0';
         } else if (isActive) {
             // Ingeklokt (hoofd-shift)
-            const lateClass = isLate ? 'background:linear-gradient(135deg,#fff3e0,#ffccbc)' : 'background:linear-gradient(135deg,#e8f5e9,#c8e6c9)';
-            bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${lateClass}`;
-            icon.innerHTML = isLate ? this.icon('alert', { size: 22 }) : this.icon('check-circle', { size: 22 });
+            icon.innerHTML = dot(isLate ? 'var(--amber)' : 'var(--green2)');
             const activeTag = QEClock.getActiveTagName();
             const cleanTag = this._publicRemark(activeTag);
             text.textContent = `Actief sinds ${session.startTime}`;
-            text.style.color = isLate ? '#e65100' : '#2e7d32';
             sub.textContent = isLate ? 'Te laat!' : (cleanTag || 'Ingeklokt');
-            sub.style.color = isLate ? '#e65100' : '#2e7d32';
+            if (isLate) sub.style.color = 'var(--amber2)';
         } else if (clockTime) {
-            // Uitgeklokt — 🏁 finish-vlag
-            bar.style.cssText = 'display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;' +
-                'background:linear-gradient(135deg,#e8eaf6,#c5cae9);border-left:4px solid #001E45';
-            icon.innerHTML = this.icon('flag', { size: 22 });
+            // Uitgeklokt
+            icon.innerHTML = dot('var(--g3)');
             text.textContent = `Uitgeklokt — ${clockTime}`;
-            text.style.color = '#001E45';
             sub.textContent = 'Klaar voor vandaag';
-            sub.style.color = '#3f51b5';
         } else {
             // Nog niet ingeclockt
             const isLateNow = QEClock.isLate();
-            const bg = isLateNow ? 'background:linear-gradient(135deg,#fce4ec,#ffcdd2)' : 'background:linear-gradient(135deg,#e3f2fd,#bbdefb)';
-            bar.style.cssText = `display:block;padding:12px 16px;border-radius:12px;margin-bottom:12px;cursor:pointer;${bg}`;
-            icon.innerHTML = isLateNow ? this.icon('alert', { size: 22 }) : this.icon('clock', { size: 22 });
+            icon.innerHTML = dot(isLateNow ? 'var(--red2)' : 'var(--amber)');
             text.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
-            text.style.color = isLateNow ? '#c62828' : '#1565c0';
             sub.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
-            sub.style.color = isLateNow ? '#c62828' : '#1565c0';
+            if (isLateNow) sub.style.color = 'var(--red2)';
         }
     },
 
@@ -7655,92 +7654,59 @@ const app = {
         const isActive = session && session.active;
         const clockTime = QEClock.getClockTime();
 
-        // ── Grote status bovenaan ──
+        // ── Marble 1:1 (v267): grote klok-kaart (prototype "kl-card") ──
+        // MOTOR-SYNC: dit blok is een bewuste DESIGN-afwijking t.o.v. 1.x —
+        // dezelfde toestanden (L&L / actief / uitgeklokt / nog niet), maar
+        // geschilderd als de Marble-hero (50px tijd + accentlijn + status).
+        // clockNfcCard/clockActiveSession blijven bestaan maar verborgen.
+        const hero = document.getElementById('clockHeroCard');
+        const heroLine = document.getElementById('clockHeroLine');
         const bigStatus = document.getElementById('clockBigStatus');
         const bigText = document.getElementById('clockBigText');
         const bigTime = document.getElementById('clockBigTime');
+        const nfcCardEl = document.getElementById('clockNfcCard');
+        if (nfcCardEl) nfcCardEl.style.display = 'none';
+        const activeEl = document.getElementById('clockActiveSession');
+        if (activeEl) activeEl.style.display = 'none';
 
-        // v78: L&L active block wordt onafhankelijk gerenderd, ook als main session inactief.
-        const llActiveHtml = session && session.llActive ? `
-            <div style="margin-top:10px;padding:14px 16px;background:#e3f2fd;border-left:4px solid #1565c0;border-radius:8px;display:flex;align-items:center;gap:12px">
-                <span style="color:#e65100">${this.icon('package', { size: 26 })}</span>
-                <div>
-                    <div style="font-size:15px;font-weight:700;color:#0d47a1">Bezig met Laden &amp; Lossen</div>
-                    <div style="font-size:12px;color:#1565c0;opacity:0.9;margin-top:2px">Gestart om ${session.llStartTime || '?'} — scan de L&amp;L tag opnieuw om te stoppen</div>
-                </div>
-            </div>` : '';
+        const nfcOff = !!(window.QEBridge && QEBridge.isNfcEnabled && !QEBridge.isNfcEnabled());
+        const setHero = (time, fg, border, txt, sub) => {
+            if (!bigTime || !bigText || !bigStatus) return;
+            bigTime.textContent = time;
+            bigTime.style.color = fg;
+            if (heroLine) heroLine.style.background = fg;
+            if (hero) hero.style.borderColor = border;
+            bigText.textContent = txt;
+            bigText.style.color = fg;
+            bigStatus.textContent = sub;
+        };
 
-        if (isActive) {
+        if (session && session.llActive) {
+            // L&L krijgt voorrang in de hero (zoals de planning-statusbar)
+            setHero(session.llStartTime || '––:––', 'var(--purple2)', 'var(--pborder)',
+                'Bezig met Laden & Lossen',
+                'Gestart om ' + (session.llStartTime || '?') + ' — scan de L&L-tag opnieuw om te stoppen');
+        } else if (isActive) {
             const isLate = session.registrationType === 'Te laat';
-            const isLL = session.registrationType === 'Laden & Lossen';
-            bigStatus.innerHTML = isLL ? this.icon('package', { size: 52 }) : (isLate ? this.icon('alert', { size: 52 }) : this.icon('check-circle', { size: 52 }));
-            bigText.textContent = isLL ? 'Laden & Lossen' : 'Ingeklokt';
-            bigText.style.color = isLate ? '#e65100' : 'var(--qe-green)';
-            const _cleanTag = this._publicRemark(session.tagName);
-            bigTime.textContent = `${session.startTime} — ${_cleanTag}${isLate ? ' (te laat)' : ''}`;
-
-            document.getElementById('clockNfcCard').style.display = 'none';
-            const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) {
-                activeEl.style.display = 'block';
-                document.getElementById('clockActiveContent').innerHTML = `
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                        <h3 style="margin:0;font-size:16px;color:var(--qe-darkblue)">${this.icon('refresh', { size: 16, style: 'vertical-align:-3px' })} Actieve registratie</h3>
-                        <span style="background:${isLL ? '#e3f2fd' : '#e8f5e9'};color:${isLL ? '#1565c0' : '#2e7d32'};font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600">${session.registrationType}</span>
-                    </div>
-                    <div style="display:flex;gap:16px;margin-bottom:8px">
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Start</span><br><span style="font-size:15px;font-weight:600">${session.startTime}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Verwacht</span><br><span style="font-size:15px;font-weight:600">${QEClock.getExpectedStartTime()}</span></div>
-                        <div><span style="font-size:12px;color:var(--qe-grey)">Locatie</span><br><span style="font-size:15px;font-weight:600">${this._publicRemark(session.tagName)}</span></div>
-                    </div>
-                    <p style="font-size:13px;color:var(--qe-grey);margin:0">Scan opnieuw een NFC tag om uit te clocken</p>
-                    ${llActiveHtml}
-                `;
-            }
+            const cleanTag = this._publicRemark(session.tagName);
+            setHero(session.startTime || '––:––',
+                isLate ? 'var(--amber)' : 'var(--green2)',
+                isLate ? 'var(--aborder2)' : 'var(--gborder1)',
+                'Actief — scan een tag om uit te klokken',
+                'Ingeklokt op ' + cleanTag + (isLate ? ' · te laat' : ' · op tijd') +
+                ' · verwacht ' + QEClock.getExpectedStartTime());
+        } else if (clockTime) {
+            setHero(clockTime, 'var(--g2)', 'var(--b1)',
+                'Afgerond voor vandaag',
+                'Eerste scan ' + clockTime + ' · gesynchroniseerd met Robaws');
         } else {
             const isLateNow = QEClock.isLate();
-            if (clockTime) {
-                bigStatus.innerHTML = this.icon('flag', { size: 52 });
-                bigText.textContent = 'Uitgeklokt';
-                bigText.style.color = 'var(--qe-darkblue)';
-                bigTime.textContent = `Eerste scan: ${clockTime}`;
-            } else {
-                bigStatus.innerHTML = isLateNow ? this.icon('alert', { size: 52 }) : this.icon('clock', { size: 52 });
-                bigText.textContent = isLateNow ? 'Nog niet ingeklokt!' : 'Nog niet ingeklokt';
-                bigText.style.color = isLateNow ? '#c62828' : 'var(--qe-darkblue)';
-                bigTime.textContent = `Verwacht: ${QEClock.getExpectedStartTime()}`;
-            }
-
-            // Toon NFC instructie
-            const nfcCard = document.getElementById('clockNfcCard');
-            nfcCard.style.display = 'block';
-            if (window.QEBridge && !QEBridge.isNfcEnabled()) {
-                nfcCard.innerHTML = `
-                    <div style="text-align:center;padding:20px">
-                        <div style="margin-bottom:8px;color:var(--qe-grey)">${this.icon('phone-off', { size: 34 })}</div>
-                        <div style="font-size:15px;font-weight:600;margin-bottom:4px">NFC niet beschikbaar</div>
-                        <div style="font-size:13px;color:var(--qe-grey)">Zet NFC aan in je telefoon-instellingen</div>
-                        ${llActiveHtml}
-                    </div>`;
-            } else {
-                nfcCard.innerHTML = `
-                    <div style="margin-bottom:8px;color:var(--qe-purple)">${this.icon('phone', { size: 34 })}</div>
-                    <div style="font-size:15px;font-weight:600;margin-bottom:4px">Houd je telefoon tegen de NFC tag</div>
-                    <div style="font-size:13px;color:var(--qe-grey)">Bureau, camionet of laden & lossen</div>
-                    ${llActiveHtml}
-                `;
-            }
-            // v78: actieve sessie card alleen tonen als L&L actief is (zonder main shift)
-            const activeEl = document.getElementById('clockActiveSession');
-            if (activeEl) {
-                if (session && session.llActive) {
-                    activeEl.style.display = 'block';
-                    document.getElementById('clockActiveContent').innerHTML = llActiveHtml ||
-                        '<p style="color:var(--qe-grey)">Geen actieve sessie</p>';
-                } else {
-                    activeEl.style.display = 'none';
-                }
-            }
+            setHero('––:––',
+                isLateNow ? 'var(--red2)' : 'var(--amber)',
+                'var(--aborder2)',
+                isLateNow ? 'Nog niet ingeklokt!' : 'Houd je telefoon tegen de NFC-tag',
+                nfcOff ? 'NFC staat uit — zet NFC aan in je telefoon-instellingen'
+                       : 'NFC · Bureau, camionet of laden & lossen · verwacht ' + QEClock.getExpectedStartTime());
         }
 
         // ── Voltooide sessies vandaag ──
@@ -7749,21 +7715,18 @@ const app = {
         const completed = session ? (session.completedSessions || []) : [];
         if (completed.length > 0) {
             completedSection.style.display = 'block';
+            // v267 (Marble 1:1): prototype "VANDAAG"-rijen — wash-tint per type,
+            // "Type · locatie", tijdsbereik en uren rechts in de accentkleur.
             completedList.innerHTML = completed.map(s => {
-                const typeIcon = s.type === 'Te laat' ? this.icon('alert', { size: 16 }) : (s.type === 'Laden & Lossen' ? this.icon('package', { size: 16 }) : (s.type === 'Extra uren' ? this.icon('refresh', { size: 16 }) : this.icon('check-circle', { size: 16 })));
-                const bg = s.type === 'Te laat' ? '#fff8e1' : '#f1f8e9';
-                return `<div class="card" style="padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;background:${bg}">
-                    <div style="display:flex;align-items:center;gap:10px">
-                        <span>${typeIcon}</span>
-                        <div>
-                            <div style="font-size:14px;font-weight:500">${s.type}</div>
-                            <div style="font-size:11px;color:var(--qe-grey)">${this._publicRemark(s.tagName)}</div>
-                        </div>
-                    </div>
-                    <div style="text-align:right">
-                        <div style="font-size:14px;font-weight:600">${s.startTime} → ${s.endTime}</div>
-                        <div style="font-size:11px;color:var(--qe-grey)">${s.hours} uur</div>
-                    </div>
+                let wash, border, accent;
+                if (s.type === 'Te laat') { wash = 'var(--awash)'; border = 'var(--aborder)'; accent = 'var(--amber2)'; }
+                else if (s.type === 'Laden & Lossen') { wash = 'var(--awash2)'; border = 'var(--aborder2)'; accent = 'var(--amber2)'; }
+                else if (s.type === 'Extra uren') { wash = 'var(--pwash)'; border = 'var(--pborder)'; accent = 'var(--purple2)'; }
+                else { wash = 'var(--gwash)'; border = 'var(--gborder2)'; accent = 'var(--green2)'; }
+                return `<div style="display:flex;align-items:baseline;gap:12px;padding:13px 16px;border-radius:12px;background:${wash};border:1px solid ${border};margin-bottom:6px">
+                    <span style="font-size:13.5px;font-weight:500;flex:1;min-width:0;color:var(--ink)">${s.type} · ${this._publicRemark(s.tagName)}</span>
+                    <span style="font-size:13px;color:var(--g2);font-variant-numeric:tabular-nums;flex-shrink:0">${s.startTime} – ${s.endTime}</span>
+                    <span style="font:500 15px var(--font);color:${accent};font-variant-numeric:tabular-nums;flex-shrink:0">${s.hours}</span>
                 </div>`;
             }).join('');
         } else {
@@ -8516,7 +8479,7 @@ const app = {
 
         // Check of native bridge beschikbaar is (in APK)
         if (typeof QEBridge === 'undefined' || !QEBridge.openVivaTerminal) {
-            statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">
+            statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">
                 Terminal-integratie alleen beschikbaar in de APK versie.<br>
                 <small>Gebruik de QR/betaallink optie als alternatief.</small>
             </div>`;
@@ -8546,7 +8509,7 @@ const app = {
             const orderData = await orderRes.json();
 
             if (!orderData.success) {
-                statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">
+                statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">
                     ${orderData.error || 'Betaalorder aanmaken mislukt'}
                 </div>`;
                 return;
@@ -8584,7 +8547,7 @@ const app = {
 
             if (opened) {
                 statusDiv.innerHTML = `
-                    <div style="color:#2e7d32;padding:16px;background:#e8f5e9;border-radius:12px;text-align:center">
+                    <div style="color:var(--green2);padding:16px;background:var(--gwash);border-radius:12px;text-align:center">
                         <div style="margin-bottom:8px;color:var(--qe-purple)">${this.icon('phone', { size: 28 })}</div>
                         <div style="font-weight:600;font-size:15px">Terminal geopend</div>
                         <div style="font-size:13px;color:#558b2f;margin-top:4px">Controleer de Viva Wallet app</div>
@@ -8601,13 +8564,13 @@ const app = {
                         </button>
                     </div>`;
             } else {
-                statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">
+                statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">
                     Viva.com Terminal app kon niet geopend worden.<br>
                     <small>Installeer "Viva.com | Terminal" uit de Play Store, of gebruik de QR-code als alternatief.</small>
                 </div>`;
             }
         } catch (e) {
-            statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">Fout: ${e.message}</div>`;
+            statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">Fout: ${e.message}</div>`;
         }
     },
 
@@ -9638,7 +9601,7 @@ const app = {
         const list = this._loadPendingPayments();
         if (!list.length) { container.innerHTML = ''; return; }
         container.innerHTML = `
-            <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:12px;padding:12px;margin:0 0 12px 0">
+            <div style="background:var(--awash2);border:1px solid var(--aborder2);border-radius:12px;padding:12px;margin:0 0 12px 0">
                 <div style="font-size:13px;font-weight:600;color:#e65100;margin-bottom:8px">
                     ⚠️ ${list.length} openstaande betaling${list.length === 1 ? '' : 'en'}
                 </div>
@@ -9676,7 +9639,7 @@ const app = {
             const orderData = await orderRes.json();
 
             if (!orderData.success) {
-                statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">
+                statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">
                     ${orderData.error || 'Betaallink aanmaken mislukt'}<br>
                     <small>${orderData.hint || 'Controleer de Viva Wallet configuratie'}</small>
                 </div>`;
@@ -9707,7 +9670,7 @@ const app = {
             // Start polling
             this.pollPaymentStatus(orderData.orderCode, invoiceId);
         } catch (e) {
-            statusDiv.innerHTML = `<div style="color:#e53935;padding:12px;background:#ffebee;border-radius:8px">Fout: ${e.message}</div>`;
+            statusDiv.innerHTML = `<div style="color:var(--red2);padding:12px;background:var(--rwash);border-radius:8px">Fout: ${e.message}</div>`;
         }
     },
 
@@ -9725,7 +9688,7 @@ const app = {
                 if (data.paid) {
                     // Betaling gelukt!
                     statusDiv.innerHTML = `
-                        <div style="background:#e8f5e9;border-radius:12px;padding:24px;text-align:center">
+                        <div style="background:var(--gwash);border-radius:12px;padding:24px;text-align:center">
                             <div style="margin-bottom:8px;color:var(--qe-green)">${this.icon('check-circle', { size: 44 })}</div>
                             <div style="font-size:20px;font-weight:700;color:#2e7d32">Betaling ontvangen!</div>
                             <div style="font-size:13px;color:#558b2f;margin-top:4px">Factuur wordt als betaald gemarkeerd...</div>
@@ -9750,7 +9713,7 @@ const app = {
                 }
 
                 if (data.status === 'expired' || data.status === 'canceled') {
-                    statusDiv.innerHTML += `<div style="color:#e53935;font-size:13px;margin-top:8px">
+                    statusDiv.innerHTML += `<div style="color:var(--red2);font-size:13px;margin-top:8px">
                         Betaling ${data.status === 'expired' ? 'verlopen' : 'geannuleerd'}
                     </div>`;
                     return;
@@ -10250,40 +10213,42 @@ const app = {
 
             let html = '';
 
-            // v179: maand-navigatie. "Volgende" is uitgeschakeld op de huidige
-            // maand (geen toekomst). Knoppen herladen met de nieuwe offset.
+            // v266 (Marble 1:1, prototype "UREN"): kop met maandlabel + grote
+            // "Uren"-titel + ‹ ›-pijltjes, daarna de 4-stats-grid met 2px
+            // ink-onderlijn (Totaal · Werkuren · Overuren · Dagen).
+            // MOTOR-SYNC: alleen de HTML-opmaak wijkt af van 1.x — alle
+            // databerekening hierboven is identiek gebleven.
+            const monthLabelNice = monthNames[target.getMonth()].charAt(0).toUpperCase()
+                + monthNames[target.getMonth()].slice(1) + ' ' + yyyy;
             html += `
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
-                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset - 1})" style="font-size:13px;padding:6px 12px">◀ Vorige maand</button>
-                    <span style="font-size:13px;font-weight:600;color:var(--qe-darkblue);flex:1;text-align:center">${monthLabel}</span>
-                    <button class="btn btn-outline btn-sm" onclick="app.loadDagoverzicht(${offset + 1})" ${isCurrentMonth ? 'disabled' : ''} style="font-size:13px;padding:6px 12px;${isCurrentMonth ? 'opacity:0.4;pointer-events:none' : ''}">Volgende ▶</button>
+                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                        <div style="font-size:13px;color:var(--g1);margin-bottom:2px">${monthLabelNice}</div>
+                        <div style="font:400 34px var(--font);letter-spacing:-1px;margin-bottom:24px;color:var(--ink)">Uren</div>
+                    </div>
+                    <div style="display:flex;gap:6px;padding-top:6px">
+                        <button onclick="app.loadDagoverzicht(${offset - 1})" style="width:32px;height:32px;border:1px solid var(--b1);border-radius:2px;background:none;color:var(--g2);cursor:pointer;font-size:15px">‹</button>
+                        <button onclick="app.loadDagoverzicht(${offset + 1})" ${isCurrentMonth ? 'disabled' : ''} style="width:32px;height:32px;border:1px solid var(--b1);border-radius:2px;background:none;color:${isCurrentMonth ? 'var(--b2)' : 'var(--g2)'};cursor:pointer;font-size:15px;${isCurrentMonth ? 'pointer-events:none' : ''}">›</button>
+                    </div>
                 </div>`;
 
-            // Samenvatting kaart — v83: Totaal, Werkuren, Overuren, Werkdagen, Te laat
             html += `
-                <div class="card" style="margin-bottom:16px;padding:20px;background:var(--qe-darkblue);color:#fff;border-radius:16px;border:none">
-                    <div style="font-size:13px;opacity:0.8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">${monthLabel}</div>
-                    <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:8px">
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalHours}" data-dec="2">${fmt2(totalHours)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Totaal</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${werkurenTotal}" data-dec="2">${fmt2(werkurenTotal)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Werkuren</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${overurenTotal}" data-dec="2">${fmt2(overurenTotal)}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Overuren</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${totalDays}" data-dec="0">${totalDays}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Werkdagen</div>
-                        </div>
-                        <div>
-                            <div style="font-size:20px;font-weight:700"><span class="qe-countup" data-count="${lateCount}" data-dec="0">${lateCount}</span></div>
-                            <div style="font-size:10px;opacity:0.8">Te laat</div>
-                        </div>
+                <div id="mbUrenStats" style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;padding-bottom:22px;border-bottom:2px solid var(--ink);margin-bottom:8px">
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${totalHours}" data-dec="2">${fmt2(totalHours)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">TOTAAL</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${werkurenTotal}" data-dec="2">${fmt2(werkurenTotal)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">WERKUREN</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--purple2)"><span class="qe-countup" data-count="${overurenTotal}" data-dec="2">${fmt2(overurenTotal)}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">OVERUREN</div>
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)"><span class="qe-countup" data-count="${totalDays}" data-dec="0">${totalDays}</span></div>
+                        <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">DAGEN</div>
                     </div>
                 </div>`;
 
@@ -10317,10 +10282,14 @@ const app = {
                             dayTotal += parseFloat(te.hours || te.billableHours || 0) || 0;
                         }
                     }
-                    html += `<div style="margin-bottom:4px;padding:8px 4px 4px;display:flex;align-items:center;justify-content:space-between">
-                        <div style="font-size:13px;font-weight:600;color:var(--qe-darkblue)">${dayName} ${dateStr}</div>
-                        <div style="font-size:12px;color:var(--qe-grey)">${fmt1(dayTotal)} uur</div>
-                    </div>`;
+                    // v266 (Marble): dag = één blok met hairline-onderlijn.
+                    // v268: het DAGTOTAAL is de hoofdzaak (groot, ink, rechts);
+                    // de opsplitsing eronder is bijzaak (compact, grijs).
+                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
+                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
+                            <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u</span>
+                        </div>`;
 
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
                     //   Werkuren (hourTypeId=1, article 185)  → ✅ groen, klant-werk
@@ -10337,14 +10306,13 @@ const app = {
                         const isAbsence = this._isAbsenceTijd(tijd);
                         // v197: afwezigheid → toon enkel het type, géén (forfaitaire) uren
                         if (isAbsence) {
-                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${tijdStyle.bg}">
-                                <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex;align-items:center">${tijdIcon || this.icon('calendar', { size: 18 })}</span>
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:500;color:${tijdColor}">${tijdStyle.label}</div>
-                                        <div style="font-size:11px;color:${tijdColor}">Geen uren gerekend</div>
-                                    </div>
-                                </div>
+                            // v268: compacte bijzaak-rij (22px chip, grijze tekst).
+                            // Rood alleen voor Ziek/Onwettig; Verlof/Feestdag e.d. neutraal.
+                            const isRood = /ziek|onwettig/i.test(tijdStyle.label || '');
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px">
+                                <span style="width:22px;height:22px;border-radius:7px;background:${isRood ? 'var(--rwash)' : 'var(--wash)'};color:${isRood ? 'var(--red2)' : 'var(--g2)'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('calendar', { size: 12 })}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2)">${tijdStyle.label} <span style="color:var(--g3)">· geen uren gerekend</span></div>
+                                <span style="font-size:12.5px;color:${isRood ? 'var(--red2)' : 'var(--g3)'}">—</span>
                             </div>`;
                             continue;
                         }
@@ -10356,16 +10324,11 @@ const app = {
                         });
 
                         if (teList.length === 0) {
-                            // Open werkbon zonder entries (nog niet uitgeklokt)
+                            // Open werkbon zonder entries (nog niet uitgeklokt) — compacte rij
                             const ingeklokt = getField(wo, 'Ingeklokt') || '?';
-                            html += `<div class="card" style="padding:12px 14px;margin-bottom:6px;background:#f1f8e9;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <div style="display:flex;align-items:center;gap:10px">
-                                    <span style="font-size:18px;color:${tijdColor};display:inline-flex">${this.icon('clock', { size: 18 })}</span>
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:500">${ingeklokt} → ...</div>
-                                        <div style="font-size:11px;color:${tijdColor}">${tijdIcon} ${tijd} — nog ingeklokt</div>
-                                    </div>
-                                </div>
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:22px;height:22px;border-radius:7px;background:var(--gwash);color:var(--green2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('clock', { size: 12 })}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2)">Nog ingeklokt · ${tijd} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${ingeklokt} → …</span></div>
                             </div>`;
                             continue;
                         }
@@ -10386,62 +10349,56 @@ const app = {
                                 : null;
                             const timeBlockTxt = (sStr && eStr) ? (sStr + ' → ' + eStr) : null;
 
-                            // v87: Styling per type — compensatie duidelijker als "overuren aftrek"
-                            // v166: bij afwezigheidstype (Ziek / Verlof / Feestdag / Inhaal / Sociaal verlof)
-                            // wordt de werkuren-styling overruled door de afwezigheids-kleur
-                            let icon, bg, fg, label;
-                            if (isAbsence) {
-                                icon = tijdStyle.icon || this.icon('calendar', { size: 18 });
-                                bg = tijdStyle.bg;
-                                fg = tijdStyle.color;
-                                label = tijdStyle.label;
-                            } else if (isCompensatie) {
+                            // v266 (Marble 1:1): blokrij per time-entry — 30px chip in
+                            // wash-tint, typelabel 13px/600, tijdsbereik 12px grijs,
+                            // waarde rechts in de typekleur (prototype typeMeta).
+                            // v180-logica (echte hourType-naam) blijft behouden.
+                            let icon, chipBg, chipFg, valFg, label;
+                            if (isCompensatie) {
                                 // Negatieve overuren — wordt afgetrokken van overuren-bank
                                 // omdat L&L gebruikt is om de 8u-baseline te vullen.
-                                icon = this.icon('minus', { size: 18 }); bg = '#ffebee'; fg = '#c62828';
-                                label = 'Overuren aftrek';
+                                icon = this.icon('minus', { size: 12 }); chipBg = 'var(--rwash)'; chipFg = 'var(--red2)'; valFg = 'var(--red2)';
+                                label = 'Aftrek overuren';
                             } else if (isLL) {
-                                icon = this.icon('package', { size: 18 }); bg = '#fff3e0'; fg = '#e65100';
+                                icon = this.icon('package', { size: 12 }); chipBg = 'var(--awash2)'; chipFg = 'var(--amber2)'; valFg = 'var(--amber2)';
                                 label = 'Laden & lossen';
                             } else if (isOveruren) {
-                                icon = this.icon('clock', { size: 18 }); bg = '#fff8e1'; fg = '#ef6c00';
+                                icon = this.icon('clock', { size: 12 }); chipBg = 'var(--pwash)'; chipFg = 'var(--purple2)'; valFg = 'var(--purple2)';
                                 label = htName || 'Overuren';   // v180: toon echte tag (bv "Overuren zaterdag")
                             } else {
-                                icon = this.icon('check-circle', { size: 18 }); bg = '#f1f8e9'; fg = '#2e7d32';
+                                icon = this.icon('check-circle', { size: 12 }); chipBg = 'var(--gwash)'; chipFg = 'var(--green2)'; valFg = 'var(--ink)';
                                 label = htName || 'Werkuren';
                             }
                             const absHrs = Math.abs(hours).toFixed(2);
-                            const headerLine = timeBlockTxt
+                            const range = timeBlockTxt
                                 ? timeBlockTxt
-                                : (isCompensatie ? '−' + absHrs + ' uur (aftrek)' : absHrs + ' uur');
-                            const subLine = timeBlockTxt
-                                ? (label + ' · ' + hours.toFixed(2) + 'u')
-                                : label;
-                            const rightTxt = isCompensatie ? '−' + absHrs + 'u' : hours.toFixed(2) + 'u';
+                                : (isCompensatie ? 'Correctie aanvulling' : 'Zonder tijdsblok');
+                            const rightTxt = isCompensatie ? '−' + absHrs : hours.toFixed(2);
 
-                            html += `<div class="card" style="padding:10px 14px;margin-bottom:6px;background:${bg};cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
-                                <div style="display:flex;align-items:center;justify-content:space-between">
-                                    <div style="display:flex;align-items:center;gap:10px;flex:1">
-                                        <span style="font-size:18px;color:${fg};display:inline-flex;align-items:center">${icon}</span>
-                                        <div>
-                                            <div style="font-size:14px;font-weight:500">${headerLine}</div>
-                                            <div style="font-size:11px;color:${fg}">${subLine}</div>
-                                        </div>
-                                    </div>
-                                    <div style="font-size:14px;color:${fg};font-weight:600">${rightTxt}</div>
-                                </div>
+                            // v268: opsplitsing = bijzaak — één compacte grijze regel
+                            // per blok (22px chip, label · bereik, waarde klein rechts).
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                                <span style="width:22px;height:22px;border-radius:7px;background:${chipBg};color:${chipFg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</span>
+                                <div style="flex:1;min-width:0;font-size:12px;color:var(--g2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${range}</span></div>
+                                <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${valFg};flex-shrink:0">${rightTxt}</span>
                             </div>`;
                         }
                     }
+                    html += `</div>`; // Marble: dag-blok sluiten
                 } else {
-                    const opacity = isWeekend ? '0.4' : '0.6';
-                    const label = isWeekend ? 'Weekend' : 'Geen registratie';
-                    html += `<div style="margin-bottom:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;background:#fafafa;border-radius:8px;opacity:${opacity}">
-                        <div style="font-size:13px;font-weight:500;color:var(--qe-grey)">${dayName} ${dateStr}</div>
-                        <div style="font-size:11px;color:var(--qe-grey);font-style:italic">${label}</div>
+                    // v266 (Marble): lege dag = zelfde blokstructuur, gedimd
+                    const opacity = isWeekend ? '0.55' : '0.75';
+                    const label = isWeekend ? 'Weekend' : 'Geen registraties';
+                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2);opacity:${opacity}">
+                        <div style="display:flex;align-items:baseline;justify-content:space-between">
+                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
+                            <span style="font-size:12px;color:var(--g1)">${label}</span>
+                        </div>
                     </div>`;
                 }
             }
+
+            html += `<div style="font-size:12px;color:var(--g1);margin-top:14px">Tik op een registratie om een aanpassing aan te vragen.</div>`;
 
             container.innerHTML = html;
             this._animateCountUps(container);
@@ -10663,21 +10620,12 @@ const app = {
                         localStorage.setItem('qe_last_payment_context', JSON.stringify(ctx));
                     } catch(_) {}
 
-                    const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
-                        : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
-                        : method === 'Via factuur' ? this.icon('file', { size: 14, style: 'vertical-align:-2px' })
-                        : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
+                    // v268 (Marble 1:1, prototype "uit-laatste"): witte kaart met
+                    // ink-accentrand — geen blauwe gradient/iconen meer.
                     paymentBtns = `
-                        <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
-                            <div style="display:flex;align-items:center;justify-content:space-between">
-                                <div style="flex:1">
-                                    <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${logicId} — € ${amount}</div>
-                                    <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
-                                </div>
-                            </div>
+                        <div onclick="app.openChangePaymentMethodModal()" style="padding:15px 18px;border-radius:14px;background:var(--card);border:1px solid var(--cb);border-left:3px solid var(--ink);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;margin-bottom:12px">
+                            <div style="font-size:13.5px;font-weight:600;color:var(--ink)">Laatste betaling · ${method}</div>
+                            <div style="font-size:12.5px;color:var(--g1);margin-top:3px">Factuur ${logicId} — € ${amount} · tik om de betaalwijze aan te passen</div>
                         </div>`;
                 } else {
                     // Fallback: localStorage context tonen als Robaws-fetch faalt of geen match
@@ -10687,61 +10635,45 @@ const app = {
                         const cInv = (ctx.invoiceResult && ctx.invoiceResult.invoice) || {};
                         const amount = parseFloat(cInv.totalInclVat || 0).toFixed(2);
                         const method = ctx.paymentMethod || '?';
-                        const methodIcon = method === 'Mollie Tap' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                            : method === 'Viva wallet' ? this.icon('card', { size: 14, style: 'vertical-align:-2px' })
-                            : method === 'Cash' ? this.icon('cash', { size: 14, style: 'vertical-align:-2px' })
-                            : method.startsWith('Overschrijving') ? this.icon('bank', { size: 14, style: 'vertical-align:-2px' })
-                            : this.icon('file', { size: 14, style: 'vertical-align:-2px' });
                         paymentBtns = `
-                            <div class="card" style="margin-bottom:12px;background:linear-gradient(135deg, rgba(21,101,192,0.08), rgba(46,125,50,0.08));border-left:4px solid #1565C0;cursor:pointer" onclick="app.openChangePaymentMethodModal()">
-                                <div style="display:flex;align-items:center;justify-content:space-between">
-                                    <div style="flex:1">
-                                        <div style="font-size:14px;font-weight:700;color:#1565C0">${methodIcon} Laatste betaling: ${method}</div>
-                                        <div style="font-size:12px;color:var(--qe-grey);margin-top:3px">Factuur ${ctx.invoiceLogicId || cInv.logicId || ''} — € ${amount}</div>
-                                        <div style="font-size:11px;color:#1565C0;margin-top:4px;font-weight:600">Tik om te openen of betalingsmethode aan te passen →</div>
-                                    </div>
-                                </div>
+                            <div onclick="app.openChangePaymentMethodModal()" style="padding:15px 18px;border-radius:14px;background:var(--card);border:1px solid var(--cb);border-left:3px solid var(--ink);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;margin-bottom:12px">
+                                <div style="font-size:13.5px;font-weight:600;color:var(--ink)">Laatste betaling · ${method}</div>
+                                <div style="font-size:12.5px;color:var(--g1);margin-top:3px">Factuur ${ctx.invoiceLogicId || cInv.logicId || ''} — € ${amount} · tik om de betaalwijze aan te passen</div>
                             </div>`;
                     }
                 }
             } catch(e) { console.warn('[App] Laatste betaling fetch fout:', e && e.message); }
 
+            // v268 (Marble 1:1, prototype "UITGEVOERD"): pwash-infokaart +
+            // platte werkbon-rijen met hairline i.p.v. kaarten/emoji's.
+            // MOTOR-SYNC: alleen de HTML-opmaak wijkt af van 1.x.
             let html = paymentBtns + `
-                <div class="card" style="margin-bottom:12px;background:rgba(106,44,145,0.06);border-left:3px solid var(--qe-purple)">
-                    <div style="font-size:13px;color:var(--qe-purple);font-weight:600">${this.icon('edit', { size: 14, style: 'vertical-align:-2px' })} Correctie-modus</div>
-                    <div style="font-size:12px;color:var(--qe-grey);margin-top:4px">Klik op een planning om uren of materialen te corrigeren. De originele werkbon blijft staan; er wordt een correctie-werkbon met het verschil aangemaakt.</div>
+                <div style="padding:13px 18px;border-radius:12px;background:var(--pwash);border:1px solid var(--pborder);margin-bottom:20px">
+                    <div style="font-size:12.5px;font-weight:600;color:var(--purple2)">Correctie-modus</div>
+                    <div style="font-size:12px;color:var(--g2);margin-top:3px;line-height:1.5">Tik op een werkbon om uren of materialen te corrigeren. De originele werkbon blijft staan; het verschil gaat in een correctie-werkbon.</div>
                 </div>`;
 
             Object.keys(grouped).sort().reverse().forEach(dateStr => {
                 const d = new Date(dateStr + 'T12:00:00');
                 const isToday = dateStr === this._localDateStr();
-                const label = isToday ? 'Vandaag' : `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}`;
+                const label = isToday ? 'VANDAAG' : `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}`.toUpperCase();
 
-                html += `<div class="section-header mt-16"><h3 style="font-size:14px">${label}</h3></div>`;
+                html += `<div style="font-size:12px;font-weight:600;color:var(--g1);letter-spacing:0.5px;margin:16px 0 4px">${label}</div>`;
 
                 grouped[dateStr].forEach(p => {
                     const totH = (p.cumulatief && p.cumulatief.totalHours) || 0;
                     const matCount = (p.cumulatief && p.cumulatief.materials && p.cumulatief.materials.length) || 0;
                     const corrBadge = p.aantalWerkbonnen > 1
-                        ? `<span style="background:var(--qe-orange);color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;margin-left:6px">${p.aantalWerkbonnen - 1} correctie${p.aantalWerkbonnen > 2 ? 's' : ''}</span>`
+                        ? `<span style="font-size:10.5px;font-weight:600;color:var(--amber2);border:1px solid var(--aborder2);border-radius:10px;padding:1px 8px;margin-left:8px;white-space:nowrap">${p.aantalWerkbonnen - 1} correctie${p.aantalWerkbonnen > 2 ? 's' : ''}</span>`
                         : '';
 
                     html += `
-                        <div class="card" style="margin-bottom:8px;cursor:pointer" onclick="app.openCorrectie('${p.planningItemId}')">
-                            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                                <div style="flex:1">
-                                    <div style="font-size:15px;font-weight:500">${this.escapeHtml(p.clientName || 'Onbekend')}${corrBadge}</div>
-                                    ${p.clientAddress ? `<div style="font-size:12px;color:var(--qe-grey);margin-top:2px">📍 ${this.escapeHtml(p.clientAddress)}</div>` : ''}
-                                    <div style="font-size:12px;color:var(--qe-grey);margin-top:4px">
-                                        ⏱ ${this.formatDecimalHours(totH)} · 📦 ${matCount} item${matCount !== 1 ? 's' : ''}
-                                    </div>
-                                </div>
-                                <div style="text-align:right">
-                                    ${p.origineelLogicId ? `<div style="font-size:13px;font-weight:600;color:var(--qe-purple)">${this.escapeHtml(p.origineelLogicId)}</div>` : ''}
-                                    ${p.orderLogicId ? `<div style="font-size:11px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(p.orderLogicId)}</div>` : ''}
-                                    <div style="font-size:18px;color:var(--qe-purple);margin-top:6px">${this.icon('edit', { size: 18 })}</div>
-                                </div>
+                        <div style="padding:15px 0;border-bottom:1px solid var(--l1);cursor:pointer" onclick="app.openCorrectie('${p.planningItemId}')">
+                            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+                                <span style="font-size:15.5px;font-weight:500;color:var(--ink);min-width:0">${this.escapeHtml(p.clientName || 'Onbekend')}${corrBadge}</span>
+                                <span style="font-size:12px;font-weight:600;color:var(--purple2);flex-shrink:0">${this.escapeHtml(p.origineelLogicId || p.orderLogicId || '')}</span>
                             </div>
+                            <div style="font-size:12.5px;color:var(--g1);margin-top:4px">${this.formatDecimalHours(totH)} · ${matCount} item${matCount !== 1 ? 's' : ''}</div>
                         </div>`;
                 });
             });
@@ -11526,109 +11458,109 @@ const app = {
             if (m) m.remove();
             m = document.createElement('div');
             m.id = 'kmPromptModal';
-            // v96-fix: align-items:flex-start + padding-top:30px zodat de modal bovenaan
-            // staat ipv gecentreerd. Bij open toetsenbord blijft de hele inhoud zichtbaar
-            // en kan je naar boven scrollen om titel/subtitle/mobility/fiets te zien.
-            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.7);display:flex;align-items:flex-start;justify-content:center;padding:30px 16px 16px;overflow-y:auto;-webkit-overflow-scrolling:touch';
+            // v270 (Marble 1:1, prototype "KM-BEVRAGING"): bottom-sheet die
+            // vloeiend omhoogschuift (mbSheet) i.p.v. het witte kaartje.
+            // De inhoud scrollt binnen de sheet (max-height), zodat alles
+            // ook met een open toetsenbord bereikbaar blijft (v96-les).
+            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(38,51,75,0.45);display:flex;align-items:flex-end;justify-content:center;animation:mbDim 0.25s ease-out';
             m.innerHTML = `
-                <div style="background:#fff;border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:0 8px 32px rgba(0,0,0,0.3);box-sizing:border-box">
-                    <div style="font-size:20px;font-weight:700;color:#1A237E;margin-bottom:6px;display:flex;align-items:center;gap:8px">
- Kilometers vandaag
-                    </div>
-                    <div style="font-size:13px;color:#666;margin-bottom:14px">
-                        Hoeveel kilometers heb je heen en terug afgelegd?
+                <div style="background:var(--bg);border-radius:18px 18px 0 0;width:100%;max-width:none;padding:14px 24px calc(24px + var(--safe-bottom,0px));box-shadow:0 -8px 30px rgba(38,51,75,0.18);box-sizing:border-box;max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch;animation:mbSheet 0.35s cubic-bezier(0.22,1,0.36,1)">
+                    <div style="width:38px;height:4px;border-radius:2px;background:var(--b2);margin:0 auto 16px"></div>
+                    <div style="font:400 22px var(--font);letter-spacing:-0.5px;color:var(--ink)">Kilometers vandaag</div>
+                    <div style="font-size:13px;color:var(--g2);margin:4px 0 16px">
+                        Voor je uitklokt: hoeveel km heb je heen en terug afgelegd?
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
                         <div>
-                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Heen (km)</label>
+                            <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Heen (km)</label>
                             <input id="kmHeenInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:12px;font-size:17px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
+                                style="width:100%;padding:12px;font-size:17px;border:1px solid var(--b1);border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
                         </div>
                         <div>
-                            <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Terug (km)</label>
+                            <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Terug (km)</label>
                             <input id="kmTerugInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:12px;font-size:17px;border:2px solid #cfd8dc;border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
+                                style="width:100%;padding:12px;font-size:17px;border:1px solid var(--b1);border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
                         </div>
                     </div>
 
-                    <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Mobiliteit</label>
+                    <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Mobiliteit</label>
                     <div id="kmMobilityRadio" style="display:grid;gap:6px;margin-bottom:14px">
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-3" checked style="margin:0">
  <span> Chauffeur zonder passagiers</span>
                         </label>
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-1" style="margin:0">
  <span> Chauffeur (met passagiers)</span>
                         </label>
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px">
+                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
                             <input type="radio" name="kmMobility" value="-2" style="margin:0">
  <span> Passagier</span>
                         </label>
                     </div>
 
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#fff8e1">
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:var(--awash)">
                         <input id="kmFietsInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
  <span> Woonwerk-verkeer met de <strong>fiets</strong></span>
                     </label>
 
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:#e8f5e9">
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:var(--gwash)">
                         <input id="kmDirectThuisWerfInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
  <span> Rechtstreeks van <strong>thuis naar werf</strong> gereden</span>
                     </label>
 
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:2px solid #cfd8dc;border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:#e8f5e9">
+                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:var(--gwash)">
                         <input id="kmDirectWerfThuisInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
  <span> Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
                     </label>
 
                     <!-- v131: knop om rit te splitsen in 2 mobiliteits-segmenten -->
                     <button id="kmSplitToggle" type="button"
-                            style="width:100%;padding:11px;background:#fff;color:#1A237E;border:2px dashed #1A237E;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:14px">
+                            style="width:100%;padding:11px;background:#fff;color:var(--ink);border:1px dashed var(--b2);border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:14px">
  Rit splitsen (deel met andere mobiliteit)
                     </button>
 
-                    <div id="kmSplitSection" style="display:none;border:2px solid #cfd8dc;border-radius:12px;padding:14px;margin-bottom:14px;background:#fafafa">
+                    <div id="kmSplitSection" style="display:none;border:1px solid var(--b1);border-radius:12px;padding:14px;margin-bottom:14px;background:var(--wash)">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
- <div style="font-size:13px;font-weight:700;color:#1A237E"> Tweede rit-segment</div>
-                            <button id="kmSplitRemove" type="button" style="background:none;border:none;color:#c62828;cursor:pointer;font-size:13px;font-weight:600;padding:0">✕ verwijder</button>
+ <div style="font-size:13px;font-weight:700;color:var(--ink)"> Tweede rit-segment</div>
+                            <button id="kmSplitRemove" type="button" style="background:none;border:none;color:var(--red2);cursor:pointer;font-size:13px;font-weight:600;padding:0">✕ verwijder</button>
                         </div>
-                        <div style="font-size:11px;color:#888;margin-bottom:10px;line-height:1.4">
+                        <div style="font-size:11px;color:var(--g3);margin-bottom:10px;line-height:1.4">
                             Vul hier de km in die je in een <strong>andere</strong> mobiliteit aflegde (bv. solo-deel voordat je iemand oppikte). De hoofd-keuze hierboven geldt voor de rest.
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
                             <div>
-                                <label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Heen (km)</label>
+                                <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:3px">Heen (km)</label>
                                 <input id="kmHeen2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                    style="width:100%;padding:10px;font-size:15px;border:2px solid #cfd8dc;border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
+                                    style="width:100%;padding:10px;font-size:15px;border:1px solid var(--b1);border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
                             </div>
                             <div>
-                                <label style="font-size:11px;color:#666;display:block;margin-bottom:3px">Terug (km)</label>
+                                <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:3px">Terug (km)</label>
                                 <input id="kmTerug2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                    style="width:100%;padding:10px;font-size:15px;border:2px solid #cfd8dc;border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
+                                    style="width:100%;padding:10px;font-size:15px;border:1px solid var(--b1);border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
                             </div>
                         </div>
-                        <label style="font-size:11px;color:#666;display:block;margin-bottom:4px">Mobiliteit voor dit segment</label>
+                        <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:4px">Mobiliteit voor dit segment</label>
                         <div id="kmMobility2Radio" style="display:grid;gap:5px">
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
                                 <input type="radio" name="kmMobility2" value="-3" checked style="margin:0">
  <span> Chauffeur zonder passagiers</span>
                             </label>
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
                                 <input type="radio" name="kmMobility2" value="-1" style="margin:0">
  <span> Chauffeur (met passagiers)</span>
                             </label>
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:2px solid #cfd8dc;border-radius:8px;cursor:pointer;font-size:13px;background:#fff">
+                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
                                 <input type="radio" name="kmMobility2" value="-2" style="margin:0">
  <span> Passagier</span>
                             </label>
                         </div>
                     </div>
 
-                    <button id="kmPromptSubmit" style="width:100%;padding:14px;background:#1A237E;color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer">
-                        Opslaan
+                    <button id="kmPromptSubmit" style="width:100%;padding:16px;background:var(--btn);color:var(--btnfg);border:none;border-radius:2px;font:600 14px var(--font);cursor:pointer">
+                        Uitklokken bevestigen
                     </button>
-                    <div id="kmPromptError" style="font-size:11px;color:#e65100;background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>
+                    <div id="kmPromptError" style="font-size:11px;color:var(--amber2);background:var(--awash2);border:1px solid var(--aborder);border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>
                 </div>`;
             document.body.appendChild(m);
 
@@ -11756,7 +11688,7 @@ const app = {
                 const hasSplit = splitOpen && (heen2 > 0 || terug2 > 0);
 
                 btn.disabled = true;
-                btn.textContent = 'Opslaan...';
+                btn.textContent = 'Bevestigen…';
                 errEl.style.display = 'none';
 
                 try {
@@ -11843,7 +11775,7 @@ const app = {
                     errEl.textContent = 'Opslaan mislukt: ' + (e && e.message || '?');
                     errEl.style.display = 'block';
                     btn.disabled = false;
-                    btn.textContent = 'Opslaan';
+                    btn.textContent = 'Uitklokken bevestigen';
                 } finally {
                     this._kmSubmitBusy = false;  // v251
                 }
@@ -12626,6 +12558,15 @@ const app = {
     toggleDarkMode(enabled) {
         document.body.classList.toggle('dark-mode', enabled);
         localStorage.setItem('qe_dark_mode', enabled ? '1' : '0');
+    },
+
+    // ========================================
+    // v260 (Werkbon 2.0): WERF-MODUS — UI-schaal ×1,12 (marble.css),
+    // alle hit-targets ≥ 48px; bedienbaar met handschoenen.
+    // ========================================
+    toggleWerfModus(enabled) {
+        document.body.classList.toggle('werf-modus', enabled);
+        localStorage.setItem('qe_werf_modus', enabled ? '1' : '0');
     },
 };
 
