@@ -912,6 +912,20 @@
         <div id="roleSwitchNote" style="font-size:12px;color:var(--amber2);margin:-6px 0 12px;display:none;font-weight:500"></div>
     </div>
 
+    <!-- v273: standaard terminal voor Terminal-betalingen (per toestel) -->
+    <div class="card mb-prowcard monteur-hide" id="defaultTerminalCard" style="margin-bottom:14px;padding:4px 18px">
+        <div class="mb-prow" style="border-bottom:none;cursor:default">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Standaard terminal</div>
+                <div class="mb-prow-s">Wordt direct gebruikt bij Terminal-betalingen</div>
+            </div>
+            <select id="defaultTerminalSelect" onchange="app.saveDefaultTerminal(this.value)"
+                style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
+                <option value="">Altijd vragen</option>
+            </select>
+        </div>
+    </div>
+
     <!-- v233/v247: Beheer + Afwezigheid + Uren-analyse als Marble-rijen met → -->
     <div class="card mb-prowcard" id="adminCard" style="margin-bottom:14px;display:none;padding:4px 18px">
         <div class="mb-prow" onclick="app.navigate('screenAdmin')">

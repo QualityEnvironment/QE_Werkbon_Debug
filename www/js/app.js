@@ -1699,6 +1699,8 @@ const app = {
 
         if (screenId === 'screenUitgevoerd') this.loadUitgevoerd();
         if (screenId === 'screenDagoverzicht') this.loadDagoverzicht(0);
+        // v268/v273: standaard-terminal-keuzelijst op het profiel verversen
+        if (screenId === 'screenProfile') { try { this.loadDefaultTerminalPicker(); } catch (_) {} }
         if (screenId === 'screenClock') this.onNavigateToClock();
         if (screenId === 'screenAdmin') this.loadAdmin();
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
@@ -7090,7 +7092,14 @@ const app = {
                     : 'geen terminals gevonden in Mollie');
             }
             const lastId = localStorage.getItem('qe_last_terminal_id') || '';
-            if (terminals.length === 1) {
+            // v268/v273: standaard terminal (instelbaar op het Profiel) —
+            // indien ingesteld en nog actief in Mollie: direct pushen,
+            // geen keuzescherm meer.
+            const defId = localStorage.getItem('qe_default_terminal_id') || '';
+            const defTerminal = defId ? terminals.find(t => String(t.id) === defId) : null;
+            if (defTerminal) {
+                await this._startTerminalPayment(defTerminal, bedrag, invoiceResult, { viaDefault: true });
+            } else if (terminals.length === 1) {
                 await this._startTerminalPayment(terminals[0], bedrag, invoiceResult);
             } else {
                 this._renderTerminalKeuze(terminals, lastId, bedrag, invoiceResult);
@@ -7150,7 +7159,54 @@ const app = {
         this._startTerminalPayment(t, this._terminalKeuzeBedrag, this._terminalCtx).catch(() => {});
     },
 
-    async _startTerminalPayment(terminal, bedrag, invoiceResult) {
+    // ========================================
+    // v268/v273: STANDAARD TERMINAL (Profiel)
+    // Per toestel bewaard (localStorage) — elke technieker kiest de
+    // terminal die bij zijn toestel/bus hoort. '' = altijd vragen.
+    // De lijst komt live uit Mollie: terminals die in het Mollie-
+    // dashboard worden toegevoegd verschijnen hier vanzelf.
+    // ========================================
+    async loadDefaultTerminalPicker() {
+        const sel = document.getElementById('defaultTerminalSelect');
+        if (!sel) return;
+        const cur = localStorage.getItem('qe_default_terminal_id') || '';
+        sel.innerHTML = '<option value="">Altijd vragen</option>';
+        sel.disabled = true;
+        try {
+            const all = await MollieAPI.listTerminals();
+            const terminals = (all || []).filter(t => String(t.status || '').toLowerCase() === 'active');
+            sel.innerHTML = '<option value="">Altijd vragen</option>' + terminals.map(t =>
+                '<option value="' + this.escapeHtml(String(t.id)) + '"' + (String(t.id) === cur ? ' selected' : '') + '>' +
+                this.escapeHtml(t.description || t.serialNumber || t.id) + '</option>').join('');
+            // Ingestelde terminal bestaat niet meer (verwijderd/inactief in
+            // Mollie) → toon dat expliciet; de betaalflow valt dan vanzelf
+            // terug op het keuzescherm.
+            if (cur && !terminals.some(t => String(t.id) === cur)) {
+                sel.innerHTML += '<option value="' + this.escapeHtml(cur) + '" selected>Niet meer beschikbaar — kies opnieuw</option>';
+            }
+        } catch (e) {
+            console.warn('[Terminal] lijst laden voor profiel faalde:', e && e.message);
+            if (cur) sel.innerHTML += '<option value="' + this.escapeHtml(cur) + '" selected>Ingesteld (lijst niet geladen)</option>';
+        } finally {
+            sel.disabled = false;
+        }
+    },
+
+    saveDefaultTerminal(id) {
+        try {
+            if (id) {
+                localStorage.setItem('qe_default_terminal_id', String(id));
+                const sel = document.getElementById('defaultTerminalSelect');
+                const label = sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : id;
+                this.toast('Standaard terminal: ' + label);
+            } else {
+                localStorage.removeItem('qe_default_terminal_id');
+                this.toast('Terminal wordt weer per betaling gevraagd');
+            }
+        } catch (_) {}
+    },
+
+    async _startTerminalPayment(terminal, bedrag, invoiceResult, opts) {
         // v254-review-fix: eigen busy-guard — bij ≥2 terminals is
         // _terminalStartBusy al vrijgegeven zodra het keuzescherm staat;
         // een dubbel-tik pushte anders TWEE betalingen naar de terminal
@@ -7193,6 +7249,9 @@ const app = {
                         (ogm ? '<p style="color:#666;margin:0 0 2px;font-size:13px;font-family:monospace;letter-spacing:1px">' + this.escapeHtml(ogm) + '</p>' : '') +
                         '<p style="font-size:26px;font-weight:700;margin:4px 0 6px">€ ' + bedrag.toFixed(2) + '</p>' +
                         '<p style="color:#444;font-size:14px;margin:0 0 14px">op <b>' + tNaam + '</b></p>' +
+                        ((opts && opts.viaDefault)
+                            ? '<p style="color:#888;font-size:11.5px;margin:-8px 0 14px">Standaard terminal — aanpassen kan op je Profiel</p>'
+                            : '') +
                         '<div class="spinner" style="margin:14px auto"></div>' +
                         '<p id="terminalPayStatus" style="font-weight:600;color:var(--ink);margin:10px 0 16px">' +
                             'Bedrag staat op de terminal — de klant kan de kaart aanbieden…</p>' +
@@ -7206,10 +7265,18 @@ const app = {
                     '</div>';
             }
             this._beginTerminalPoll(r.referenceId, invoiceResult);
-            // Auto-open ná het renderen — de poll loopt gewoon door en toont
-            // "✅ Betaald" zodra de technieker terugwisselt (webhook → KV).
+            // v268/v273: Mollie Tap pas na een korte wachttijd openen — de
+            // push-melding van Mollie moet eerst op het toestel aankomen;
+            // direct openen toonde een LEGE Tap-app en de technieker moest
+            // alsnog de melding zelf opentikken. Na ±4 s staat de betaling
+            // er vrijwel altijd op. We openen alleen als het terminal-
+            // scherm nog zichtbaar is; de knop blijft voor handmatig.
             if (tapHier) {
-                try { QEBridge.bringMollieTapToFront(); } catch (_) {}
+                setTimeout(() => {
+                    try {
+                        if (document.getElementById('terminalPayStatus')) QEBridge.bringMollieTapToFront();
+                    } catch (_) {}
+                }, 4000);
             }
         } catch (e) {
             // v254-review-fix: volwaardig foutscherm i.p.v. alleen een toast —
