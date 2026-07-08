@@ -909,3 +909,25 @@ body.dark-mode #clockHeroCard { background: var(--card); }
     border-radius: 16px !important;
     box-shadow: var(--shadow-lg) !important;
 }
+
+/* --- bevestigings-modal (clock.js _showConfirmModal): Marble-kaart --- */
+.qe-confirm-card { font-family: var(--font); border: 1px solid var(--cb); }
+.qe-confirm-card #qeModalOk { border-radius: 2px !important; font-family: var(--font); }
+.qe-confirm-card #qeModalCancel { border-radius: 2px !important; font-family: var(--font); }
+
+/* --- km-bevestigingsscherm (fullscreen): Marble-inputs + veilige onderrand --- */
+#kmPromptModal input[type="number"] { border-color: var(--b1) !important; background: var(--card); color: var(--ink); }
+#kmPromptModal label { color: var(--g1) !important; }
+#kmPromptModal #kmPromptSubmit { font-family: var(--font); }
+#kmPromptModal > div > div:last-child { padding-bottom: calc(20px + var(--safe-bottom, 0px)) !important; }
+
+/* --- aanpassing-aanvraag: reden-rijen selecteren in ink (motor zet paars;
+       deze overrides winnen van de inline JS-styles) — prototype reqReasons --- */
+#aanpassingRedenen .aanp-reden { border-color: var(--cb) !important; background: var(--card); }
+#aanpassingRedenen .aanp-reden.sel { border-color: var(--ink) !important; background: var(--wash) !important; }
+#aanpassingRedenen .aanp-dot { border-color: var(--b2) !important; }
+#aanpassingRedenen .aanp-reden.sel .aanp-dot {
+    border-color: var(--ink) !important;
+    background: var(--btn) !important;
+    box-shadow: inset 0 0 0 3px var(--card) !important;
+}

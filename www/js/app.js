@@ -10413,6 +10413,7 @@ const app = {
      */
     async openAanpassing(workOrderId) {
         this._aanpassingWoId = workOrderId;
+        this._aanpassingReden = null;  // v266/v271: verse reden-keuze per aanvraag
         this.navigate('screenAanpassing');
 
         const content = document.getElementById('aanpassingContent');
@@ -10461,34 +10462,47 @@ const app = {
                     <div style="font-size:11px;color:var(--qe-grey);margin-top:8px">Werkbon #${wo.id}</div>
                 </div>
 
-                <!-- Aanpassing formulier -->
+                <!-- Aanpassing formulier — v266/v271: standaardredenen + vrije tekst -->
                 <div class="card" style="padding:16px">
-                    <h3 style="font-size:16px;color:var(--qe-darkblue);margin-bottom:16px">Aanpassing aanvragen</h3>
+                    <h3 style="font-size:16px;color:var(--qe-darkblue);margin-bottom:6px">Aanpassing aanvragen</h3>
                     <p style="font-size:12px;color:var(--qe-grey);margin-bottom:14px">
                         De aanvraag wordt als taak naar Vince gestuurd. Hij past de uren handmatig aan in Robaws.
                     </p>
 
-                    <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste ingeklokt</label>
-                        <input type="time" id="aanpassingStart" value="${ingeklokt}"
-                            style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+                    <div style="font-size:12px;font-weight:600;color:var(--qe-grey);letter-spacing:0.5px;margin-bottom:8px">WAT KLOPT ER NIET?</div>
+                    <div id="aanpassingRedenen">
+                        ${this._aanpassingRedenen.map((r, i) => `
+                        <div class="aanp-reden" data-i="${i}" onclick="app.pickAanpassingReden(${i})"
+                            style="display:flex;align-items:center;gap:12px;padding:13px 14px;margin-bottom:7px;border:1px solid #ddd;border-radius:12px;cursor:pointer">
+                            <span class="aanp-dot" style="width:16px;height:16px;border-radius:50%;border:1.5px solid #bbb;flex-shrink:0;transition:all 0.2s"></span>
+                            <span style="flex:1;font-size:14px;font-weight:500">${r}</span>
+                        </div>`).join('')}
                     </div>
 
-                    <div style="margin-bottom:14px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste uitgeklokt</label>
-                        <input type="time" id="aanpassingEnd" value="${uitgeklokt}"
-                            style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+                    <div id="aanpassingTijden" style="display:none;margin:12px 0 2px">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                            <div>
+                                <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste ingeklokt</label>
+                                <input type="time" id="aanpassingStart" value="${ingeklokt}"
+                                    style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+                            </div>
+                            <div>
+                                <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Juiste uitgeklokt</label>
+                                <input type="time" id="aanpassingEnd" value="${uitgeklokt}"
+                                    style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:15px;box-sizing:border-box">
+                            </div>
+                        </div>
                     </div>
 
-                    <div style="margin-bottom:16px">
-                        <label style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Opmerking</label>
-                        <textarea id="aanpassingOpmerking" rows="3" placeholder="Waarom moet dit aangepast worden?"
+                    <div style="margin:12px 0 16px">
+                        <label id="aanpassingOpmerkingLabel" style="font-size:13px;font-weight:500;color:var(--qe-dark);display:block;margin-bottom:4px">Toelichting (optioneel)</label>
+                        <textarea id="aanpassingOpmerking" rows="3" placeholder="Extra uitleg voor Vince..."
                             style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box"></textarea>
                     </div>
 
                     <button class="btn btn-primary btn-full" onclick="app.submitAanpassing('${wo.id}')"
                         style="padding:14px;font-size:15px;font-weight:600" id="btnSubmitAanpassing">
-                        ${this.icon('mail-send', { size: 18, style: 'vertical-align:-3px' })} Aanpassing indienen
+                        Aanvraag versturen
                     </button>
                 </div>
             `;
@@ -10497,28 +10511,73 @@ const app = {
         }
     },
 
-    /** v64: Dien de aanpassing in als taak gekoppeld aan de werkbon. */
+    // v266/v271: standaardredenen voor de aanpassing-aanvraag. De laatste
+    // ("Iets anders") vereist een eigen toelichting. Tijd-gerelateerde
+    // redenen (index 0-3) tonen de juiste-tijd-velden.
+    _aanpassingRedenen: [
+        'Vergeten in te klokken',
+        'Vergeten uit te klokken',
+        'Verkeerd inkloktijdstip',
+        'Verkeerd uitkloktijdstip',
+        'Verkeerd type (werk/overuren/L&L)',
+        'Iets anders',
+    ],
+    _aanpassingReden: null,
+
+    pickAanpassingReden(i) {
+        this._aanpassingReden = i;
+        document.querySelectorAll('#aanpassingRedenen .aanp-reden').forEach((el) => {
+            const sel = Number(el.dataset.i) === i;
+            el.classList.toggle('sel', sel);
+            el.style.borderColor = sel ? 'var(--qe-purple)' : '#ddd';
+            el.style.background = sel ? 'rgba(106,44,145,0.06)' : '';
+            const dot = el.querySelector('.aanp-dot');
+            if (dot) {
+                dot.style.borderColor = sel ? 'var(--qe-purple)' : '#bbb';
+                dot.style.background = sel ? 'var(--qe-purple)' : 'transparent';
+                dot.style.boxShadow = sel ? 'inset 0 0 0 3px #fff' : 'none';
+            }
+        });
+        const tijden = document.getElementById('aanpassingTijden');
+        if (tijden) tijden.style.display = (i <= 3) ? 'block' : 'none';
+        const lbl = document.getElementById('aanpassingOpmerkingLabel');
+        if (lbl) lbl.textContent = (i === this._aanpassingRedenen.length - 1)
+            ? 'Toelichting (verplicht)' : 'Toelichting (optioneel)';
+    },
+
+    /** v64: Dien de aanpassing in als taak gekoppeld aan de werkbon.
+     *  v266/v271: reden verplicht; toelichting alleen bij "Iets anders". */
     async submitAanpassing(workOrderId) {
         const btn = document.getElementById('btnSubmitAanpassing');
-        const startVal = document.getElementById('aanpassingStart').value;
-        const endVal = document.getElementById('aanpassingEnd').value;
+        const startVal = document.getElementById('aanpassingStart')?.value || '';
+        const endVal = document.getElementById('aanpassingEnd')?.value || '';
         const opmerking = document.getElementById('aanpassingOpmerking').value.trim();
+        const redenIdx = this._aanpassingReden;
 
-        if (!opmerking) {
-            this.toast('Vul een opmerking in waarom de aanpassing nodig is', true);
+        if (redenIdx == null) {
+            this.toast('Kies eerst wat er niet klopt', true);
+            return;
+        }
+        const reden = this._aanpassingRedenen[redenIdx];
+        const isVrijeTekst = redenIdx === this._aanpassingRedenen.length - 1;
+        if (isVrijeTekst && !opmerking) {
+            this.toast('Omschrijf kort wat er aangepast moet worden', true);
             return;
         }
 
         btn.disabled = true;
-        btn.textContent = 'Indienen...';
+        btn.textContent = 'Versturen...';
 
         try {
             const user = RobawsAPI.getLoggedInUser();
+            const tijdRegels = (redenIdx <= 3)
+                ? `Juiste ingeklokt: ${startVal || '(niet gewijzigd)'}\n` +
+                  `Juiste uitgeklokt: ${endVal || '(niet gewijzigd)'}\n\n`
+                : '';
             const description = `Aanpassing aangevraagd door ${user ? user.name : 'onbekend'} ` +
                 `voor werkbon #${workOrderId}:\n\n` +
-                `Juiste ingeklokt: ${startVal || '(niet gewijzigd)'}\n` +
-                `Juiste uitgeklokt: ${endVal || '(niet gewijzigd)'}\n\n` +
-                `Opmerking: ${opmerking}`;
+                `Wat klopt er niet: ${reden}\n\n` + tijdRegels +
+                (opmerking ? `Toelichting: ${opmerking}` : 'Geen extra toelichting.');
 
             await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                 title: `Uren aanpassing — ${user ? user.name : 'onbekend'}`,
@@ -10526,13 +10585,13 @@ const app = {
                 assignedUserId: RobawsAPI.TASK_USERS.OPVOLGING, // v222b: Vince (uren-aanpassing)
             });
 
-            this.toast('Aanpassing ingediend bij Vince');
+            this.toast('Aanvraag verstuurd naar Vince');
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {
             this.toast('Fout bij indienen: ' + e.message, true);
             btn.disabled = false;
-            btn.textContent = 'Aanpassing indienen';
+            btn.textContent = 'Aanvraag versturen';
         }
     },
 
@@ -10776,7 +10835,10 @@ const app = {
 
         // v92+: tijd in uren (s.klantMin/verplMin blijft intern in min, UI toont uren met 2 decimalen)
         document.getElementById('correctieKlantUur').value = (s.klantMin / 60).toFixed(2);
-        document.getElementById('correctieVerplUur').value = (s.verplMin / 60).toFixed(2);
+        // v266/v271: verplaatsings-veld is uit de UI — null-safe laten voor
+        // het geval de markup ooit terugkomt; intern blijft verplMin bestaan.
+        const verplInputEl = document.getElementById('correctieVerplUur');
+        if (verplInputEl) verplInputEl.value = (s.verplMin / 60).toFixed(2);
 
         // Render materialen
         const matList = document.getElementById('correctieMaterialen');
@@ -10810,8 +10872,11 @@ const app = {
         const s = this.correctieState;
         if (!s) return;
         // v92+: input is uren (decimaal), state blijft min
+        // v266/v271: geen verplaatsings-veld meer — zonder input blijft de
+        // verplaatsing op het origineel staan (delta 0, regel verborgen).
         const newKlant = parseFloat(document.getElementById('correctieKlantUur').value) || 0;
-        const newVerpl = parseFloat(document.getElementById('correctieVerplUur').value) || 0;
+        const verplEl = document.getElementById('correctieVerplUur');
+        const newVerpl = verplEl ? (parseFloat(verplEl.value) || 0) : s.origineel.verplUur;
         const dKlant = Math.round((newKlant - s.origineel.klantUur) * 100) / 100;
         const dVerpl = Math.round((newVerpl - s.origineel.verplUur) * 100) / 100;
         const fmt = v => (v > 0 ? '+' : '') + v.toFixed(2) + 'u';
@@ -10820,8 +10885,8 @@ const app = {
         if (!el) return;
         el.innerHTML = `
             <div style="display:flex;justify-content:space-around;font-size:12px">
-                <div>Klant: <span style="font-weight:600;color:${color(dKlant)}">${fmt(dKlant)}</span></div>
-                <div>Verplaatsing: <span style="font-weight:600;color:${color(dVerpl)}">${fmt(dVerpl)}</span></div>
+                <div>Uren: <span style="font-weight:600;color:${color(dKlant)}">${fmt(dKlant)}</span></div>
+                ${dVerpl !== 0 ? `<div>Verplaatsing: <span style="font-weight:600;color:${color(dVerpl)}">${fmt(dVerpl)}</span></div>` : ''}
             </div>`;
     },
 
@@ -11458,18 +11523,22 @@ const app = {
             if (m) m.remove();
             m = document.createElement('div');
             m.id = 'kmPromptModal';
-            // v270 (Marble 1:1, prototype "KM-BEVRAGING"): bottom-sheet die
-            // vloeiend omhoogschuift (mbSheet) i.p.v. het witte kaartje.
-            // De inhoud scrollt binnen de sheet (max-height), zodat alles
-            // ook met een open toetsenbord bereikbaar blijft (v96-les).
-            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(38,51,75,0.45);display:flex;align-items:flex-end;justify-content:center;animation:mbDim 0.25s ease-out';
+            // v272: VOLLEDIG scherm i.p.v. bottom-sheet — de sheet verdween
+            // achter het numerieke toetsenbord (v96-les opnieuw geleerd).
+            // Dit formulier is nu ook de UITKLOK-BEVESTIGING: "Uitklokken
+            // bevestigen" = km opslaan → resolve(true) → clock.js klokt uit;
+            // ✕ of "Annuleren" = resolve(false) → géén uitklok.
+            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:var(--bg,var(--qe-white,#fff));display:flex;animation:mbSheet 0.35s cubic-bezier(0.22,1,0.36,1)';
             m.innerHTML = `
-                <div style="background:var(--bg);border-radius:18px 18px 0 0;width:100%;max-width:none;padding:14px 24px calc(24px + var(--safe-bottom,0px));box-shadow:0 -8px 30px rgba(38,51,75,0.18);box-sizing:border-box;max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch;animation:mbSheet 0.35s cubic-bezier(0.22,1,0.36,1)">
-                    <div style="width:38px;height:4px;border-radius:2px;background:var(--b2);margin:0 auto 16px"></div>
-                    <div style="font:400 22px var(--font);letter-spacing:-0.5px;color:var(--ink)">Kilometers vandaag</div>
-                    <div style="font-size:13px;color:var(--g2);margin:4px 0 16px">
-                        Voor je uitklokt: hoeveel km heb je heen en terug afgelegd?
+                <div style="display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:18px 20px 4px">
+                        <div style="flex:1;min-width:0">
+                            <div style="font:400 22px var(--font,inherit);letter-spacing:-0.5px;color:var(--ink,var(--qe-darkblue,#001E45))">Kilometers vandaag</div>
+                            <div style="font-size:13px;color:var(--g2,var(--qe-grey,#666));margin-top:3px">Vul je kilometers in en bevestig — dan word je uitgeklokt.</div>
+                        </div>
+                        <button id="kmPromptClose" type="button" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--b1,#ddd);background:none;color:var(--g2,var(--qe-grey,#666));font-size:15px;cursor:pointer;flex-shrink:0">✕</button>
                     </div>
+                    <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 20px 20px">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
                         <div>
                             <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Heen (km)</label>
@@ -11561,6 +11630,8 @@ const app = {
                         Uitklokken bevestigen
                     </button>
                     <div id="kmPromptError" style="font-size:11px;color:var(--amber2);background:var(--awash2);border:1px solid var(--aborder);border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>
+                    <button id="kmPromptCancel" type="button" style="width:100%;margin-top:10px;padding:12px;border:none;background:none;color:var(--g1,var(--qe-grey,#888));font-size:13px;font-weight:500;cursor:pointer">Annuleren — nog niet uitklokken</button>
+                    </div>
                 </div>`;
             document.body.appendChild(m);
 
@@ -11590,8 +11661,8 @@ const app = {
             if (splitToggleEl) splitToggleEl.addEventListener('click', openSplit);
             if (splitRemoveEl) splitRemoveEl.addEventListener('click', closeSplit);
 
-            // Auto-focus heen veld + select-all
-            setTimeout(() => { try { heenEl.focus(); heenEl.select(); } catch(_) {} }, 100);
+            // v272: geen autofocus meer — het numerieke toetsenbord schoof het
+            // formulier meteen weg; de auto-berekening vult de velden toch in.
 
             // ============================================================
             // v119: Auto-bereken km via Google Maps Distance Matrix.
@@ -11783,6 +11854,13 @@ const app = {
             btn.addEventListener('click', submit);
             terugEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
             heenEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') terugEl.focus(); });
+            // v272: ✕ of "Annuleren" = sluiten ZONDER uitklok — clock.js krijgt
+            // resolve(false) en laat de sessie gewoon doorlopen.
+            const cancelKm = () => { try { m.remove(); } catch(_) {} resolve(false); };
+            const kmCloseBtn = document.getElementById('kmPromptClose');
+            if (kmCloseBtn) kmCloseBtn.addEventListener('click', cancelKm);
+            const kmCancelBtn = document.getElementById('kmPromptCancel');
+            if (kmCancelBtn) kmCancelBtn.addEventListener('click', cancelKm);
         });
     },
 

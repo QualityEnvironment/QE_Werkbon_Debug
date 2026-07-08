@@ -603,22 +603,13 @@ window.QEClock = {
 
                 // ── ACTIEVE SESSIE → UITCLOCKEN ──
                 if (session.active) {
-                    const userName = user.name || user.email;
-                    const startTime = session.startTime || '?';
-                    // v72: vervang native confirm() door custom modal — confirm()
-                    // blokkeert de UI thread inclusief de _scanLock (8s timeout).
-                    const confirmed = await this._showConfirmModal(
-                        `${userName} uitklokken?`,
-                        `Ingeklokt om ${startTime}. Wil je nu uitklokken?`,
-                        'Uitklokken',
-                        'Annuleren'
-                    );
-                    if (!confirmed) {
-                        console.log('[Clock] Uitklokken geannuleerd door gebruiker');
-                        return;
-                    }
+                    // v267/v272: het KILOMETER-FORMULIER is voortaan de
+                    // bevestiging en opent VÓÓR de uitklok. "Uitklokken
+                    // bevestigen" = km opslaan + uitklokken; sluiten of
+                    // annuleren = NIET uitklokken (je blijft ingeklokt).
+                    // De aparte "<naam> uitklokken?"-confirm is vervallen.
 
-                    // v116: vóór uitklokken — controleer openstaande werkbons.
+                    // v116: vóór alles — controleer openstaande werkbons.
                     // Voor techniekers blokkeert dit ALTIJD bij >=1 openstaande.
                     // Voor monteurs met 1 openstaande werkbon biedt het de uren-
                     // overname + auto-submit aan. Bij blokkade: niet uitklokken.
@@ -640,6 +631,24 @@ window.QEClock = {
                             message: 'Niet uitgeklokt — openstaande werkbon',
                             refresh: false,
                         };
+                        return;
+                    }
+
+                    // km-formulier = bevestiging (annuleerbaar, geen uitklok
+                    // zolang er niet bevestigd is). Faalt het formulier zelf,
+                    // dan klokken we NIET uit — een nieuwe scan probeert opnieuw.
+                    let kmConfirmed = true;
+                    if (window.app && typeof app.promptKilometers === 'function') {
+                        try {
+                            kmConfirmed = await app.promptKilometers(session.workOrderId, session.employeeId);
+                        } catch (e) {
+                            console.warn('[Clock] km-formulier faalde:', e && e.message);
+                            kmConfirmed = false;
+                        }
+                    }
+                    if (!kmConfirmed) {
+                        console.log('[Clock] Uitklokken geannuleerd via km-formulier');
+                        if (window.app && app.toast) app.toast('Niet uitgeklokt — je blijft ingeklokt');
                         return;
                     }
 
@@ -668,21 +677,9 @@ window.QEClock = {
                         try { app.updateClockUI(); } catch(_) {}
                         try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
                     };
-                    // v265/v270: kilometers-prompt VÓÓR het eindscherm (was: erna
-                    // in afterScan). Techniekers zetten hun gsm vaak meteen uit
-                    // zodra "dag afgerond" verschijnt, waardoor de km anders nooit
-                    // ingevuld raakten. De Robaws-uitklok is op dit punt al veilig
-                    // geboekt; alleen de UI-volgorde wijzigt (zoals het prototype:
-                    // scan → kilometers → dagoverzicht). Bij inklok of fout is dit
-                    // een no-op (askKm is false).
-                    const askKmFirst = async () => {
-                        if (askKm && scanResult.ok && woId && empId
-                                && typeof app.promptKilometers === 'function') {
-                            try { await app.promptKilometers(woId, empId); } catch(e) {
-                                console.warn('[Clock] km prompt fout:', e && e.message);
-                            }
-                        }
-                    };
+                    // v272: de kilometers zijn al VÓÓR de uitklok ingevuld (het
+                    // km-formulier is de bevestiging) — hier alleen nog het
+                    // eindscherm. askKilometers uit _clockOut wordt genegeerd.
                     // Uitklok-succes → geanimeerde celebratie (Claude Design "Uitklokken").
                     // Clock-in en fouten houden de gewone SUCCES/MISLUKT-overlay.
                     if (scanResult.ok && scanResult.celeb && window.QECeleb) {
@@ -693,13 +690,11 @@ window.QEClock = {
                             const _h = Number(_c.hours) || 0;
                             _ht = Math.floor(_h) + 'u ' + Math.round((_h - Math.floor(_h)) * 60) + 'm vandaag';
                         }
-                        askKmFirst().then(() =>
-                            QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan }));
+                        QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan });
                     } else if (typeof app.showScanResult === 'function') {
-                        askKmFirst().then(() =>
-                            app.showScanResult(scanResult.ok, scanResult.message, afterScan));
+                        app.showScanResult(scanResult.ok, scanResult.message, afterScan);
                     } else {
-                        askKmFirst().then(afterScan);
+                        afterScan();
                     }
                 }
             }
@@ -2546,19 +2541,22 @@ window.QEClock = {
      */
     _showConfirmModal(title, message, okLabel, cancelLabel) {
         return new Promise((resolve) => {
+            // v272: nieuwe stijl — navy scrim, kaart met tokens (de Marble-www
+            // stuurt via .qe-confirm-* verder bij; 1.x valt op de fallbacks terug).
             const overlay = document.createElement('div');
-            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);' +
-                'display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px';
+            overlay.className = 'qe-confirm-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(38,51,75,0.45);' +
+                'display:flex;align-items:center;justify-content:center;z-index:99999;padding:24px';
             overlay.innerHTML = `
-                <div style="background:#fff;border-radius:12px;padding:20px;max-width:420px;width:100%;
-                    box-shadow:0 8px 24px rgba(0,0,0,0.2)">
-                    <h3 style="margin:0 0 8px;font-size:17px;color:#001E45">${title}</h3>
-                    <p style="margin:0 0 18px;font-size:14px;color:#444">${message}</p>
+                <div class="qe-confirm-card" style="background:var(--card,var(--qe-white,#fff));border-radius:14px;padding:22px;max-width:420px;width:100%;
+                    box-shadow:0 12px 32px rgba(0,8,26,0.25)">
+                    <h3 style="margin:0 0 8px;font-size:18px;font-weight:600;color:var(--ink,var(--qe-darkblue,#001E45))">${title}</h3>
+                    <p style="margin:0 0 18px;font-size:14px;line-height:1.5;color:var(--g2,var(--qe-grey,#555))">${message}</p>
                     <div style="display:flex;gap:10px;justify-content:flex-end">
-                        <button id="qeModalCancel" style="padding:10px 18px;font-size:14px;border:1px solid #ccc;
-                            background:#f5f5f5;border-radius:8px;cursor:pointer">${cancelLabel || 'Annuleren'}</button>
-                        <button id="qeModalOk" style="padding:10px 18px;font-size:14px;border:none;
-                            background:#001E45;color:#fff;border-radius:8px;cursor:pointer;font-weight:600">${okLabel || 'OK'}</button>
+                        <button id="qeModalCancel" style="padding:12px 18px;font-size:13px;font-weight:600;border:1px solid var(--b1,#ddd);
+                            background:none;color:var(--g2,var(--qe-grey,#666));border-radius:8px;cursor:pointer">${cancelLabel || 'Annuleren'}</button>
+                        <button id="qeModalOk" style="padding:12px 18px;font-size:13px;border:none;
+                            background:var(--btn,var(--qe-darkblue,#001E45));color:var(--btnfg,#fff);border-radius:8px;cursor:pointer;font-weight:600">${okLabel || 'OK'}</button>
                     </div>
                 </div>`;
             document.body.appendChild(overlay);
