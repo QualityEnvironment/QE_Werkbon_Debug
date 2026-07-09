@@ -9,7 +9,8 @@
    klassen blijven ongewijzigd (zelfde app, nieuw kleed).
 
    Thema's: licht (default) en donker (body.dark-mode).
-   Werf-modus: body.werf-modus (UI-schaal ×1,12, hit-targets ≥48px).
+   Toegankelijkheid: body.a11y-scale-groot/-xl (UI-zoom), a11y-bold,
+   a11y-contrast, a11y-motion, a11y-cvd-palette — zie sectie 17.
    Merk-accent #F99D3E blijft identiek in beide thema's.
    QR-codes blijven ALTIJD op puur wit (scanbaarheid).
    ========================================================= */
@@ -141,8 +142,8 @@ h1, h2, h3 { font-weight: 500; letter-spacing: -0.4px; }
     font-variant-numeric: tabular-nums;
 }
 
-/* Werf-modus: alles ×1,12 → hit-targets ≥ 48px (toggle op Profiel) */
-body.werf-modus { zoom: 1.12; }
+/* (v281) Werf-modus verwijderd — de UI-schaal zit nu in Toegankelijkheid
+   (body.a11y-scale-groot / .a11y-scale-xl, zie sectie 17). */
 
 /* =========================================================
    3 · TOPBAR — licht en minimaal (was navy)
@@ -997,9 +998,14 @@ body.a11y-cvd-palette {
     --qe-green: #0072B2; --qe-red: #D55E00;
 }
 
-/* Profiel-groepskoppen (opgeschoonde profielpagina) */
-.pg-title {
-    font: 700 11px/1.1 var(--font);
-    letter-spacing: .08em; text-transform: uppercase;
-    color: var(--g1); margin: 20px 4px 9px;
+/* Profiel-groepen: openklikbare accordeon-kaarten (v281) */
+.pg-group { margin-bottom: 12px; }
+.pg-group-head {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; cursor: pointer; border: none; text-align: left;
+    font: inherit; color: var(--ink);
+    -webkit-appearance: none; appearance: none;
 }
+.pg-group-title { font-size: 15px; font-weight: 600; }
+.pg-group-chev { font-size: 15px; color: var(--g1); flex-shrink: 0; line-height: 1; }
+.pg-group-body { margin-top: 8px; }

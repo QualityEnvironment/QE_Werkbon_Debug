@@ -973,9 +973,15 @@
     <!-- v280: profiel opgeschoond in vier groepen — Instellingen, Toegankelijkheid,
          Werknemers, App bijwerken. De NFC-tester is verwijderd. -->
 
+    <!-- v281: elke groep is een openklikbare accordeon-kaart (app.togglePgGroup) -->
+
     <!-- ===== INSTELLINGEN ===== -->
-    <div class="pg-section">
-        <div class="pg-title">Instellingen</div>
+    <div class="pg-group">
+        <button type="button" class="card pg-group-head" id="pgHeadInstel" onclick="app.togglePgGroup('pgBodyInstel','pgChevInstel')">
+            <span class="pg-group-title">Instellingen</span>
+            <span id="pgChevInstel" class="pg-group-chev">▾</span>
+        </button>
+        <div id="pgBodyInstel" class="pg-group-body" style="display:none">
 
         <!-- v273: standaard terminal voor Terminal-betalingen (per toestel) -->
         <div class="card mb-prowcard monteur-hide" id="defaultTerminalCard" style="margin-bottom:14px;padding:4px 18px">
@@ -1023,11 +1029,16 @@
                 <button style="width:100%;padding:13px;border:none;border-radius:2px;background:var(--btn);color:var(--btnfg);font:600 12.5px var(--font);cursor:pointer" onclick="app.profileChangePin()">PIN wijzigen</button>
             </div>
         </div>
+        </div>
     </div>
 
     <!-- ===== TOEGANKELIJKHEID ===== -->
-    <div class="pg-section">
-        <div class="pg-title">Toegankelijkheid</div>
+    <div class="pg-group">
+        <button type="button" class="card pg-group-head" id="pgHeadToegank" onclick="app.togglePgGroup('pgBodyToegank','pgChevToegank')">
+            <span class="pg-group-title">Toegankelijkheid</span>
+            <span id="pgChevToegank" class="pg-group-chev">▾</span>
+        </button>
+        <div id="pgBodyToegank" class="pg-group-body" style="display:none">
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow">
                 <div style="flex:1;min-width:0">
@@ -1090,11 +1101,16 @@
                 <label class="toggle-switch"><input type="checkbox" id="a11yPaletteToggle" onchange="app.toggleA11yPalette(this.checked)"><span class="toggle-slider"></span></label>
             </div>
         </div>
+        </div>
     </div>
 
     <!-- ===== WERKNEMERS (bureel / Levi & Vince) ===== -->
-    <div class="pg-section" id="pgSectionWerknemers" style="display:none">
-        <div class="pg-title">Werknemers</div>
+    <div class="pg-group" id="pgSectionWerknemers" style="display:none">
+        <button type="button" class="card pg-group-head" id="pgHeadWerkn" onclick="app.togglePgGroup('pgBodyWerkn','pgChevWerkn')">
+            <span class="pg-group-title">Werknemers</span>
+            <span id="pgChevWerkn" class="pg-group-chev">▾</span>
+        </button>
+        <div id="pgBodyWerkn" class="pg-group-body" style="display:none">
         <!-- v233/v247: Beheer + Afwezigheid als Marble-rijen met → -->
         <div class="card mb-prowcard" id="adminCard" style="margin-bottom:14px;display:none;padding:4px 18px">
             <div class="mb-prow" onclick="app.navigate('screenAdmin')">
@@ -1121,11 +1137,16 @@
                 <span class="mb-prow-arrow">→</span>
             </div>
         </div>
+        </div>
     </div>
 
     <!-- ===== APP BIJWERKEN ===== -->
-    <div class="pg-section">
-        <div class="pg-title">App bijwerken</div>
+    <div class="pg-group">
+        <button type="button" class="card pg-group-head" id="pgHeadApp" onclick="app.togglePgGroup('pgBodyApp','pgChevApp')">
+            <span class="pg-group-title">App bijwerken</span>
+            <span id="pgChevApp" class="pg-group-chev">▾</span>
+        </button>
+        <div id="pgBodyApp" class="pg-group-body" style="display:none">
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow" style="cursor:default;border-bottom:none">
                 <div style="flex:1;min-width:0">
@@ -1135,6 +1156,7 @@
                 <button class="mb-minibtn" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
             </div>
             <div id="updateStatus" style="font-size:13px;text-align:center;margin:4px 0 12px;display:none"></div>
+        </div>
         </div>
     </div>
 

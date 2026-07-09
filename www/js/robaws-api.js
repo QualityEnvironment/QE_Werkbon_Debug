@@ -344,7 +344,7 @@ const RobawsAPI = {
     /** Maak een Verlof-aanvraag en dien ze meteen in ter goedkeuring.
      *  fromDate/toDate = ISO-datetime strings (UTC). Retourneert het
      *  aangemaakte object of gooit bij een niet-2xx status. */
-    async createVerlofRequest({ employeeId, fromDate, toDate, comment }) {
+    async createVerlofRequest({ employeeId, fromDate, toDate, comment, authorUserId }) {
         const ids = await this._resolveVerlofIds();
         const body = {
             employeeId: String(employeeId),
@@ -354,7 +354,6 @@ const RobawsAPI = {
             toDate: toDate,
             startApprovalRequest: true,   // meteen indienen ter goedkeuring
         };
-        if (comment) body.comment = String(comment);
         const res = await this.post('time-off-requests', body);
         if (res.code !== 200 && res.code !== 201) {
             throw new Error('Robaws gaf status ' + res.code);
@@ -370,6 +369,15 @@ const RobawsAPI = {
                 await this.post('time-off-requests/' + created.id + '/start-approval-request', {});
             }
         } catch (e) { console.warn('[Verlof] start-approval fallback faalde:', e && e.message); }
+        // De opmerking als ÉCHTE comment posten, toegeschreven aan de aanvrager
+        // (authorUserId = Robaws userId). NIET via body.comment: dat wordt door
+        // Robaws aan de gedeelde API-gebruiker toegeschreven — vandaar dat de
+        // opmerking vroeger als "Rolf" (de sleutel-eigenaar) verscheen.
+        if (comment) {
+            try {
+                await this.postTimeOffComment(created.id, comment, authorUserId);
+            } catch (e) { console.warn('[Verlof] opmerking posten faalde:', e && e.message); }
+        }
         return created;
     },
 

@@ -220,10 +220,10 @@
             ['Correcties', 'Tik op een werkbon om uren of materiaal te corrigeren. Het origineel blijft staan; het verschil komt in een correctie-werkbon.']
         ] },
         screenProfile: { name: 'PROFIEL', steps: [
-            ['Weergave', 'Donker thema voor ’s avonds en donkere stookruimtes; werf-modus maakt alles groter voor handschoenen.', '#darkModeToggle', '.card'],
-            ['Rollen', 'Wissel tijdelijk van rol (bureel, technieker, monteur) — monteurs zien geen prijzen.', '#roleSwitchCard'],
-            ['Beheer & analyse', 'Beheer opent werknemersbeheer; Uren-analyse het maandoverzicht met Excel-export.', '#adminCard'],
-            ['App & PIN', 'Controleer op updates en wijzig je PIN onderaan.', '#btnCheckUpdate', '.card']
+            ['Instellingen', 'Standaard terminal, je actieve rol en je PIN — tik op de groep om ze open te klappen.', '#pgHeadInstel'],
+            ['Toegankelijkheid', 'Tekst en knoppen groter, hoog contrast, minder beweging en kleurenblind-modus — allemaal hier.', '#pgHeadToegank'],
+            ['Werknemers', 'Beheer, afwezigheid melden en (voor Levi & Vince) de uren-analyse.', '#pgHeadWerkn'],
+            ['App bijwerken', 'Controleer op updates. Uitloggen staat helemaal onderaan.', '#pgHeadApp']
         ] },
         screenAdmin: { name: 'BEHEER', steps: [
             ['Werknemers', 'Per werknemer zie je rol en status. PIN reset stuurt een nieuwe PIN, Rol wisselt de app-flow, Stopzet deactiveert de login.'],

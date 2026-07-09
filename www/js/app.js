@@ -8266,7 +8266,7 @@ const app = {
             // Belgische tijd) → juiste UTC incl. zomertijd. Robaws herrekent de uren.
             const fromDate = new Date(vanV + 'T07:00:00').toISOString();
             const toDate = new Date(tot + 'T15:30:00').toISOString();
-            await RobawsAPI.createVerlofRequest({ employeeId: empId, fromDate, toDate, comment });
+            await RobawsAPI.createVerlofRequest({ employeeId: empId, fromDate, toDate, comment, authorUserId: this._myRobawsUserId() });
             this.toast('Verlofaanvraag verstuurd');
             const c = document.getElementById('verlofComment'); if (c) c.value = '';
             await this.loadMyVerlof();
@@ -13106,6 +13106,21 @@ const app = {
     // Back-compat: eventuele oude werf-modus-aanroepen → schaal Groot/Normaal.
     toggleWerfModus(enabled) {
         this.setA11yScale(enabled ? 'groot' : 'normaal');
+    },
+
+    // Profiel-groepen: openklikbare accordeon (v281). Klap één groep open/dicht
+    // (display + chevron ▾/▴). Werkt in beide mappen; de mbUp-animatie bestaat
+    // enkel in marble.css en is een no-op in de 1.x-www.
+    togglePgGroup(bodyId, chevId) {
+        const body = document.getElementById(bodyId);
+        if (!body) return;
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : 'block';
+        if (!open) {
+            try { body.style.animation = 'none'; void body.offsetWidth; body.style.animation = 'mbUp 0.3s cubic-bezier(0.22, 1, 0.36, 1)'; } catch (_e) {}
+        }
+        const chev = chevId ? document.getElementById(chevId) : null;
+        if (chev) chev.textContent = open ? '▾' : '▴';
     },
 };
 
