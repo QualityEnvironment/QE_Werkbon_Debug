@@ -141,6 +141,9 @@ const app = {
     // INITIALIZATION
     // ========================================
     async init() {
+        // Toegankelijkheid vroeg toepassen — ook op het login-scherm (v280).
+        try { this._migrateA11y(); this._applyA11y(); } catch (_e) {}
+
         // BUG-fix: globale handler voor unhandled promise-rejections.
         // Voorkomt dat fouten stilletjes verloren gaan en helpt bij debug.
         if (!window._qeRejectionHandlerInstalled) {
@@ -624,10 +627,10 @@ const app = {
         }
         // Start polling voor nieuwe planning-items
         this.startPlanningPoll();
-        // Dark mode herstellen
-        if (localStorage.getItem('qe_dark_mode') === '1') document.body.classList.add('dark-mode');
-        // v260 (2.0): werf-modus herstellen (UI ×1,12 — zie marble.css)
-        if (localStorage.getItem('qe_werf_modus') === '1') document.body.classList.add('werf-modus');
+        // Toegankelijkheid + thema herstellen (v280): schaal, vet, contrast,
+        // minder beweging, kleurenblind-correctie/-palet en donker thema.
+        this._migrateA11y();
+        this._applyA11y();
     },
 
     // ========================================
@@ -713,12 +716,8 @@ const app = {
         });
         const msg = document.getElementById('profilePinMsg');
         if (msg) { msg.textContent = ''; msg.style.color = ''; }
-        // Dark mode toggle synchroniseren
-        const dmToggle = document.getElementById('darkModeToggle');
-        if (dmToggle) dmToggle.checked = document.body.classList.contains('dark-mode');
-        // v260 (2.0): werf-modus toggle synchroniseren
-        const wmToggle = document.getElementById('werfModusToggle');
-        if (wmToggle) wmToggle.checked = document.body.classList.contains('werf-modus');
+        // Toegankelijkheid-bediening gelijkzetten met de bewaarde voorkeuren (v280)
+        this._syncA11yControls();
         // App-versie tonen — Web (= www/git versie uit version.json)
         // en APK-versie (uit native bridge, vereist v106+ APK; degradeert sierlijk).
         const versionEl = document.getElementById('appVersionInfo');
@@ -764,80 +763,17 @@ const app = {
         const uaCard = document.getElementById('urenAnalyseCard');
         if (uaCard) uaCard.style.display = this._isUrenAnalyseAllowed() ? 'block' : 'none';
 
-        // === DEBUG NFC TESTER — verwijder dit blok na security audit ===
-        // Toont alleen een knop als debug-nfc.html bestaat (= debug-build).
-        // In de productie-versie bestaat die file niet en gebeurt er niets.
-        this._maybeShowNfcTesterButton();
-        // === EINDE DEBUG NFC TESTER ===
+        // v280: de "Werknemers"-sectie enkel tonen als er iets in staat
+        // (Beheer/Afwezigheid voor bureel, of Uren-analyse voor Levi & Vince).
+        const werknSection = document.getElementById('pgSectionWerknemers');
+        if (werknSection) {
+            const _wu = RobawsAPI.getLoggedInUser();
+            const _isBureel = !!(_wu && _wu.role === 'bureel');
+            werknSection.style.display = (_isBureel || this._isUrenAnalyseAllowed()) ? '' : 'none';
+        }
 
         this.navigate('screenProfile');
     },
-
-    // === DEBUG NFC TESTER — verwijder deze methode na security audit ===
-    _maybeShowNfcTesterButton() {
-        // Alleen voor Levi tonen — security audit is admin-only.
-        const email = (this.currentUser && this.currentUser.email || '').toLowerCase();
-        if (email !== 'levi@qe.be') {
-            const existing = document.getElementById('btnDebugNfcTester');
-            if (existing && existing.parentElement) existing.parentElement.remove();
-            this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = false;
-            return;
-        }
-        if (this._nfcTesterChecked) {
-            const btn = document.getElementById('btnDebugNfcTester');
-            if (btn) btn.style.display = this._nfcTesterAvailable ? 'block' : 'none';
-            return;
-        }
-        let done = false;
-        const finish = (exists, why) => {
-            if (done) return;
-            done = true;
-            this._nfcTesterChecked = true;
-            this._nfcTesterAvailable = exists;
-            console.log('[DebugNFC] available=' + exists + ' (' + why + ')');
-            if (exists) this._injectNfcTesterButton();
-        };
-        try {
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', 'debug-nfc.html', true);
-            xhr.timeout = 5000;
-            xhr.onload = () => {
-                const text = xhr.responseText || '';
-                console.log('[DebugNFC] xhr.status=' + xhr.status + ' text.length=' + text.length);
-                const exists = text.length > 100 && text.indexOf('NFC Security Tester') !== -1;
-                finish(exists, exists ? 'xhr-found' : 'xhr-no-marker');
-            };
-            xhr.onerror = () => finish(false, 'xhr-error');
-            xhr.ontimeout = () => finish(false, 'xhr-timeout');
-            xhr.send();
-        } catch(e) {
-            finish(false, 'xhr-exception: ' + e.message);
-        }
-    },
-    _injectNfcTesterButton() {
-        const profile = document.getElementById('screenProfile');
-        if (!profile || document.getElementById('btnDebugNfcTester')) return;
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.style.cssText = 'margin-bottom:12px;background:rgba(198,40,40,0.08);border:2px solid #C62828';
-        card.innerHTML = `
-            <div style="font-size:14px;font-weight:600;color:#C62828">🔓 NFC Security Tester</div>
-            <div style="font-size:12px;color:var(--qe-grey);margin:4px 0 8px">Debug-tool om NFC-tags te scannen en kraakbaarheid te beoordelen.</div>
-            <button id="btnDebugNfcTester" class="btn btn-full"
-                style="background:#C62828;color:#fff;padding:12px"
-                onclick="window.location='debug-nfc.html'">🔓 Open NFC tester</button>
-        `;
-        // .card:has() werkt niet in oudere WebViews — gebruik manuele loop
-        let pinCard = null;
-        const cards = profile.querySelectorAll('.card');
-        for (const c of cards) {
-            if (c.querySelector('#profileOldPin')) { pinCard = c; break; }
-        }
-        if (pinCard) profile.insertBefore(card, pinCard);
-        else profile.appendChild(card);
-    },
-    // === EINDE DEBUG NFC TESTER ===
 
     // ================= v247: UREN-ANALYSE (bureel: Levi & Vince) =================
     UREN_ANALYSE_WHITELIST: ['levi@qe.be', 'vince@qe.be'],
@@ -1696,7 +1632,7 @@ const app = {
 
         const backBtn = document.getElementById('headerBack');
         // Geen back-button op hoofdschermen EN op betaalschermen (factuur is al aangemaakt, mag niet herhaald worden)
-        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenDagoverzicht', 'screenClock', 'screenPayment', 'screenOverschrijving'];
+        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenAanvragen', 'screenClock', 'screenPayment', 'screenOverschrijving'];
         backBtn.classList.toggle('visible', !noBackScreens.includes(screenId));
 
         // Scroll to top
@@ -8498,7 +8434,8 @@ const app = {
             if (!comments.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen berichten.</p>'; return; }
             const myUserId = String(this._myRobawsUserId() || '');
             list.innerHTML = comments.map(c => {
-                const mine = myUserId && String(c.authorId) === myUserId;
+                const aId = (c.authorId != null) ? c.authorId : (c.author && c.author.id);
+                const mine = myUserId && String(aId) === myUserId;
                 const who = (c.author && (c.author.name || c.author.fullName)) || ('Gebruiker ' + (c.authorId || '?'));
                 return `<div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin-bottom:8px">
                     <div style="max-width:82%;padding:10px 13px;border-radius:12px;background:${mine ? 'var(--wash,#eee)' : 'var(--card,#fff)'};border:1px solid var(--cb,#e5e5e5)">
@@ -13074,12 +13011,101 @@ const app = {
     },
 
     // ========================================
-    // v260 (Werkbon 2.0): WERF-MODUS — UI-schaal ×1,12 (marble.css),
-    // alle hit-targets ≥ 48px; bedienbaar met handschoenen.
+    // TOEGANKELIJKHEID (v280 / 1.x v275)
+    // Eén bron van waarheid: localStorage qe_a11y_*. _applyA11y() leest alle
+    // sleutels en zet body-classes (schaal/vet/contrast/beweging/palet) + een
+    // SVG-kleurcorrectiefilter op <html>. Idempotent — veilig om vaak aan te
+    // roepen (init, showApp, na elke wijziging). De oude "werf-modus" is
+    // opgegaan in de schaal (Groot). Alle CSS staat in marble.css / app.css.
     // ========================================
+    _A11Y_SCALES: ['normaal', 'groot', 'xl'],
+    _A11Y_CVDS: ['deuter', 'protan', 'tritan'],
+
+    _migrateA11y() {
+        // v260 werf-modus → schaal "Groot" (eenmalig), daarna sleutel opruimen.
+        try {
+            if (!localStorage.getItem('qe_a11y_scale') && localStorage.getItem('qe_werf_modus') === '1') {
+                localStorage.setItem('qe_a11y_scale', 'groot');
+            }
+            localStorage.removeItem('qe_werf_modus');
+        } catch (_e) {}
+    },
+
+    _applyA11y() {
+        try {
+            const b = document.body;
+            if (!b) return;
+            const get = (k) => { try { return localStorage.getItem(k); } catch (_e) { return null; } };
+
+            // Donker thema (aparte sleutel, blijft compatibel met toggleDarkMode)
+            b.classList.toggle('dark-mode', get('qe_dark_mode') === '1');
+
+            // Tekst- & knopgrootte (zoom, zie CSS)
+            let scale = get('qe_a11y_scale') || 'normaal';
+            if (this._A11Y_SCALES.indexOf(scale) === -1) scale = 'normaal';
+            b.classList.toggle('a11y-scale-groot', scale === 'groot');
+            b.classList.toggle('a11y-scale-xl', scale === 'xl');
+
+            // Vetgedrukte tekst / hoog contrast / minder beweging / kleurvriendelijk palet
+            b.classList.toggle('a11y-bold', get('qe_a11y_bold') === '1');
+            b.classList.toggle('a11y-contrast', get('qe_a11y_contrast') === '1');
+            b.classList.toggle('a11y-motion', get('qe_a11y_motion') === '1');
+            b.classList.toggle('a11y-cvd-palette', get('qe_a11y_palette') === '1');
+
+            // Kleurenblind-correctie: SVG-filter op <html> (niet op body — zo blijft
+            // de fixed bottom-nav/topbar t.o.v. het viewport gepositioneerd).
+            let cvd = get('qe_a11y_cvd') || '';
+            if (cvd && this._A11Y_CVDS.indexOf(cvd) === -1) cvd = '';
+            const root = document.documentElement;
+            if (root) root.style.filter = cvd ? ('url(#a11y-cvd-' + cvd + ')') : '';
+        } catch (_e) {}
+    },
+
+    // Zet de profiel-bediening gelijk aan de bewaarde voorkeuren (openProfile).
+    _syncA11yControls() {
+        const get = (k) => { try { return localStorage.getItem(k); } catch (_e) { return null; } };
+        const set = (id, prop, val) => { const el = document.getElementById(id); if (el) el[prop] = val; };
+        set('darkModeToggle', 'checked', get('qe_dark_mode') === '1');
+        let scale = get('qe_a11y_scale') || 'normaal';
+        if (this._A11Y_SCALES.indexOf(scale) === -1) scale = 'normaal';
+        set('a11yScaleSelect', 'value', scale);
+        set('a11yBoldToggle', 'checked', get('qe_a11y_bold') === '1');
+        set('a11yContrastToggle', 'checked', get('qe_a11y_contrast') === '1');
+        set('a11yMotionToggle', 'checked', get('qe_a11y_motion') === '1');
+        set('a11yPaletteToggle', 'checked', get('qe_a11y_palette') === '1');
+        set('a11yCvdSelect', 'value', get('qe_a11y_cvd') || '');
+    },
+
+    setA11yScale(v) {
+        if (this._A11Y_SCALES.indexOf(v) === -1) v = 'normaal';
+        try { localStorage.setItem('qe_a11y_scale', v); } catch (_e) {}
+        this._applyA11y();
+    },
+    toggleA11yBold(on) {
+        try { localStorage.setItem('qe_a11y_bold', on ? '1' : '0'); } catch (_e) {}
+        this._applyA11y();
+    },
+    toggleA11yContrast(on) {
+        try { localStorage.setItem('qe_a11y_contrast', on ? '1' : '0'); } catch (_e) {}
+        this._applyA11y();
+    },
+    toggleA11yMotion(on) {
+        try { localStorage.setItem('qe_a11y_motion', on ? '1' : '0'); } catch (_e) {}
+        this._applyA11y();
+    },
+    setA11yCvd(v) {
+        if (v && this._A11Y_CVDS.indexOf(v) === -1) v = '';
+        try { localStorage.setItem('qe_a11y_cvd', v || ''); } catch (_e) {}
+        this._applyA11y();
+    },
+    toggleA11yPalette(on) {
+        try { localStorage.setItem('qe_a11y_palette', on ? '1' : '0'); } catch (_e) {}
+        this._applyA11y();
+    },
+
+    // Back-compat: eventuele oude werf-modus-aanroepen → schaal Groot/Normaal.
     toggleWerfModus(enabled) {
-        document.body.classList.toggle('werf-modus', enabled);
-        localStorage.setItem('qe_werf_modus', enabled ? '1' : '0');
+        this.setA11yScale(enabled ? 'groot' : 'normaal');
     },
 };
 

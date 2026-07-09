@@ -16,6 +16,24 @@
 </head>
 <body>
 
+<!-- Toegankelijkheid: kleurenblind-correctiefilters (v280). Aangesproken via
+     document.documentElement.style.filter = url(#a11y-cvd-…) in app._applyA11y().
+     De matrices spreiden het niet-waarneembare kleurverschil naar een kanaal dat
+     wél zichtbaar is (rood-groen → blauw; blauw-geel → rood). -->
+<svg aria-hidden="true" focusable="false" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="a11y-cvd-deuter" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0.5 -0.5 1 0 0  0 0 0 1 0"/>
+    </filter>
+    <filter id="a11y-cvd-protan" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0.6 -0.6 1 0 0  0 0 0 1 0"/>
+    </filter>
+    <filter id="a11y-cvd-tritan" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="1 -0.7 0.7 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>
+    </filter>
+  </defs>
+</svg>
+
 <!-- ========== LOGIN SCREEN (Marble 1:1 — prototype "LOGIN") ========== -->
 <div id="loginScreen" class="login-screen mb-login">
     <div class="mb-login-strip" aria-hidden="true"></div>
@@ -952,114 +970,171 @@
         <input type="file" id="profilePhotoInputGallery" accept="image/*" style="display:none" onchange="app.profileHandlePhoto(this)">
     </div>
 
-    <!-- Dark mode toggle -->
-    <div class="card" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:16px">
-        <div>
-            <div style="font-size:14px;font-weight:600"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M20 14A8 8 0 0 1 10 4a7 7 0 1 0 10 10z"/></svg> Donker thema</div>
-            <div style="font-size:12px;color:var(--qe-grey)">Minder verblinding in donkere ruimtes</div>
-        </div>
-        <label class="toggle-switch">
-            <input type="checkbox" id="darkModeToggle" onchange="app.toggleDarkMode(this.checked)">
-            <span class="toggle-slider"></span>
-        </label>
-    </div>
+    <!-- v280: profiel opgeschoond in vier groepen — Instellingen, Toegankelijkheid,
+         Werknemers, App bijwerken. De NFC-tester is verwijderd. -->
 
-    <!-- v260 (Werkbon 2.0): werf-modus — UI-schaal ×1,12, hit-targets ≥48px -->
-    <div class="card" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:16px">
-        <div>
-            <div style="font-size:14px;font-weight:600"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="3.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6 7.7 7.7M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg> Werf-modus</div>
-            <div style="font-size:12px;color:var(--qe-grey)">Grotere knoppen en tekst — met handschoenen bedienbaar</div>
-        </div>
-        <label class="toggle-switch">
-            <input type="checkbox" id="werfModusToggle" onchange="app.toggleWerfModus(this.checked)">
-            <span class="toggle-slider"></span>
-        </label>
-    </div>
+    <!-- ===== INSTELLINGEN ===== -->
+    <div class="pg-section">
+        <div class="pg-title">Instellingen</div>
 
-    <!-- v278: verlof-aanvragen/-goedkeuren verhuisd naar de 'Aanvragen'-tab -->
+        <!-- v273: standaard terminal voor Terminal-betalingen (per toestel) -->
+        <div class="card mb-prowcard monteur-hide" id="defaultTerminalCard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow" style="border-bottom:none;cursor:default">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Standaard terminal</div>
+                    <div class="mb-prow-s">Wordt direct gebruikt bij Terminal-betalingen</div>
+                </div>
+                <select id="defaultTerminalSelect" onchange="app.saveDefaultTerminal(this.value)"
+                    style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
+                    <option value="">Altijd vragen</option>
+                </select>
+            </div>
+        </div>
 
-    <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet)
-         Marble 1:1: rij met de select rechts (prototype "Actieve rol") -->
-    <div class="card mb-prowcard" id="roleSwitchCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Actieve rol</div>
-                <div class="mb-prow-s">Wissel tijdelijk van app-flow</div>
+        <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet) -->
+        <div class="card mb-prowcard" id="roleSwitchCard" style="margin-bottom:14px;display:none;padding:4px 18px">
+            <div class="mb-prow" style="border-bottom:none">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Actieve rol</div>
+                    <div class="mb-prow-s">Wissel tijdelijk van app-flow</div>
+                </div>
+                <select id="roleSwitchSelect" onchange="app.switchActiveRole(this.value)"
+                    style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
+                    <!-- opties worden dynamisch ingevuld via app.renderRoleSwitch() -->
+                </select>
             </div>
-            <select id="roleSwitchSelect" onchange="app.switchActiveRole(this.value)"
-                style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
-                <!-- opties worden dynamisch ingevuld via app.renderRoleSwitch() -->
-            </select>
+            <div id="roleSwitchNote" style="font-size:12px;color:var(--amber2);margin:-6px 0 12px;display:none;font-weight:500"></div>
         </div>
-        <div id="roleSwitchNote" style="font-size:12px;color:var(--amber2);margin:-6px 0 12px;display:none;font-weight:500"></div>
-    </div>
-
-    <!-- v273: standaard terminal voor Terminal-betalingen (per toestel) -->
-    <div class="card mb-prowcard monteur-hide" id="defaultTerminalCard" style="margin-bottom:14px;padding:4px 18px">
-        <div class="mb-prow" style="border-bottom:none;cursor:default">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Standaard terminal</div>
-                <div class="mb-prow-s">Wordt direct gebruikt bij Terminal-betalingen</div>
-            </div>
-            <select id="defaultTerminalSelect" onchange="app.saveDefaultTerminal(this.value)"
-                style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
-                <option value="">Altijd vragen</option>
-            </select>
-        </div>
-    </div>
-
-    <!-- v233/v247: Beheer + Afwezigheid + Uren-analyse als Marble-rijen met → -->
-    <div class="card mb-prowcard" id="adminCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" onclick="app.navigate('screenAdmin')">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Beheer</div>
-                <div class="mb-prow-s">PIN reset, rollen, werknemers</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-        <div class="mb-prow" onclick="app.openAfwezigheid()" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Afwezigheid melden</div>
-                <div class="mb-prow-s">Ziekte, verlof, feestdag — per werknemer</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-    </div>
-    <div class="card mb-prowcard" id="urenAnalyseCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" onclick="app.navigate('screenUrenAnalyse')" style="border-bottom:none">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Uren-analyse</div>
-                <div class="mb-prow-s">Maandoverzicht + Excel-export · Levi &amp; Vince</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-    </div>
-
-    <!-- App bijwerken + PIN wijzigen in één Marble-kaart (prototype-rijen) -->
-    <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
-        <div class="mb-prow" style="cursor:default">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">App bijwerken</div>
-                <div class="mb-prow-s" id="appVersionInfo" onclick="window._toggleDebug && _toggleDebug()">Versie laden...</div>
-            </div>
-            <button class="mb-minibtn" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
-        </div>
-        <div id="updateStatus" style="font-size:13px;text-align:center;margin:0 0 12px;display:none"></div>
 
         <!-- PIN wijzigen: inklapbaar zoals het prototype -->
-        <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
-            <div class="mb-prow-t" style="flex:1">PIN wijzigen</div>
-            <span id="mbPinChev" class="mb-prow-arrow">▾</span>
+        <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
+                <div class="mb-prow-t" style="flex:1">PIN wijzigen</div>
+                <span id="mbPinChev" class="mb-prow-arrow">▾</span>
+            </div>
+            <div id="mbPinBody" style="display:none;padding:0 0 16px">
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                       class="mb-pininput" id="profileOldPin" placeholder="Huidige PIN">
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                       class="mb-pininput" id="profileNewPin" placeholder="Nieuwe PIN">
+                <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+                       class="mb-pininput" id="profileNewPinConfirm" placeholder="Bevestig nieuwe PIN">
+                <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
+                <button style="width:100%;padding:13px;border:none;border-radius:2px;background:var(--btn);color:var(--btnfg);font:600 12.5px var(--font);cursor:pointer" onclick="app.profileChangePin()">PIN wijzigen</button>
+            </div>
         </div>
-        <div id="mbPinBody" style="display:none;padding:0 0 16px">
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileOldPin" placeholder="Huidige PIN">
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileNewPin" placeholder="Nieuwe PIN">
-            <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6"
-                   class="mb-pininput" id="profileNewPinConfirm" placeholder="Bevestig nieuwe PIN">
-            <div id="profilePinMsg" style="font-size:13px;text-align:center;margin-bottom:8px"></div>
-            <button style="width:100%;padding:13px;border:none;border-radius:2px;background:var(--btn);color:var(--btnfg);font:600 12.5px var(--font);cursor:pointer" onclick="app.profileChangePin()">PIN wijzigen</button>
+    </div>
+
+    <!-- ===== TOEGANKELIJKHEID ===== -->
+    <div class="pg-section">
+        <div class="pg-title">Toegankelijkheid</div>
+        <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Donker thema</div>
+                    <div class="mb-prow-s">Minder verblinding in donkere ruimtes</div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="darkModeToggle" onchange="app.toggleDarkMode(this.checked)"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Tekst- &amp; knopgrootte</div>
+                    <div class="mb-prow-s">Grotere tekst en knoppen — ook met handschoenen</div>
+                </div>
+                <select id="a11yScaleSelect" onchange="app.setA11yScale(this.value)"
+                    style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
+                    <option value="normaal">Normaal</option>
+                    <option value="groot">Groot</option>
+                    <option value="xl">Extra groot</option>
+                </select>
+            </div>
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Vetgedrukte tekst</div>
+                    <div class="mb-prow-s">Zwaardere letters, beter leesbaar</div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="a11yBoldToggle" onchange="app.toggleA11yBold(this.checked)"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Hoog contrast</div>
+                    <div class="mb-prow-s">Donkerdere tekst en duidelijke randen</div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="a11yContrastToggle" onchange="app.toggleA11yContrast(this.checked)"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Minder beweging</div>
+                    <div class="mb-prow-s">Beperkt animaties en overgangen</div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="a11yMotionToggle" onchange="app.toggleA11yMotion(this.checked)"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="mb-prow">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Kleurenblind-correctie</div>
+                    <div class="mb-prow-s">Maakt rood/groen of blauw/geel beter te onderscheiden</div>
+                </div>
+                <select id="a11yCvdSelect" onchange="app.setA11yCvd(this.value)"
+                    style="padding:8px 10px;border:1px solid var(--b1);border-radius:8px;background:none;font:500 12.5px var(--font);color:var(--ink);outline:none;max-width:46%">
+                    <option value="">Uit</option>
+                    <option value="deuter">Deuteranopie (rood-groen)</option>
+                    <option value="protan">Protanopie (rood-groen)</option>
+                    <option value="tritan">Tritanopie (blauw-geel)</option>
+                </select>
+            </div>
+            <div class="mb-prow" style="border-bottom:none">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Kleurvriendelijk palet</div>
+                    <div class="mb-prow-s">Statuskleuren: groen → blauw, rood → vermiljoen</div>
+                </div>
+                <label class="toggle-switch"><input type="checkbox" id="a11yPaletteToggle" onchange="app.toggleA11yPalette(this.checked)"><span class="toggle-slider"></span></label>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== WERKNEMERS (bureel / Levi & Vince) ===== -->
+    <div class="pg-section" id="pgSectionWerknemers" style="display:none">
+        <div class="pg-title">Werknemers</div>
+        <!-- v233/v247: Beheer + Afwezigheid als Marble-rijen met → -->
+        <div class="card mb-prowcard" id="adminCard" style="margin-bottom:14px;display:none;padding:4px 18px">
+            <div class="mb-prow" onclick="app.navigate('screenAdmin')">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Beheer</div>
+                    <div class="mb-prow-s">PIN reset, rollen, werknemers</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+            <div class="mb-prow" onclick="app.openAfwezigheid()" style="border-bottom:none">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Afwezigheid melden</div>
+                    <div class="mb-prow-s">Ziekte, verlof, feestdag — per werknemer</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
+        <div class="card mb-prowcard" id="urenAnalyseCard" style="margin-bottom:14px;display:none;padding:4px 18px">
+            <div class="mb-prow" onclick="app.navigate('screenUrenAnalyse')" style="border-bottom:none">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Uren-analyse</div>
+                    <div class="mb-prow-s">Maandoverzicht + Excel-export · Levi &amp; Vince</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== APP BIJWERKEN ===== -->
+    <div class="pg-section">
+        <div class="pg-title">App bijwerken</div>
+        <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow" style="cursor:default;border-bottom:none">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Versie</div>
+                    <div class="mb-prow-s" id="appVersionInfo" onclick="window._toggleDebug && _toggleDebug()">Versie laden...</div>
+                </div>
+                <button class="mb-minibtn" id="btnCheckUpdate" onclick="app.checkForUpdate()">Controleren</button>
+            </div>
+            <div id="updateStatus" style="font-size:13px;text-align:center;margin:4px 0 12px;display:none"></div>
         </div>
     </div>
 

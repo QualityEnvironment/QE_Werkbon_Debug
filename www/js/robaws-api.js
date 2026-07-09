@@ -449,7 +449,25 @@ const RobawsAPI = {
         return null;
     },
 
-    /** Gebruikte verlofuren in een jaar (som van GOEDGEKEURDE aanvragen). */
+    /** Werkdagen (ma-vr) in een periode × 8u — schatting als Robaws de
+     *  durationInMinutes (nog) niet berekende. */
+    _estimateLeaveHours(fromISO, toISO) {
+        try {
+            const f = new Date(fromISO), t = new Date(toISO);
+            f.setHours(12, 0, 0, 0); t.setHours(12, 0, 0, 0);
+            let days = 0;
+            for (const d = new Date(f); d <= t; d.setDate(d.getDate() + 1)) {
+                const wd = d.getDay();
+                if (wd !== 0 && wd !== 6) days++;
+            }
+            return days * 8;
+        } catch (e) { return 0; }
+    },
+
+    /** Gebruikte verlofuren in een jaar (som van GOEDGEKEURDE aanvragen).
+     *  Gebruikt durationInMinutes indien ingevuld, anders een werkdag-
+     *  schatting (anders telde een goedgekeurde aanvraag met lege duur 0u
+     *  → saldo te hoog). */
     async getVerlofUsedHours(employeeId, year) {
         const yr = year || new Date().getFullYear();
         let used = 0;
@@ -458,15 +476,18 @@ const RobawsAPI = {
             for (const r of reqs) {
                 if (String(r.status || '').toUpperCase() !== 'APPROVED') continue;
                 if (new Date(r.fromDate).getFullYear() !== yr) continue;
-                used += (parseFloat(r.durationInMinutes || 0) || 0) / 60;
+                const mins = parseFloat(r.durationInMinutes || 0) || 0;
+                used += mins > 0 ? (mins / 60) : this._estimateLeaveHours(r.fromDate, r.toDate);
             }
         } catch (e) { console.warn('[Verlof] gebruik berekenen faalde:', e && e.message); }
         return Math.round(used * 100) / 100;
     },
 
-    /** Chat/commentaar van een verlofaanvraag (oudste eerst). */
+    /** Chat/commentaar van een verlofaanvraag (oudste eerst). Gooit bij een
+     *  niet-200 status (anders toonde de chat vals "geen berichten"). */
     async getTimeOffComments(torId) {
         const r = await this.get('time-off-requests/' + torId + '/comments?include=author', { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
         const arr = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || []);
         return arr.slice().sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     },
@@ -487,7 +508,7 @@ const RobawsAPI = {
         const SIZE = 100, MAX_PAGES = 20;
         let page = 0, totalPages = 1;
         while (page < totalPages && page < MAX_PAGES) {
-            const r = await this.get('approval-requests?open=true&page=' + page + '&size=' + SIZE, { bypassCache: true });
+            const r = await this.get('approval-requests?open=true&include=supplier&page=' + page + '&size=' + SIZE, { bypassCache: true });
             if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
             const body = r.data || {};
             const items = body.items || [];

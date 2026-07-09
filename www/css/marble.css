@@ -958,3 +958,48 @@ body.dark-mode #clockHeroCard { background: var(--card); }
     background: var(--btn) !important;
     box-shadow: inset 0 0 0 3px var(--card) !important;
 }
+
+/* ============================================================
+   17. TOEGANKELIJKHEID (v280) — schaal, vet, contrast, minder
+   beweging, kleurvriendelijk palet + kleurcorrectie. Alles wordt
+   aangestuurd door body-classes uit app._applyA11y(); zonder die
+   classes verandert er niets. De oude werf-modus is opgegaan in
+   de schaal "Groot" (zelfde zoom ×1,12).
+   ============================================================ */
+
+/* Tekst- & knopgrootte */
+body.a11y-scale-groot { zoom: 1.12; }
+body.a11y-scale-xl    { zoom: 1.28; }
+
+/* Vetgedrukte tekst — normale tekst zwaarder, kop/nadruk extra zwaar */
+body.a11y-bold, body.a11y-bold * { font-weight: 600 !important; }
+body.a11y-bold h1, body.a11y-bold h2, body.a11y-bold h3,
+body.a11y-bold strong, body.a11y-bold b { font-weight: 800 !important; }
+
+/* Hoog contrast — donkerder secundaire tekst + zichtbare kaartranden */
+body.a11y-contrast { --g1: #2c2c28; --b1: #7d7a70; }
+body.dark-mode.a11y-contrast { --g1: #dad8cf; --b1: #6d6d66; }
+body.a11y-contrast .card { border: 1px solid var(--b1); }
+
+/* Minder beweging — animaties/overgangen praktisch uit */
+body.a11y-motion *, body.a11y-motion *::before, body.a11y-motion *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+}
+
+/* Kleurvriendelijk palet (Okabe-Ito): "groen" → blauw, "rood" →
+   vermiljoen — onderscheidbaar bij rood-groenblindheid. */
+body.a11y-cvd-palette {
+    --green2: #0072B2; --gwash: #DCEBF5;
+    --red2:   #D55E00; --rwash: #F6E1D3;
+    --qe-green: #0072B2; --qe-red: #D55E00;
+}
+
+/* Profiel-groepskoppen (opgeschoonde profielpagina) */
+.pg-title {
+    font: 700 11px/1.1 var(--font);
+    letter-spacing: .08em; text-transform: uppercase;
+    color: var(--g1); margin: 20px 4px 9px;
+}
