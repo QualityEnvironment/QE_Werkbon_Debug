@@ -1684,6 +1684,7 @@ const app = {
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
+            screenVerlof: 'Verlof aanvragen',  // v276
             screenAdmin: 'Beheer',  // v233
             screenUrenAnalyse: 'Uren-analyse',  // v247
         };
@@ -1704,6 +1705,7 @@ const app = {
         if (screenId === 'screenClock') this.onNavigateToClock();
         if (screenId === 'screenAdmin') this.loadAdmin();
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
+        if (screenId === 'screenVerlof') this.loadMyVerlof();  // v276
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -2703,6 +2705,8 @@ const app = {
 
     toggleTimer(type) {
         if (!this.timer.running) {
+            // v275: haptiek "timer start" — korte tik (Marble-tabel). No-op in 1.x.
+            try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('timer'); } catch (_) {}
             this.timer.running = true;
             this.timer.type = type;
             // Sanity: als elapsed ongeldig is (null, NaN, negatief, >24u), reset naar 0
@@ -2747,6 +2751,8 @@ const app = {
 
     stopTimer() {
         if (this.timer.running || this.timer.elapsed > 0) {
+            // v275: haptiek "timer stop" — korte tik (Marble-tabel). No-op in 1.x.
+            try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('timer'); } catch (_) {}
             clearInterval(this.timer.interval);
             const elapsed = this.timer.running ? (Date.now() - this.timer.startTime) : this.timer.elapsed;
             // Alleen correctie-modal tonen als er minstens 1 minuut getimed is
@@ -8237,6 +8243,98 @@ const app = {
                 fouten.map(f => this.escapeHtml(f)).join('<br>') + '</span>' : ''));
         this.toast(ok + ' afwezigheids-registratie(s) aangemaakt' + (fouten.length ? ' — ' + fouten.length + ' mislukt' : ''), fouten.length > 0);
         if (ok > 0) this.loadClockAdmin();
+    },
+
+    // ============================================================
+    // v276: VERLOF AANVRAGEN (self-service, alle rollen) — native Robaws
+    // time-off-request. Alleen "Verlof"; Ziek gaat bewust via bericht.
+    // De aanvraag wordt meteen ingediend ter goedkeuring (Fase 2 = bureel
+    // keurt goed). Robaws berekent zelf de uren uit het uurrooster.
+    // ============================================================
+    openVerlof() { this.navigate('screenVerlof'); },
+
+    async loadMyVerlof() {
+        const van = document.getElementById('verlofVan');
+        const tot = document.getElementById('verlofTot');
+        if (van && !van.value) van.value = this._localDateStr();
+        if (tot && !tot.value) tot.value = '';
+        const list = document.getElementById('verlofList');
+        if (!list) return;
+        list.innerHTML = '<div class="spinner"></div>';
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen werknemer-koppeling gevonden.</p>'; return; }
+        try {
+            const reqs = await RobawsAPI.getMyTimeOffRequests(empId);
+            if (!reqs.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen aanvragen.</p>'; return; }
+            list.innerHTML = reqs.map(r => {
+                const st = this._verlofStatus(r.status);
+                const periode = this._verlofPeriode(r.fromDate, r.toDate);
+                const dur = (r.durationInMinutes != null) ? (' · ' + (Math.round(r.durationInMinutes / 60 * 100) / 100) + ' u') : '';
+                const cat = (r.timeOffCategory && r.timeOffCategory.name) || 'Verlof';
+                return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:1px solid var(--l2,#eee)">
+                    <div style="min-width:0">
+                        <div style="font-size:14px;font-weight:600">${this.escapeHtml(periode)}</div>
+                        <div style="font-size:12px;color:var(--qe-grey)">${this.escapeHtml(cat)}${dur}</div>
+                    </div>
+                    <span style="font-size:11.5px;font-weight:600;color:${st.color};background:${st.bg};border:1px solid ${st.border};border-radius:12px;padding:3px 10px;white-space:nowrap">${st.label}</span>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            list.innerHTML = `<p class="text-grey text-sm text-center">Aanvragen laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    _verlofStatus(status) {
+        switch (String(status || '').toUpperCase()) {
+            case 'APPROVED': return { label: 'Goedgekeurd', color: '#2e7d32', bg: 'rgba(46,125,50,0.10)', border: 'rgba(46,125,50,0.25)' };
+            case 'REJECTED': return { label: 'Geweigerd', color: '#c62828', bg: 'rgba(198,40,40,0.10)', border: 'rgba(198,40,40,0.25)' };
+            case 'DRAFT':    return { label: 'Concept', color: '#8a8a8a', bg: 'rgba(0,0,0,0.05)', border: 'rgba(0,0,0,0.12)' };
+            default:         return { label: 'Aangevraagd', color: '#e65100', bg: 'rgba(230,81,0,0.10)', border: 'rgba(230,81,0,0.25)' }; // SUBMITTED/WAITING
+        }
+    },
+
+    _verlofPeriode(fromISO, toISO) {
+        try {
+            const f = new Date(fromISO), t = new Date(toISO);
+            const opt = { day: 'numeric', month: 'short' };
+            const fs = f.toLocaleDateString('nl-BE', opt);
+            const ts = t.toLocaleDateString('nl-BE', opt);
+            return (f.toDateString() === t.toDateString()) ? fs : (fs + ' – ' + ts);
+        } catch (e) { return ''; }
+    },
+
+    async submitVerlofRequest() {
+        const btn = document.getElementById('btnVerlofSubmit');
+        const err = document.getElementById('verlofError');
+        const vanV = (document.getElementById('verlofVan') || {}).value || '';
+        const totV = (document.getElementById('verlofTot') || {}).value || '';
+        const comment = ((document.getElementById('verlofComment') || {}).value || '').trim();
+        const showErr = (m) => { if (err) { err.textContent = m; err.style.display = 'block'; } else this.toast(m, true); };
+        if (err) err.style.display = 'none';
+        if (!vanV) { showErr('Kies een begindatum'); return; }
+        const tot = totV || vanV;
+        if (tot < vanV) { showErr('De einddatum ligt vóór de begindatum'); return; }
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) { showErr('Geen werknemer-koppeling gevonden'); return; }
+        if (this._verlofBusy) return;
+        this._verlofBusy = true;
+        const oldTxt = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Versturen...'; }
+        try {
+            // Belgische werkdag-uren; new Date(...) interpreteert lokaal (toestel =
+            // Belgische tijd) → juiste UTC incl. zomertijd. Robaws herrekent de uren.
+            const fromDate = new Date(vanV + 'T07:00:00').toISOString();
+            const toDate = new Date(tot + 'T15:30:00').toISOString();
+            await RobawsAPI.createVerlofRequest({ employeeId: empId, fromDate, toDate, comment });
+            this.toast('Verlofaanvraag verstuurd');
+            const c = document.getElementById('verlofComment'); if (c) c.value = '';
+            await this.loadMyVerlof();
+        } catch (e) {
+            showErr('Versturen mislukt: ' + (e.message || '?'));
+        } finally {
+            this._verlofBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = oldTxt || 'Verlof aanvragen'; }
+        }
     },
 
     /** v217: tijd-modal voor handmatig in-/uitklokken (alleen bureel). */

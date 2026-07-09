@@ -850,6 +850,34 @@
     </div>
 </div>
 
+<!-- ========== SCREEN: VERLOF AANVRAGEN (v276, self-service alle rollen) ========== -->
+<div class="screen" id="screenVerlof">
+    <div class="card" style="margin-bottom:16px;padding:16px">
+        <div style="font-size:13px;color:var(--g1);margin-bottom:14px;line-height:1.55">
+            Vraag verlof aan — je aanvraag gaat ter goedkeuring naar kantoor.
+            <b>Ben je ziek?</b> Meld dat via bericht; ziekte kan niet via de app.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div class="form-group" style="margin:0">
+                <label>Van</label>
+                <input type="date" id="verlofVan" class="form-input">
+            </div>
+            <div class="form-group" style="margin:0">
+                <label>Tot en met</label>
+                <input type="date" id="verlofTot" class="form-input">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Opmerking (optioneel)</label>
+            <textarea id="verlofComment" class="form-input" rows="2" placeholder="Reden of extra info..."></textarea>
+        </div>
+        <div id="verlofError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:8px;display:none"></div>
+        <button class="btn btn-primary btn-full" id="btnVerlofSubmit" onclick="app.submitVerlofRequest()">Verlof aanvragen</button>
+    </div>
+    <div class="section-header"><h2>Mijn aanvragen</h2></div>
+    <div id="verlofList"><div class="spinner"></div></div>
+</div>
+
 <!-- ========== SCREEN: PROFIEL ========== -->
 <div class="screen" id="screenProfile">
     <div class="section-header"><h2>Mijn profiel</h2></div>
@@ -894,6 +922,17 @@
             <input type="checkbox" id="werfModusToggle" onchange="app.toggleWerfModus(this.checked)">
             <span class="toggle-slider"></span>
         </label>
+    </div>
+
+    <!-- v276: Verlof aanvragen (self-service, alle rollen) -->
+    <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+        <div class="mb-prow" style="border-bottom:none" onclick="app.openVerlof()">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Verlof aanvragen</div>
+                <div class="mb-prow-s">Dien een verlofaanvraag in — ziekte via bericht</div>
+            </div>
+            <span class="mb-prow-arrow">→</span>
+        </div>
     </div>
 
     <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet)

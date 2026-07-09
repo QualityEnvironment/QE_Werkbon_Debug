@@ -20,6 +20,26 @@
         '<circle cx="80.5" cy="89.8" r="37" fill="none" stroke="#6A2C91" stroke-width="21"></circle></svg>';
     function logo(sz) { return QE_LOGO_SVG.replace(/\{SZ\}/g, String(sz)); }
 
+    /* ---------- HAPTIEK (v275) — exact volgens de Marble-handoff,
+       sectie "4 · Haptiek & geluid". Eén centrale bron zodat de
+       trilfeedback overal consistent aanvoelt. Knoppen/tabs/chips
+       krijgen bewust GEEN trilling (rustig ontwerp). navigator.vibrate
+       werkt alleen op Android; iOS/desktop negeren het stil. ---------- */
+    var HAPTICS = {
+        nfcRead:      [40, 40, 40],  // NFC-tag gelezen — dubbele korte tik (2×40ms)
+        clockConfirm: [60],          // in-/uitklokken bevestigd — één stevige tik
+        fridayClock:  [90],          // vrijdag-uitklok — stevige tik
+        success:      [30, 40, 60],  // werkbon verstuurd / betaling geslaagd
+        error:        [120],         // fout / geweigerde actie — lange buzz
+        timer:        [40]           // timer start/stop — korte tik
+    };
+    function haptic(kind) {
+        try {
+            var p = HAPTICS[kind];
+            if (p && navigator.vibrate) navigator.vibrate(p);
+        } catch (e) { /* haptiek is nooit kritisch */ }
+    }
+
     /* ---------- schermkoppen: kleine grijze regel + 34px titel ---------- */
     var HEADS = {
         screenPlanning:    { sub: 'DATUM', title: 'Planning' },
@@ -28,7 +48,8 @@
         screenProfile:     { sub: '', title: 'Profiel' },
         screenAdmin:       { sub: 'Werknemers beheren via Robaws', title: 'Beheer' },
         screenUrenAnalyse: { sub: 'Alle werknemers', title: 'Uren-analyse' },
-        screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' }
+        screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
+        screenVerlof:      { sub: 'Aanvragen & status', title: 'Verlof' }
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
     };
@@ -338,13 +359,13 @@
 
     /* ---------- succes-overlay ---------- */
     var flashT = null;
-    function flash(title, sub, ms, onDone) {
+    function flash(title, sub, ms, onDone, hap) {
         var el = document.getElementById('mbSucces');
         document.getElementById('mbSucTitle').textContent = title || 'Gelukt';
         document.getElementById('mbSucSub').textContent = sub || '';
         el.style.display = 'none'; void el.offsetWidth;
         el.style.display = 'flex';
-        try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+        haptic(hap || 'success');
         var done = false;
         var close = function () {
             if (done) return; done = true;
@@ -364,7 +385,7 @@
         document.getElementById('mbDaySub').textContent = sub || '';
         el.style.display = 'none'; void el.offsetWidth;
         el.style.display = 'flex';
-        try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+        haptic('clockConfirm');  // uitklokken bevestigd
         var done = false;
         var close = function () {
             if (done) return; done = true;
@@ -397,6 +418,7 @@
         deco.innerHTML = html;
         el.style.display = 'none'; void el.offsetWidth;
         el.style.display = 'flex';
+        haptic('fridayClock');  // vrijdag-uitklok — stevige tik
         /* de weekend-jingle speelt de motor zelf al (app._playWeekendJingle, cap 15 s) */
         var done = false;
         var close = function () {
@@ -548,7 +570,10 @@
                     return;
                 }
                 var m = msg.match(/^Ingeklokt om\s*(\S+)/i);
-                flash(m ? ('Ingeklokt — ' + m[1]) : 'Gelukt', m ? oneLine.replace(/^Ingeklokt om\s*\S+\s*·?\s*/i, '') : oneLine, duration, onDone);
+                // inklok → clockConfirm-tik (60ms); overige successen → success-patroon
+                flash(m ? ('Ingeklokt — ' + m[1]) : 'Gelukt',
+                    m ? oneLine.replace(/^Ingeklokt om\s*\S+\s*·?\s*/i, '') : oneLine,
+                    duration, onDone, m ? 'clockConfirm' : 'success');
             };
             app.showScanResult._mb = true;
         }
@@ -578,6 +603,7 @@
         flash: flash,
         daySummary: daySummary,
         friday: friday,
+        haptic: haptic,
         toggleCollapse: toggleCollapse,
         syncHeaderStatus: syncHeaderStatus,
         animateScreen: animateScreen

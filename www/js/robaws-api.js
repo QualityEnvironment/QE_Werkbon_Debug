@@ -281,6 +281,98 @@ const RobawsAPI = {
         }
     },
 
+    // ============================================================
+    // v276: VERLOF / TIME-OFF — native Robaws verlofaanvragen.
+    // Alleen "Verlof" is via de app aanvraagbaar (Ziek gaat via bericht,
+    // op vraag van Levi). Categorie + uursoort worden live opgezocht met
+    // een fallback op de bevestigde tenant-ids (Verlof = categorie 2,
+    // uursoort 'verlof' type ABSENCE = 35). Robaws berekent zelf de
+    // durationInMinutes uit het uurrooster. Deze endpoints geven een
+    // page-wrapper terug ({items,totalItems,currentPage,...}), GEEN
+    // {code,data}-lijst — vandaar data.items hieronder.
+    // ============================================================
+    _verlofIds: null,
+    async _resolveVerlofIds() {
+        if (this._verlofIds) return this._verlofIds;
+        let categoryId = '2', hourTypeId = '35';   // bevestigde fallback
+        try {
+            const cats = await this.get('time-off-categories?limit=50', { bypassCache: true });
+            const items = (cats.data && cats.data.items) || [];
+            const verlof = items.find(c => /verlof/i.test(c.name || ''));
+            if (verlof) categoryId = String(verlof.id);
+            const hts = await this.get('hour-types?limit=100', { bypassCache: true });
+            const hitems = (hts.data && hts.data.items) || [];
+            const ht = hitems.find(h => String(h.timeOffCategoryId) === categoryId && /absence/i.test(h.type || ''))
+                || hitems.find(h => String(h.timeOffCategoryId) === categoryId);
+            if (ht) hourTypeId = String(ht.id);
+        } catch (e) { console.warn('[Verlof] ids resolven faalde, fallback gebruikt:', e && e.message); }
+        this._verlofIds = { categoryId, hourTypeId };
+        return this._verlofIds;
+    },
+
+    /** Verlofaanvragen van één werknemer (nieuwste eerst). Pagineert VOLLEDIG
+     *  (page-wrapper, max 100/pagina) en filtert client-side op employeeId —
+     *  anders viel een aanvraag buiten de eerste 100 tenant-brede records.
+     *  Gooit bij een niet-200 status (anders toonde de UI vals "geen aanvragen"
+     *  bij een verlopen token / serverfout). De seen-set + added-guard vangt
+     *  een genegeerde page-param op (geen duplicaten, geen oneindige lus). */
+    async getMyTimeOffRequests(employeeId) {
+        const all = [];
+        const seen = new Set();
+        const SIZE = 100, MAX_PAGES = 30;
+        let page = 0, totalPages = 1;
+        while (page < totalPages && page < MAX_PAGES) {
+            const r = await this.get('time-off-requests?page=' + page + '&size=' + SIZE + '&include=timeOffCategory', { bypassCache: true });
+            if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+            const body = r.data || {};
+            const items = body.items || [];
+            let added = 0;
+            for (const it of items) {
+                const id = String(it.id);
+                if (seen.has(id)) continue;
+                seen.add(id); all.push(it); added++;
+            }
+            totalPages = (body.totalPages != null) ? body.totalPages : 1;
+            page++;
+            if (items.length < SIZE || added === 0) break;   // klaar, of page-param genegeerd
+        }
+        return all
+            .filter(x => String(x.employeeId) === String(employeeId))
+            .sort((a, b) => String(b.fromDate || '').localeCompare(String(a.fromDate || '')));
+    },
+
+    /** Maak een Verlof-aanvraag en dien ze meteen in ter goedkeuring.
+     *  fromDate/toDate = ISO-datetime strings (UTC). Retourneert het
+     *  aangemaakte object of gooit bij een niet-2xx status. */
+    async createVerlofRequest({ employeeId, fromDate, toDate, comment }) {
+        const ids = await this._resolveVerlofIds();
+        const body = {
+            employeeId: String(employeeId),
+            timeOffCategoryId: ids.categoryId,
+            hourTypeId: ids.hourTypeId,
+            fromDate: fromDate,
+            toDate: toDate,
+            startApprovalRequest: true,   // meteen indienen ter goedkeuring
+        };
+        if (comment) body.comment = String(comment);
+        const res = await this.post('time-off-requests', body);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('Robaws gaf status ' + res.code);
+        }
+        const created = res.data || {};
+        // Bewaak tegen een 200 met niet-JSON body (bv. Cloudflare-interstitial):
+        // dan is er niets aangemaakt en mag de UI geen succes tonen.
+        if (!created.id) throw new Error('Onverwacht antwoord van Robaws (geen id)');
+        // Vangnet: als startApprovalRequest niet automatisch indiende en de
+        // aanvraag nog DRAFT is, expliciet de goedkeuringsaanvraag starten.
+        try {
+            if (created.id && created.status === 'DRAFT') {
+                await this.post('time-off-requests/' + created.id + '/start-approval-request', {});
+            }
+        } catch (e) { console.warn('[Verlof] start-approval fallback faalde:', e && e.message); }
+        return created;
+    },
+
     async uploadFile(endpoint, file, fileName) {
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const _ap = this._authPair();  // v231: per-werknemer key indien aanwezig

@@ -470,6 +470,9 @@ window.QEClock = {
             return;
         }
         this._scanLock = true;
+        // v275: haptiek "NFC-tag gelezen" — dubbele korte tik (Marble-tabel).
+        // No-op in de 1.x-www (geen QEMarble); no-op op iOS/desktop.
+        try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('nfcRead'); } catch (_) {}
         // v251: safety-net verruimd van 8s naar 60s. De uitklok-flow kan
         // legitiem lang duren (confirm-modal tot 30s + GPS tot 10s); na 8s
         // kwam een NFC-herlezing dan als parallelle flow binnen → dubbele
