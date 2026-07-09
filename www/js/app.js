@@ -14310,10 +14310,10 @@ const app = {
     // ============================================================
     // JAAROVERZICHT 2025-2026 (v290) — eenmalige jaarterugblik vóór het
     // bouwverlof. Streng bij veel ziekte, trots bij volle aanwezigheid.
-    // Data uit window.QEJaar (gebundeld); betrouwbare pagina (screenJaar).
+    // Data uit window.QEJaar (gebundeld); Spotify-Wrapped-stories (v292).
     // ============================================================
 
-    /** Toont automatisch rond het bouwverlof (9-13 juli 2026), 1×. Geeft true
+    /** Toont automatisch bij de uitklok van 10 juli 2026, 1×. Geeft true
      *  terug als getoond (dan slaat de maandrecap over). */
     maybeShowYearRecap() {
         try {
