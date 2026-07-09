@@ -143,6 +143,7 @@ const app = {
     async init() {
         // Toegankelijkheid vroeg toepassen — ook op het login-scherm (v280).
         try { this._migrateA11y(); this._applyA11y(); } catch (_e) {}
+        this._installPullRefreshGuard();
 
         // BUG-fix: globale handler voor unhandled promise-rejections.
         // Voorkomt dat fouten stilletjes verloren gaan en helpt bij debug.
@@ -493,6 +494,7 @@ const app = {
         // te wissen. Daardoor lekte woData/favorites/pending payments
         // van de vorige user naar de volgende op hetzelfde toestel.
         try { await fetch('api/auth.php?action=logout'); } catch(e) {}
+        try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', ''); } catch(_e) {}
 
         // Wis enkel sleutels die user-gebonden zijn. Sleutels die voor
         // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
@@ -639,6 +641,14 @@ const app = {
         // minder beweging, kleurenblind-correctie/-palet en donker thema.
         this._migrateA11y();
         this._applyA11y();
+
+        // v292: native poller weet wie is ingelogd + de key (voor de goedkeuringen-melding).
+        try {
+            const _apu = RobawsAPI.getLoggedInUser();
+            const _emp = (this.currentUser && this.currentUser.robawsEmployeeId) || '';
+            const _ap = RobawsAPI._authPair ? RobawsAPI._authPair() : {};
+            if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser(String(_emp), String((_apu && _apu.role) || ''), String((_ap && _ap.key) || ''), String((_ap && _ap.secret) || ''), String(RobawsAPI.TENANT || ''));
+        } catch (_e) {}
     },
 
     // ========================================
@@ -8388,6 +8398,7 @@ const app = {
             ]);
             const n = (verlof.length || 0) + (fact.length || 0) + (mat.length || 0);
             if (n > 0) { badge.textContent = String(n); badge.style.display = ''; } else badge.style.display = 'none';
+            try { if (window.QEBridge && QEBridge.setApprovalCount) QEBridge.setApprovalCount(n); } catch (_e) {}
         } catch (e) { badge.style.display = 'none'; }
     },
 
@@ -9020,10 +9031,8 @@ const app = {
                 </div>
             </div>
             <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="app.openFactuurPdf('${this._escapeJsArg(id)}')">Factuur openen (PDF)</button>
-            ${this._renderFacturatiePanel(inv, sup)}
-            ${this._renderFactuurLines(inv)}
             <div class="card" style="margin-bottom:12px;padding:14px 16px">
-                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:2px">Goedkeurders</div>
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:2px">Goedkeuringsflow</div>
                 ${approvers}
                 <button class="btn btn-outline btn-sm btn-full" style="margin-top:12px" onclick="app.addFactuurApprover('${this._escapeJsArg(id)}')">+ Goedkeurder toevoegen</button>
             </div>
@@ -9031,7 +9040,9 @@ const app = {
                 <button class="btn btn-outline" style="flex:1" onclick="app.decideFactuur('${this._escapeJsArg(id)}', false)">Afkeuren</button>
                 <button class="btn btn-primary" style="flex:1" onclick="app.decideFactuur('${this._escapeJsArg(id)}', true)">Goedkeuren</button>
             </div>
-            <div style="font-size:11px;color:var(--qe-grey);text-align:center;margin:10px 0 4px;line-height:1.4">Goedkeuren/afkeuren wordt geregistreerd op het gedeelde kantoor-account.</div>`;
+            <div style="font-size:11px;color:var(--qe-grey);text-align:center;margin:10px 0 14px;line-height:1.4">Goedkeuren/afkeuren wordt geregistreerd op het gedeelde kantoor-account.</div>
+            ${this._renderFacturatiePanel(inv, sup)}
+            ${this._renderFactuurLines(inv)}`;
     },
 
     // v288: inklapbaar bewerkbaar facturatie-gegevens-paneel.
@@ -9160,6 +9171,7 @@ const app = {
     openProjectPicker() {
         this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
             <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app._projPickDebounce(this.value)" style="margin-bottom:10px">
+            <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">Tik een project om het toe te wijzen.</div>
             <div id="projPickResults" style="max-height:48vh;overflow:auto"><div class="spinner"></div></div>
             <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
             <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
@@ -13987,6 +13999,39 @@ const app = {
     toggleWerfModus(enabled) {
         this.setA11yScale(enabled ? 'groot' : 'normaal');
     },
+
+    // v292: pull-to-refresh (native SwipeRefreshLayout) uitzetten zodra er een
+    // pop-up/overlay openstaat — anders triggert omhoog scrollen in een modal een
+    // ongewilde app-refresh. Een MutationObserver houdt de status bij, dus dit
+    // werkt voor ELKE overlay (modal, PDF-viewer, Marble-loader/succes, …).
+    _pullRefreshOverlayOpen() {
+        try {
+            const m = document.getElementById('modalOverlay');
+            if (m && m.classList.contains('show')) return true;
+            if (document.getElementById('pdfFullscreen')) return true;
+            const nodes = document.querySelectorAll('.mb-fullveil, .modal-overlay.show, [data-overlay="1"]');
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i].offsetWidth > 0 || nodes[i].offsetHeight > 0) return true;
+            }
+            return false;
+        } catch (_e) { return false; }
+    },
+    _syncPullRefresh() {
+        const open = this._pullRefreshOverlayOpen();
+        if (open === this._lastPullState) return;
+        this._lastPullState = open;
+        try { if (window.QEBridge && QEBridge.setPullToRefreshEnabled) QEBridge.setPullToRefreshEnabled(!open); } catch (_e) {}
+    },
+    _installPullRefreshGuard() {
+        if (this._pullGuardInstalled) return;
+        this._pullGuardInstalled = true;
+        try {
+            const schedule = () => { clearTimeout(this._pullSyncT); this._pullSyncT = setTimeout(() => this._syncPullRefresh(), 60); };
+            new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+            this._syncPullRefresh();
+        } catch (_e) {}
+    },
+
 
     // Profiel-groepen: openklikbare accordeon (v281). Klap één groep open/dicht
     // (display + chevron ▾/▴). Werkt in beide mappen; de mbUp-animatie bestaat
