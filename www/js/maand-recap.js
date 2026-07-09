@@ -20,8 +20,9 @@
 
     var IDB_NAME = 'qe_werkbon_recaps';
     var IDB_STORE = 'recaps';
-    var SCHEMA_VERSION = 1;               // bump zodra de stat-structuur wijzigt
+    var SCHEMA_VERSION = 3;               // bump zodra de stat-structuur wijzigt (v288: extra-shift-filter)
     var LATE_AFTER_MIN = 8 * 60;          // "te laat" = ingeklokt na 08:00 (referentie; Levi kan dit aanpassen)
+    var EXTRA_GAP_MIN = 2 * 60;           // >2u na de (normale) start = extra/ingesprongen shift (niet in de gemiddeldes)
 
     var MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni',
         'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
@@ -51,6 +52,19 @@
         // middaguur -> geen DST-randgevallen
         var d = new Date(String(dateStr) + 'T12:00:00');
         return isNaN(d.getTime()) ? -1 : d.getDay();
+    }
+    function dayLabelOf(dateStr) {
+        if (!dateStr) return '';
+        var wd = weekdayOf(dateStr);
+        return (WEEKDAYS[wd] || '') + ' ' + parseInt(String(dateStr).slice(8), 10);
+    }
+    /** Maandag (YYYY-MM-DD) van de week waarin dateStr valt. */
+    function mondayOf(dateStr) {
+        var d = new Date(String(dateStr) + 'T12:00:00');
+        if (isNaN(d.getTime())) return '';
+        var wd = d.getDay();                      // 0=zo .. 6=za
+        d.setDate(d.getDate() + (wd === 0 ? -6 : 1 - wd));
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
     }
 
     function monthLabelOf(ym) {
@@ -137,24 +151,26 @@
         mine.forEach(function (r) {
             var d = byDate[r.date] || (byDate[r.date] = {
                 date: r.date, hours: 0, work: 0, ot: 0, km: 0,
-                ins: [], outs: [], classes: []
+                ins: [], outs: [], classes: [], fiets: false
             });
             d.hours += Number(r.totalHours) || 0;
             d.work += Number(r.workHours) || 0;
             d.ot += Number(r.overtimeHours) || 0;
             d.km += Number(r.totalKm) || 0;
+            if (r.fietsvergoeding) d.fiets = true;
             var im = toMin(r.ingeklokt); if (im != null) d.ins.push(im);
             var om = toMin(r.uitgeklokt); if (om != null) d.outs.push(om);
             if (r.tijdClass) d.classes.push(r.tijdClass);
         });
 
         var dates = Object.keys(byDate).sort();
-        var worked = [], arrivals = [], departures = [];
+        var worked = [];
         var totalHours = 0, workHours = 0, overtimeHours = 0, totalKm = 0;
-        var lateCount = 0, sickCount = 0, verlofCount = 0, feestCount = 0, onwettigCount = 0, weekendDaysWorked = 0;
+        var sickCount = 0, verlofCount = 0, feestCount = 0, onwettigCount = 0, weekendDaysWorked = 0, fietsDays = 0;
         var longestHours = 0, longestDate = '';
         var byWeekdayHours = [0, 0, 0, 0, 0, 0, 0];
-        var earliest = null, latest = null;
+        var byWeek = {};
+        var dayArr = [], extraBlocks = 0;   // per-dag inklok/uitklok + extra 2e-blokken (>2u na de eerste)
 
         dates.forEach(function (dk) {
             var d = byDate[dk];
@@ -163,21 +179,20 @@
             if (d.hours > 0.01) {
                 worked.push(d);
                 totalHours += d.hours; workHours += d.work; overtimeHours += d.ot; totalKm += d.km;
+                if (d.fiets) fietsDays++;
                 var wd = weekdayOf(d.date);
                 if (wd >= 0) byWeekdayHours[wd] += d.hours;
                 if (wd === 0 || wd === 6) weekendDaysWorked++;
+                var mon = mondayOf(d.date); if (mon) byWeek[mon] = (byWeek[mon] || 0) + d.hours;
                 if (d.hours > longestHours) { longestHours = d.hours; longestDate = d.date; }
-                var arr = d.ins.length ? Math.min.apply(null, d.ins) : null;
-                var dep = d.outs.length ? Math.max.apply(null, d.outs) : null;
-                if (arr != null) {
-                    arrivals.push(arr);
-                    if (earliest == null || arr < earliest) earliest = arr;
-                    // "te laat" — referentie 08:00 (klasse 'late' telt sowieso mee)
-                    if (arr > LATE_AFTER_MIN || cls.indexOf('late') !== -1) lateCount++;
-                } else if (cls.indexOf('late') !== -1) {
-                    lateCount++;
+                var first = d.ins.length ? Math.min.apply(null, d.ins) : null;
+                var last = d.outs.length ? Math.max.apply(null, d.outs) : null;
+                // Extra inkloks: elk blok dat >2u NÁ de eerste inklok start is een
+                // tweede/ingesprongen shift — telt als reward, niet in het gemiddelde.
+                if (first != null) {
+                    for (var qi = 0; qi < d.ins.length; qi++) { if (d.ins[qi] > first + EXTRA_GAP_MIN) extraBlocks++; }
                 }
-                if (dep != null) { departures.push(dep); if (latest == null || dep > latest) latest = dep; }
+                dayArr.push({ date: d.date, first: first, last: last, cls: cls });
             } else {
                 // niet-gewerkte dag → pas hier de afwezigheidsklassen tellen
                 // (voorkomt dubbeltelling met een gemengde dag die óók uren droeg)
@@ -189,13 +204,53 @@
             }
         });
 
+        // "Normale starttijd" = mediaan van de eerste inkloks. Dagen die >2u
+        // later starten zijn "ingesprongen" shifts: die bederven de aankomst-/
+        // vertrek-gemiddeldes niet, maar tellen als reward (extra ingesprongen).
+        var firstsSorted = dayArr.map(function (x) { return x.first; }).filter(function (v) { return v != null; }).sort(function (a, b) { return a - b; });
+        var normalStart = null;
+        if (firstsSorted.length) {
+            var mid = Math.floor(firstsSorted.length / 2);
+            normalStart = (firstsSorted.length % 2) ? firstsSorted[mid] : Math.round((firstsSorted[mid - 1] + firstsSorted[mid]) / 2);
+        }
+        var arrivals = [], departures = [], lateCount = 0, earliest = null, latest = null, earliestDate = '', latestDate = '', extraShiftDays = 0;
+        dayArr.forEach(function (x) {
+            if (normalStart != null && x.first != null && x.first > normalStart + EXTRA_GAP_MIN) { extraShiftDays++; return; }
+            if (x.first != null) {
+                arrivals.push(x.first);
+                if (earliest == null || x.first < earliest) { earliest = x.first; earliestDate = x.date; }
+                if (x.first > LATE_AFTER_MIN || x.cls.indexOf('late') !== -1) lateCount++;
+            } else if (x.cls.indexOf('late') !== -1) { lateCount++; }
+            if (x.last != null) { departures.push(x.last); if (latest == null || x.last > latest) { latest = x.last; latestDate = x.date; } }
+        });
+        var extraClockIns = extraBlocks + extraShiftDays;
+        var assessedDays = Math.max(0, worked.length - extraShiftDays);
+
         var workedDays = worked.length;
         var avgHoursPerDay = workedDays ? (totalHours / workedDays) : 0;
         var avgArrival = arrivals.length ? (arrivals.reduce(function (a, b) { return a + b; }, 0) / arrivals.length) : null;
+        var avgDeparture = departures.length ? (departures.reduce(function (a, b) { return a + b; }, 0) / departures.length) : null;
 
         // favoriete werkdag = weekdag met de meeste uren
         var favWd = -1, favWdHours = 0;
         for (var i = 0; i < 7; i++) { if (byWeekdayHours[i] > favWdHours) { favWdHours = byWeekdayHours[i]; favWd = i; } }
+
+        // langste reeks opeenvolgende gewerkte kalenderdagen
+        var wdates = worked.map(function (w) { return w.date; }).sort();
+        var longestStreak = 0, cur = 0, prev = null;
+        wdates.forEach(function (ds) {
+            if (prev) {
+                var diff = Math.round((new Date(ds + 'T12:00:00') - new Date(prev + 'T12:00:00')) / 86400000);
+                cur = (diff === 1) ? (cur + 1) : 1;
+            } else { cur = 1; }
+            if (cur > longestStreak) longestStreak = cur;
+            prev = ds;
+        });
+
+        // drukste week (meeste uren binnen één maandag-week)
+        var busiestWeekHours = 0, busiestWeekMon = '';
+        Object.keys(byWeek).forEach(function (wk) { if (byWeek[wk] > busiestWeekHours) { busiestWeekHours = byWeek[wk]; busiestWeekMon = wk; } });
+        var busiestWeekLabel = busiestWeekMon ? ('week van ' + parseInt(busiestWeekMon.slice(8), 10) + ' ' + (MONTHS[parseInt(busiestWeekMon.slice(5, 7), 10) - 1] || '')) : '';
 
         return {
             schema: SCHEMA_VERSION,
@@ -216,13 +271,28 @@
             latestDepartureStr: latest == null ? '' : fromMin(latest),
             longestDayHours: round1(longestHours),
             longestDayDate: longestDate,
-            longestDayLabel: longestDate ? (WEEKDAYS[weekdayOf(longestDate)] + ' ' + parseInt(longestDate.slice(8), 10)) : '',
+            longestDayLabel: dayLabelOf(longestDate),
+            avgDepartureMin: avgDeparture == null ? null : Math.round(avgDeparture),
+            avgDepartureStr: avgDeparture == null ? '' : fromMin(avgDeparture),
+            earliestArrivalDayLabel: dayLabelOf(earliestDate),
+            latestDepartureDayLabel: dayLabelOf(latestDate),
             lateCount: lateCount,
+            onTimeDays: Math.max(0, assessedDays - lateCount),
+            onTimePct: assessedDays ? Math.round((assessedDays - lateCount) / assessedDays * 100) : 0,
+            assessedDays: assessedDays,
+            extraClockIns: extraClockIns,
+            extraShiftDays: extraShiftDays,
+            normalStartStr: normalStart == null ? '' : fromMin(normalStart),
+            longestStreak: longestStreak,
+            busiestWeekHours: round1(busiestWeekHours),
+            busiestWeekLabel: busiestWeekLabel,
+            fietsDays: fietsDays,
             sickCount: sickCount,
             verlofCount: verlofCount,
             feestCount: feestCount,
             onwettigCount: onwettigCount,
             totalKm: Math.round(totalKm),
+            overtimePct: totalHours > 0 ? Math.round(overtimeHours / totalHours * 100) : 0,
             weekendDaysWorked: weekendDaysWorked,
             favWeekday: favWd >= 0 ? WEEKDAYS[favWd] : '',
             favWeekdayHours: round1(favWdHours)

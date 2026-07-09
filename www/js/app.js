@@ -8565,12 +8565,91 @@ const app = {
     _materieelById(id) { return ((this._materieelCache && this._materieelCache.mats) || []).find(m => String(m.id) === String(id)) || null; },
 
     _matBadge(state, res) {
-        if (state === 'IN_GEBRUIK') return { label: 'In gebruik' + (res && res.to ? ' · tot ' + this._matDmy(res.to) : ''), color: '#8a4b00', bg: 'rgba(249,157,62,0.16)' };
+        if (state === 'IN_GEBRUIK') return { label: 'Nu in gebruik' + (res && res.to ? ' · tot ' + this._matDmy(res.to) : ''), color: '#8a4b00', bg: 'rgba(249,157,62,0.16)' };
         if (state === 'GERESERVEERD') return { label: 'Gereserveerd' + (res && res.from ? ' · vanaf ' + this._matDmy(res.from) : ''), color: '#1f4f8a', bg: 'rgba(60,120,220,0.14)' };
-        return { label: 'Beschikbaar', color: '#0a6b3f', bg: 'rgba(20,160,90,0.14)' };
+        return { label: 'Nu beschikbaar', color: '#0a6b3f', bg: 'rgba(20,160,90,0.14)' };
     },
     _matStatusLabel(s) {
         return ({ AANGEVRAAGD: 'Aangevraagd', GOEDGEKEURD: 'Goedgekeurd', GEWEIGERD: 'Geweigerd', IN_GEBRUIK: 'In gebruik', TERUGGEBRACHT: 'Teruggebracht', GEANNULEERD: 'Geannuleerd' })[s] || s || '';
+    },
+    _matStatusChip(status) {
+        return ({
+            AANGEVRAAGD:   { label: 'Aangevraagd',   color: '#8a6d00', bg: 'rgba(230,180,0,0.16)' },
+            GOEDGEKEURD:   { label: 'Goedgekeurd',   color: '#0a6b3f', bg: 'rgba(20,160,90,0.14)' },
+            IN_GEBRUIK:    { label: 'In gebruik',    color: '#8a4b00', bg: 'rgba(249,157,62,0.16)' },
+            GEWEIGERD:     { label: 'Geweigerd',     color: '#a12020', bg: 'rgba(200,40,40,0.12)' },
+            GEANNULEERD:   { label: 'Geannuleerd',   color: '#666',    bg: 'rgba(0,0,0,0.06)' },
+            TERUGGEBRACHT: { label: 'Teruggebracht', color: '#666',    bg: 'rgba(0,0,0,0.06)' },
+        })[status] || { label: status || '', color: '#666', bg: 'rgba(0,0,0,0.06)' };
+    },
+
+    // Alle reserveringen van de ingelogde gebruiker over alle materialen.
+    _matMyReserveringen(mats) {
+        const myEmp = this.currentUser && this.currentUser.robawsEmployeeId;
+        const out = [];
+        for (const m of (mats || [])) {
+            for (const r of RobawsAPI._materieelReserveringen(m)) {
+                if (String(r.employeeId) === String(myEmp)) out.push(Object.assign({ materialId: m.id, materialName: m.name }, r));
+            }
+        }
+        return out;
+    },
+    // "Mijn aanvragen"-blok bovenaan de materieel-lijst (status van élke aanvraag).
+    _matMyReserveringenBlock(mats) {
+        const mine = this._matMyReserveringen(mats)
+            .filter(r => ['AANGEVRAAGD', 'GOEDGEKEURD', 'IN_GEBRUIK', 'GEWEIGERD'].indexOf(r.status) !== -1)
+            .sort((a, b) => {
+                const pr = s => ({ AANGEVRAAGD: 0, IN_GEBRUIK: 1, GOEDGEKEURD: 2, GEWEIGERD: 3 }[s] != null ? { AANGEVRAAGD: 0, IN_GEBRUIK: 1, GOEDGEKEURD: 2, GEWEIGERD: 3 }[s] : 9);
+                return (pr(a.status) - pr(b.status)) || String(a.from).localeCompare(String(b.from));
+            });
+        if (!mine.length) return '';
+        const rows = mine.map(r => {
+            const c = this._matStatusChip(r.status);
+            return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="app.openMaterieelDetail('${r.materialId}')">
+                <div style="flex:1;min-width:0">
+                    <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(r.materialName || 'Materieel')}</div>
+                    <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(this._matPeriode(r.from, r.to))}</div>
+                </div>
+                <span style="flex-shrink:0;font-size:11px;font-weight:600;color:${c.color};background:${c.bg};border-radius:12px;padding:4px 10px">${c.label}</span>
+            </div>`;
+        }).join('');
+        return `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin:4px 4px 8px">Mijn aanvragen</div>${rows}<div style="height:6px"></div>`;
+    },
+
+    // --- reservatie-agenda (maandkalender in het materieel-detail) ---
+    _matMonthNames: ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'],
+    _matCalHtml() {
+        const res = this._matCalRes || [];
+        const ym = this._matCalYM;
+        if (!ym) return '';
+        const y = ym.y, m = ym.m, today = this._matToday();
+        const pad = n => String(n).padStart(2, '0');
+        const lead = (new Date(y, m, 1).getDay() + 6) % 7;   // maandag-start
+        const days = new Date(y, m + 1, 0).getDate();
+        let out = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'].map(d => `<div style="text-align:center;font-size:10px;color:var(--qe-grey)">${d}</div>`).join('');
+        for (let i = 0; i < lead; i++) out += '<div></div>';
+        for (let d = 1; d <= days; d++) {
+            const ds = y + '-' + pad(m + 1) + '-' + pad(d);
+            let block = false, pend = false;
+            for (const r of res) {
+                if (!r || ds < r.from || ds > r.to) continue;
+                if (RobawsAPI.MATERIEEL.BLOCKING.indexOf(r.status) !== -1) block = true;
+                else if (r.status === 'AANGEVRAAGD') pend = true;
+            }
+            const bg = block ? 'rgba(249,157,62,0.28)' : (pend ? 'rgba(230,180,0,0.18)' : 'transparent');
+            const ring = ds === today ? 'box-shadow:inset 0 0 0 2px var(--qe-orange,#F99D3E);' : '';
+            out += `<div style="height:34px;display:flex;align-items:center;justify-content:center;font-size:12px;border-radius:8px;background:${bg};${ring}font-weight:${block ? '700' : '400'}">${d}</div>`;
+        }
+        return `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">${out}</div>`;
+    },
+    matCalNav(delta) {
+        const ym = this._matCalYM; if (!ym) return;
+        let m = ym.m + delta, y = ym.y;
+        while (m < 0) { m += 12; y--; }
+        while (m > 11) { m -= 12; y++; }
+        this._matCalYM = { y, m };
+        const grid = document.getElementById('matCalGrid'); if (grid) grid.innerHTML = this._matCalHtml();
+        const lbl = document.getElementById('matCalLabel'); if (lbl) lbl.textContent = this._matMonthNames[m] + ' ' + y;
     },
 
     async loadMaterieel() {
@@ -8587,7 +8666,7 @@ const app = {
             const today = this._matToday();
             const byCat = {};
             for (const m of mats) { const c = RobawsAPI._materieelCategorie(m) || 'Overig'; (byCat[c] = byCat[c] || []).push(m); }
-            let html = '';
+            let html = this._matMyReserveringenBlock(mats);
             Object.keys(byCat).sort().forEach(cat => {
                 html += `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin:16px 4px 8px">${this.escapeHtml(cat)}</div>`;
                 byCat[cat].forEach(m => {
@@ -8626,6 +8705,7 @@ const app = {
             { const _i = this._materieelCache.mats.findIndex(x => String(x.id) === String(id)); if (_i >= 0) this._materieelCache.mats[_i] = mat; else this._materieelCache.mats.push(mat); }
             const today = this._matToday();
             const reserveringen = RobawsAPI._materieelReserveringen(mat);
+            const _now = new Date(); this._matCalYM = { y: _now.getFullYear(), m: _now.getMonth() }; this._matCalRes = reserveringen;
             const st = RobawsAPI.materieelStatus(reserveringen, today);
             const b = this._matBadge(st.state, st.res);
             const myEmp = this.currentUser && this.currentUser.robawsEmployeeId;
@@ -8638,7 +8718,7 @@ const app = {
                     </div>`).join('')
                 : '<div style="font-size:13px;color:var(--qe-grey);padding:6px 0">Geen komende reservaties — volledig beschikbaar.</div>';
 
-            const mine = reserveringen.filter(r => String(r.employeeId) === String(myEmp) && ['AANGEVRAAGD', 'GOEDGEKEURD', 'IN_GEBRUIK'].indexOf(r.status) !== -1).sort((a, c) => a.from.localeCompare(c.from));
+            const mine = reserveringen.filter(r => String(r.employeeId) === String(myEmp) && ['AANGEVRAAGD', 'GOEDGEKEURD', 'IN_GEBRUIK', 'GEWEIGERD'].indexOf(r.status) !== -1).sort((a, c) => a.from.localeCompare(c.from));
             const mineHtml = mine.map(r => {
                 const canCancel = r.status === 'AANGEVRAAGD' || r.status === 'GOEDGEKEURD';
                 const canReturn = (r.status === 'GOEDGEKEURD' || r.status === 'IN_GEBRUIK') && r.from <= today;
@@ -8661,6 +8741,21 @@ const app = {
                 <div class="card" style="padding:16px;margin-bottom:14px">
                     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey);margin-bottom:6px">Beschikbaarheid</div>
                     ${blokHtml}
+                </div>
+                <div class="card" style="padding:16px;margin-bottom:14px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey)">Reservatie-agenda</div>
+                        <div style="display:flex;align-items:center;gap:4px">
+                            <button onclick="app.matCalNav(-1)" style="border:none;background:none;font-size:18px;color:var(--qe-grey);cursor:pointer;padding:2px 8px;line-height:1">‹</button>
+                            <span id="matCalLabel" style="font-size:13px;font-weight:600;min-width:96px;text-align:center">${this._matMonthNames[this._matCalYM.m] + ' ' + this._matCalYM.y}</span>
+                            <button onclick="app.matCalNav(1)" style="border:none;background:none;font-size:18px;color:var(--qe-grey);cursor:pointer;padding:2px 8px;line-height:1">›</button>
+                        </div>
+                    </div>
+                    <div id="matCalGrid">${this._matCalHtml()}</div>
+                    <div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--qe-grey)">
+                        <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(249,157,62,0.5);display:inline-block"></span>Gereserveerd</span>
+                        <span style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:3px;background:rgba(230,180,0,0.4);display:inline-block"></span>Aangevraagd</span>
+                    </div>
                 </div>
                 <div class="card" style="padding:16px;margin-bottom:14px">
                     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey);margin-bottom:10px">Reserveren</div>
@@ -8917,39 +9012,95 @@ const app = {
         const ref = detail.resourceUnderApprovalRef;
         const invoiceId = ref ? String(ref).split('/').pop() : null;
         if (!invoiceId) { this.toast('Factuur niet gevonden', true); return; }
-        this._showPdfFullscreen(null, detail.invoiceNumber || 'Factuur');
+        this._openPdfOverlay(detail.invoiceNumber || 'Factuur');
         try {
             const docId = await RobawsAPI.getPurchaseInvoiceDocumentId(invoiceId);
             if (!docId) throw new Error('Geen document aan deze factuur gekoppeld');
             const doc = await RobawsAPI.getDocumentUrl(docId);
-            this._showPdfFullscreen(doc, detail.invoiceNumber || 'Factuur');
+            await this._renderPdfIntoOverlay(doc);
         } catch (e) {
             this._closePdfFullscreen();
             this.toast('PDF openen mislukt: ' + (e.message || '?'), true);
         }
     },
 
-    _showPdfFullscreen(doc, title) {
+    // Fullscreen PDF-viewer via pdf.js (v287): de Android-WebView toont PDF niet
+    // in een iframe, dus renderen we elke pagina naar een canvas. pdf.js + de
+    // worker worden lui geladen uit js/vendor/pdfjs/ (geen opstartkost).
+    _openPdfOverlay(title) {
         let ov = document.getElementById('pdfFullscreen');
-        if (!ov) {
-            ov = document.createElement('div');
-            ov.id = 'pdfFullscreen';
-            ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#111;display:flex;flex-direction:column';
-            document.body.appendChild(ov);
+        if (ov) ov.remove();
+        ov = document.createElement('div');
+        ov.id = 'pdfFullscreen';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#33383f;display:flex;flex-direction:column';
+        ov.innerHTML =
+            '<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#1b1b1b;color:#fff;flex-shrink:0">' +
+                '<div style="flex:1;min-width:0;font:600 14px var(--font,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(String(title || 'Document')) + '</div>' +
+                '<button onclick="app._closePdfFullscreen()" aria-label="Sluiten" style="width:38px;height:38px;flex-shrink:0;border:none;border-radius:19px;background:rgba(255,255,255,.16);color:#fff;font-size:18px;line-height:1;cursor:pointer">✕</button>' +
+            '</div>' +
+            '<div id="pdfScroll" style="flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 0">' +
+                '<div id="pdfLoading" style="color:#fff;text-align:center;font:500 14px var(--font,sans-serif);padding:44px 0">Factuur laden…</div>' +
+            '</div>';
+        document.body.appendChild(ov);
+    },
+
+    _ensurePdfLib() {
+        return new Promise((resolve, reject) => {
+            if (window.pdfjsLib) return resolve();
+            const s = document.createElement('script');
+            s.src = 'js/vendor/pdfjs/pdf.min.js';
+            s.onload = () => window.pdfjsLib ? resolve() : reject(new Error('pdf.js init mislukt'));
+            s.onerror = () => reject(new Error('pdf.js kon niet laden'));
+            document.head.appendChild(s);
+        });
+    },
+
+    async _ensurePdfWorker() {
+        if (this._pdfWorkerReady) return;
+        // Worker als blob-URL (omzeilt file://-worker-restricties in de WebView).
+        try {
+            const resp = await fetch('js/vendor/pdfjs/pdf.worker.min.js');
+            const blob = await resp.blob();
+            pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+        } catch (e) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'js/vendor/pdfjs/pdf.worker.min.js';
         }
-        const closeBtn = `<button onclick="app._closePdfFullscreen()" aria-label="Sluiten" style="width:38px;height:38px;flex-shrink:0;border:none;border-radius:19px;background:rgba(255,255,255,.16);color:#fff;font-size:18px;line-height:1;cursor:pointer">✕</button>`;
-        const bar = (t) => `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#1b1b1b;color:#fff">
-            <div style="flex:1;min-width:0;font:600 14px var(--font,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(String(t || 'Document'))}</div>${closeBtn}</div>`;
-        if (!doc) {
-            ov.innerHTML = bar(title) + `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:#fff;font:500 14px var(--font,sans-serif)">Factuur laden…</div>`;
+        this._pdfWorkerReady = true;
+    },
+
+    async _renderPdfIntoOverlay(doc) {
+        const scroll = document.getElementById('pdfScroll');
+        if (!scroll) return;
+        // Afbeelding? Direct tonen (de WebView rendert images wél).
+        if (doc.contentType && doc.contentType.includes('image')) {
+            scroll.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = doc.blobUrl;
+            img.style.cssText = 'max-width:100%;height:auto;display:block;margin:0 auto';
+            scroll.appendChild(img);
+            this._pdfBlobUrl = doc.blobUrl;
             return;
         }
-        const isImg = doc.contentType && doc.contentType.includes('image');
-        const view = isImg
-            ? `<div style="flex:1;overflow:auto;display:flex"><img src="${doc.blobUrl}" style="max-width:100%;max-height:100%;margin:auto;display:block"></div>`
-            : `<iframe src="${doc.blobUrl}" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
-        ov.innerHTML = bar(title) + view;
-        this._pdfBlobUrl = doc.blobUrl;
+        await this._ensurePdfLib();
+        await this._ensurePdfWorker();
+        const buf = await doc.blob.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        scroll.innerHTML = '';
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const cssWidth = Math.min((scroll.clientWidth || 360) - 16, 900);
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const vp1 = page.getViewport({ scale: 1 });
+            const scale = (cssWidth / vp1.width) * dpr;
+            const vp = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.floor(vp.width);
+            canvas.height = Math.floor(vp.height);
+            canvas.style.cssText = 'width:' + cssWidth + 'px;height:' + Math.floor(vp.height / dpr) + 'px;display:block;margin:0 auto 12px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)';
+            scroll.appendChild(canvas);
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        }
+        if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
     },
 
     _closePdfFullscreen() {
@@ -13639,11 +13790,11 @@ const app = {
         ov.className = 'qr-chooser';
         ov.innerHTML =
             '<div class="qr-ch-box">' +
-            '<div class="qr-ch-head">Terugblik<button class="qr-ch-x" aria-label="Sluiten">&times;</button></div>' +
+            '<div class="qr-ch-head">📅 Maandrecap<button class="qr-ch-x" aria-label="Sluiten">&times;</button></div>' +
+            '<div class="qr-ch-note">Kies een maand · ▸ klaar · ＋ nog te berekenen</div>' +
             '<div class="qr-ch-list">' +
             items.map(it => '<button class="qr-ch-item" data-ym="' + it.ym + '"><span>' + this.escapeHtml(it.label) + '</span><span class="qr-ch-arrow">' + (it.cached ? '▸' : '＋') + '</span></button>').join('') +
             '</div>' +
-            '<div class="qr-ch-note">＋ = nog te berekenen · ▸ = klaar</div>' +
             '</div>';
         document.body.appendChild(ov);
         this._recapChooser = ov;
@@ -13695,18 +13846,26 @@ const app = {
         const nextMonth = MONTHS[(((_m0 + 1) % 12) + 12) % 12] || '';
 
         const cards = [];
-        const add = (bg, emoji, big, label, sub) => cards.push({ bg: bg, emoji: emoji, big: String(big), label: label || '', sub: sub || '' });
-        add('linear-gradient(160deg,#1A237E,#6A2C91)', '📅', cap(s.monthLabel), 'jouw maand in cijfers', 'Tik om te bladeren →');
-        add('linear-gradient(160deg,#0072B2,#012f49)', '⏱️', s.totalHours + 'u', 'gewerkt deze maand', s.workedDays + ' werkdagen');
-        add('linear-gradient(160deg,#E8850C,#6f3800)', '📊', s.avgHoursPerDay + 'u', 'gemiddeld per dag', s.longestDayHours > 0 ? ('Langste dag: ' + s.longestDayHours + 'u' + (s.longestDayLabel ? ' — ' + s.longestDayLabel : '')) : '');
-        if (s.avgArrivalStr) add('linear-gradient(160deg,#00897B,#01302a)', '🌅', s.avgArrivalStr, 'je gemiddelde aankomst', s.earliestArrivalStr ? ('Vroegste: ' + s.earliestArrivalStr) : '');
-        if (s.overtimeHours > 0) add('linear-gradient(160deg,#8E24AA,#2f0d3a)', '🔥', s.overtimeHours + 'u', 'overuren gedraaid', 'Doorzetter 💪');
-        add(s.lateCount === 0 ? 'linear-gradient(160deg,#009E73,#013026)' : 'linear-gradient(160deg,#D55E00,#4a2300)', s.lateCount === 0 ? '⭐' : '⏰', s.lateCount + '×', s.lateCount === 0 ? 'nooit te laat' : 'na 08:00 ingeklokt', s.lateCount === 0 ? 'Altijd op tijd!' : '');
-        if ((s.sickCount + s.verlofCount) > 0) add('linear-gradient(160deg,#455A64,#141a1d)', '🗓️', (s.sickCount + s.verlofCount) + '', [s.sickCount ? (s.sickCount + ' ziek') : '', s.verlofCount ? (s.verlofCount + ' verlof') : ''].filter(Boolean).join(' · '), 'afwezige dagen');
-        if (s.totalKm > 0) add('linear-gradient(160deg,#3949AB,#101541)', '🚗', s.totalKm + ' km', 'onderweg', '');
-        if (s.weekendDaysWorked > 0) add('linear-gradient(160deg,#5D4037,#1d130d)', '🏗️', s.weekendDaysWorked + '', 'weekenddag(en) gewerkt', '');
-        if (s.favWeekday) add('linear-gradient(160deg,#C2185B,#3f0820)', '❤️', cap(s.favWeekday), 'je favoriete werkdag', s.favWeekdayHours + 'u in totaal');
-        add('linear-gradient(160deg,#1A237E,#6A2C91)', '🎉', 'Bedankt!', '', 'Tot in ' + nextMonth + '! Terugblik: knop op de Klok.');
+        // Marble-accenten — de kaart blijft licht (crème); per kaart een zachte
+        // kleur-chip + wash. Getal in navy (--ink), "QE"-label in oranje.
+        const ORANGE = '#F99D3E', NAVY = '#3A4A6B', GREEN = '#2FA36E', INDIGO = '#4457C7', PURPLE = '#8A4BC7', TEAL = '#1FA39A', CORAL = '#E0674B', PINK = '#C7568C';
+        const add = (accent, emoji, big, label, sub) => cards.push({ accent: accent, emoji: emoji, big: String(big), label: label || '', sub: sub || '' });
+        add(NAVY, '📅', cap(s.monthLabel), 'jouw maand in cijfers', 'Tik om te bladeren →');
+        add(INDIGO, '⏱️', s.totalHours + 'u', 'gewerkt deze maand', s.workedDays + ' werkdagen');
+        add(ORANGE, '📊', s.avgHoursPerDay + 'u', 'gemiddeld per dag', s.longestDayHours > 0 ? ('Langste dag: ' + s.longestDayHours + 'u' + (s.longestDayLabel ? ' — ' + s.longestDayLabel : '')) : '');
+        if (s.avgArrivalStr) add(TEAL, '🌅', s.avgArrivalStr, 'je gemiddelde aankomst', s.earliestArrivalStr ? ('Vroegste: ' + s.earliestArrivalStr + (s.earliestArrivalDayLabel ? ' (' + s.earliestArrivalDayLabel + ')' : '')) : '');
+        if (s.avgDepartureStr) add(PURPLE, '🌆', s.avgDepartureStr, 'gemiddeld naar huis', s.latestDepartureStr ? ('Laatste: ' + s.latestDepartureStr + (s.latestDepartureDayLabel ? ' (' + s.latestDepartureDayLabel + ')' : '')) : '');
+        add(s.lateCount === 0 ? GREEN : ORANGE, s.lateCount === 0 ? '⭐' : '⏰', (s.onTimePct != null ? s.onTimePct : 100) + '%', 'op tijd ingeklokt', s.lateCount === 0 ? 'Elke dag stipt!' : (s.onTimeDays + '/' + (s.assessedDays != null ? s.assessedDays : s.workedDays) + ' dagen op tijd'));
+        if (s.extraClockIns > 0) add(GREEN, '🚀', s.extraClockIns + '', 'keer extra ingesprongen', 'buiten je normale start — top!');
+        if (s.overtimeHours > 0) add(CORAL, '🔥', s.overtimeHours + 'u', 'overuren gedraaid', (s.overtimePct || 0) + '% van je uren');
+        if (s.longestStreak >= 2) add(INDIGO, '🔗', s.longestStreak + '', 'dagen op rij gewerkt', 'Je langste reeks');
+        if (s.busiestWeekHours > 0) add(NAVY, '📈', s.busiestWeekHours + 'u', 'je drukste week', s.busiestWeekLabel || '');
+        if ((s.sickCount + s.verlofCount) > 0) add(PURPLE, '🗓️', (s.sickCount + s.verlofCount) + '', [s.sickCount ? (s.sickCount + ' ziek') : '', s.verlofCount ? (s.verlofCount + ' verlof') : ''].filter(Boolean).join(' · '), 'afwezige dagen');
+        if (s.totalKm > 0) add(TEAL, '🚗', s.totalKm + ' km', 'onderweg', '');
+        if (s.fietsDays > 0) add(GREEN, '🚲', s.fietsDays + '', 'dagen met de fiets', 'Groen bezig!');
+        if (s.weekendDaysWorked > 0) add(ORANGE, '🏗️', s.weekendDaysWorked + '', 'weekenddag(en) gewerkt', '');
+        if (s.favWeekday) add(PINK, '❤️', cap(s.favWeekday), 'je favoriete werkdag', s.favWeekdayHours + 'u in totaal');
+        add(ORANGE, '🎉', 'Bedankt!', '', 'Tot in ' + nextMonth + '! Terugblik: knop op de Klok.');
 
         this._ensureRecapStyles();
         const ov = document.createElement('div');
@@ -13729,9 +13888,10 @@ const app = {
         const render = () => {
             const c = cards[state.idx];
             const card = ov.querySelector('#qrCard');
-            card.style.background = c.bg;
+            card.style.background = c.accent + '14';
             card.innerHTML =
-                '<div class="qr-emoji">' + c.emoji + '</div>' +
+                '<div class="qr-tag">QE · ' + this.escapeHtml(cap(s.monthLabel)) + '</div>' +
+                '<div class="qr-chip" style="background:' + c.accent + '2b">' + c.emoji + '</div>' +
                 '<div class="qr-big">' + this.escapeHtml(c.big) + '</div>' +
                 (c.label ? '<div class="qr-label">' + this.escapeHtml(c.label) + '</div>' : '') +
                 (c.sub ? '<div class="qr-sub">' + this.escapeHtml(c.sub) + '</div>' : '');
@@ -13768,29 +13928,31 @@ const app = {
         const st = document.createElement('style');
         st.id = 'qrStyles';
         st.textContent =
-            '.qr-ov{position:fixed;inset:0;z-index:100000;background:#000;overflow:hidden;display:flex;flex-direction:column;font-family:var(--font,"Archivo",system-ui,-apple-system,sans-serif)}' +
+            '.qr-ov{position:fixed;inset:0;z-index:100000;background:var(--bg,#F4F2ED);overflow:hidden;display:flex;flex-direction:column;font-family:var(--font,"Archivo",system-ui,-apple-system,sans-serif)}' +
             '.qr-bars{position:absolute;top:0;left:0;right:0;display:flex;gap:4px;padding:12px 12px;z-index:3}' +
-            '.qr-bar{flex:1;height:3px;border-radius:3px;background:rgba(255,255,255,.28);overflow:hidden}' +
-            '.qr-bar>i{display:block;height:100%;width:0;background:#fff;border-radius:3px}' +
-            '.qr-x{position:absolute;top:19px;right:12px;z-index:4;background:none;border:none;color:#fff;font-size:30px;line-height:1;cursor:pointer;opacity:.92;-webkit-appearance:none;appearance:none;padding:4px 10px}' +
-            '.qr-card{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 26px 90px;color:#fff}' +
-            '.qr-emoji{font-size:62px;margin-bottom:16px;filter:drop-shadow(0 4px 12px rgba(0,0,0,.25))}' +
-            '.qr-big{font-size:clamp(38px,12.5vw,82px);font-weight:800;line-height:1.03;letter-spacing:-.02em;max-width:100%;word-break:break-word}' +
-            '.qr-label{font-size:19px;font-weight:600;margin-top:14px;opacity:.96;max-width:82%}' +
-            '.qr-sub{font-size:14px;margin-top:12px;opacity:.82;max-width:82%;line-height:1.4}' +
+            '.qr-bar{flex:1;height:3px;border-radius:3px;background:var(--b1,#DCD9D0);overflow:hidden}' +
+            '.qr-bar>i{display:block;height:100%;width:0;background:var(--accent,#F99D3E);border-radius:3px}' +
+            '.qr-x{position:absolute;top:19px;right:12px;z-index:4;background:none;border:none;color:var(--g1,#85847C);font-size:30px;line-height:1;cursor:pointer;-webkit-appearance:none;appearance:none;padding:4px 10px}' +
+            '.qr-card{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:64px 26px 92px;color:var(--ink,#26334B)}' +
+            '.qr-tag{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent,#F99D3E);margin-bottom:24px}' +
+            '.qr-chip{width:108px;height:108px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:50px;margin-bottom:22px}' +
+            '.qr-big{font-size:clamp(40px,13vw,86px);font-weight:800;line-height:1.02;letter-spacing:-.02em;color:var(--ink,#26334B);max-width:100%;word-break:break-word}' +
+            '.qr-label{font-size:19px;font-weight:600;margin-top:14px;color:var(--ink,#26334B);max-width:84%}' +
+            '.qr-sub{font-size:14px;margin-top:12px;color:var(--g1,#85847C);max-width:84%;line-height:1.45}' +
             '.qr-tap{position:absolute;top:46px;bottom:0;z-index:2;cursor:pointer}' +
             '.qr-tap-l{left:0;width:33%}.qr-tap-r{left:33%;right:0}' +
             '@keyframes qrIn{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}' +
-            '.qr-chooser{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center;font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
-            '.qr-ch-box{background:var(--card,#fff);color:var(--ink,#222);width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:14px 16px calc(20px + env(safe-area-inset-bottom));max-height:76vh;overflow:auto}' +
-            '.qr-ch-head{display:flex;align-items:center;justify-content:space-between;font-size:17px;font-weight:700;margin:4px 2px 12px}' +
-            '.qr-ch-x{background:none;border:none;font-size:26px;line-height:1;color:var(--g1,#888);cursor:pointer;-webkit-appearance:none;appearance:none}' +
-            '.qr-ch-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 14px;margin-bottom:8px;border:1px solid var(--b1,#e5e2da);border-radius:12px;background:var(--bg,#f7f5f0);color:inherit;font:600 15px/1 var(--font,inherit);cursor:pointer;-webkit-appearance:none;appearance:none}' +
-            '.qr-ch-arrow{color:var(--accent,#F99D3E);font-size:18px}' +
-            '.qr-ch-note{font-size:11.5px;color:var(--g1,#888);text-align:center;margin-top:6px}' +
-            '.qr-loading{position:fixed;inset:0;z-index:99999;background:rgba(10,12,24,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:#fff;font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
-            '.qr-spin{width:52px;height:52px;border:4px solid rgba(255,255,255,.22);border-top-color:#F99D3E;border-radius:50%;animation:qrSpin .9s linear infinite}' +
-            '.qr-load-txt{font-size:15px;font-weight:600;opacity:.92;text-align:center;padding:0 34px}' +
+            '.qr-chooser{position:fixed;inset:0;z-index:100000;background:rgba(0,18,44,.62);display:flex;align-items:center;justify-content:center;padding:22px;font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
+            '.qr-ch-box{background:var(--card,#FDFCFA);color:var(--ink,#26334B);width:100%;max-width:460px;border-radius:18px;padding:20px 18px;max-height:82vh;overflow:auto;box-shadow:0 24px 60px rgba(0,0,0,.42);animation:qrPop .28s cubic-bezier(.22,1,.36,1)}' +
+            '@keyframes qrPop{from{opacity:0;transform:translateY(20px) scale(.96)}to{opacity:1;transform:none}}' +
+            '.qr-ch-head{display:flex;align-items:center;justify-content:space-between;font-size:19px;font-weight:800;margin:0 2px 4px;color:var(--ink,#26334B)}' +
+            '.qr-ch-x{background:none;border:none;font-size:28px;line-height:1;color:var(--g1,#888);cursor:pointer;-webkit-appearance:none;appearance:none}' +
+            '.qr-ch-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 15px;margin-top:9px;border:1.5px solid var(--b1,#e5e2da);border-radius:13px;background:var(--bg,#F4F2ED);color:inherit;font:700 15.5px/1 var(--font,inherit);cursor:pointer;-webkit-appearance:none;appearance:none}' +
+            '.qr-ch-arrow{color:var(--accent,#F99D3E);font-size:19px;font-weight:700}' +
+            '.qr-ch-note{font-size:12px;color:var(--g1,#888);margin:0 2px 12px}' +
+            '.qr-loading{position:fixed;inset:0;z-index:99999;background:var(--bg,#F4F2ED);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:var(--ink,#26334B);font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
+            '.qr-spin{width:52px;height:52px;border:4px solid var(--b1,#DCD9D0);border-top-color:var(--accent,#F99D3E);border-radius:50%;animation:qrSpin .9s linear infinite}' +
+            '.qr-load-txt{font-size:15px;font-weight:600;text-align:center;padding:0 34px}' +
             '@keyframes qrSpin{to{transform:rotate(360deg)}}';
         document.head.appendChild(st);
     },

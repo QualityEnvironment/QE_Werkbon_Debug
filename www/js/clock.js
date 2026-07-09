@@ -793,11 +793,13 @@ window.QEClock = {
                 if (!m) return 0;
                 return (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
             };
-            const GRACE_MIN = 5;
-            const isLate = toMinutes(time) > toMinutes(expectedStart) + GRACE_MIN;
+            // v289: "Te laat" = ELKE scan ná het startuur — géén marge op het
+            // label. De 4-min betaal-marge (kwartier-tolerantie bij de clock-out,
+            // TOLERANCE hieronder) staat hier LOS van: bij ≤4 min te laat word je
+            // nog vanaf het startuur betaald, maar je bent wél "te laat".
+            const isLate = toMinutes(time) > toMinutes(expectedStart);
             onTimeLabel = isLate ? 'Te laat' : 'Op tijd';
-            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart,
-                '(grace ' + GRACE_MIN + 'min) ->', onTimeLabel);
+            console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart, '->', onTimeLabel);
         }
 
         // GPS
