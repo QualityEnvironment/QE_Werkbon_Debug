@@ -1626,6 +1626,7 @@ const app = {
             screenCorrectie: 'Werkbon corrigeren',
             screenProfile: 'Mijn profiel',
             screenDagoverzicht: 'Mijn registraties',
+            screenRecap: 'Maandrecap',  // v288
             screenAanpassing: 'Aanpassing aanvragen',
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
@@ -8594,26 +8595,34 @@ const app = {
         }
         return out;
     },
-    // "Mijn aanvragen"-blok bovenaan de materieel-lijst (status van élke aanvraag).
-    _matMyReserveringenBlock(mats) {
-        const mine = this._matMyReserveringen(mats)
-            .filter(r => ['AANGEVRAAGD', 'GOEDGEKEURD', 'IN_GEBRUIK', 'GEWEIGERD'].indexOf(r.status) !== -1)
-            .sort((a, b) => {
-                const pr = s => ({ AANGEVRAAGD: 0, IN_GEBRUIK: 1, GOEDGEKEURD: 2, GEWEIGERD: 3 }[s] != null ? { AANGEVRAAGD: 0, IN_GEBRUIK: 1, GOEDGEKEURD: 2, GEWEIGERD: 3 }[s] : 9);
-                return (pr(a.status) - pr(b.status)) || String(a.from).localeCompare(String(b.from));
-            });
-        if (!mine.length) return '';
-        const rows = mine.map(r => {
-            const c = this._matStatusChip(r.status);
-            return `<div class="card" style="margin-bottom:8px;padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="app.openMaterieelDetail('${r.materialId}')">
-                <div style="flex:1;min-width:0">
-                    <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(r.materialName || 'Materieel')}</div>
-                    <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(this._matPeriode(r.from, r.to))}</div>
-                </div>
-                <span style="flex-shrink:0;font-size:11px;font-weight:600;color:${c.color};background:${c.bg};border-radius:12px;padding:4px 10px">${c.label}</span>
-            </div>`;
-        }).join('');
-        return `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin:4px 4px 8px">Mijn aanvragen</div>${rows}<div style="height:6px"></div>`;
+    // Aparte pagina met je eigen materieel-aanvragen (knop "Vorige aanvragingen"
+    // op de materieel-lijst) — houdt de hoofdlijst overzichtelijk.
+    openMaterieelAanvragen() {
+        this.navigate('screenMaterieelAanvragen');
+        this.loadMaterieelAanvragen();
+    },
+    async loadMaterieelAanvragen() {
+        const wrap = document.getElementById('materieelAanvragenList');
+        if (!wrap) return;
+        wrap.innerHTML = '<div class="spinner"></div>';
+        try {
+            const mats = await this._loadMaterieelList(true);
+            const mine = this._matMyReserveringen(mats).sort((a, b) => String(b.createdAt || b.from).localeCompare(String(a.createdAt || a.from)));
+            if (!mine.length) { wrap.innerHTML = '<p class="text-grey text-sm text-center" style="padding:24px">Je hebt nog geen materieel-aanvragen.</p>'; return; }
+            wrap.innerHTML = mine.map(r => {
+                const c = this._matStatusChip(r.status);
+                return `<div class="card" style="margin-bottom:10px;padding:14px 16px;cursor:pointer" onclick="app.openMaterieelDetail('${r.materialId}')">
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span style="flex:1;min-width:0;font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(r.materialName || 'Materieel')}</span>
+                        <span style="flex-shrink:0;font-size:11px;font-weight:600;color:${c.color};background:${c.bg};border-radius:12px;padding:4px 10px">${c.label}</span>
+                    </div>
+                    <div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(this._matPeriode(r.from, r.to))}</div>
+                    ${r.purpose ? `<div style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(r.purpose)}</div>` : ''}
+                </div>`;
+            }).join('');
+        } catch (e) {
+            wrap.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
     },
 
     // --- reservatie-agenda (maandkalender in het materieel-detail) ---
@@ -8666,7 +8675,7 @@ const app = {
             const today = this._matToday();
             const byCat = {};
             for (const m of mats) { const c = RobawsAPI._materieelCategorie(m) || 'Overig'; (byCat[c] = byCat[c] || []).push(m); }
-            let html = this._matMyReserveringenBlock(mats);
+            let html = `<button class="btn btn-outline btn-full" style="margin-bottom:14px" onclick="app.openMaterieelAanvragen()">Vorige aanvragingen</button>`;
             Object.keys(byCat).sort().forEach(cat => {
                 html += `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin:16px 4px 8px">${this.escapeHtml(cat)}</div>`;
                 byCat[cat].forEach(m => {
@@ -8966,11 +8975,27 @@ const app = {
         try { const fresh = await RobawsAPI.getApprovalDetail(id); if (fresh) detail = Object.assign({}, detail, fresh); } catch (e) { /* val terug op de lijst-data */ }
         this._factuurApprovalCache = this._factuurApprovalCache || {};
         this._factuurApprovalCache[id] = detail;
+        const invoiceId = detail.resourceUnderApprovalRef ? String(detail.resourceUnderApprovalRef).split('/').pop() : null;
+        this._factuurInvoiceId = invoiceId;
 
-        const nr = detail.invoiceNumber || detail.logicId || '';
-        const inclV = (detail.totalVatIncl != null) ? ('€ ' + Number(detail.totalVatIncl).toFixed(2)) : '';
-        const exclV = (detail.totalVatExcl != null) ? ('€ ' + Number(detail.totalVatExcl).toFixed(2)) : '';
-        const sup = (detail.supplier && detail.supplier.name) || (detail.supplierId ? ('Leverancier ' + detail.supplierId) : '');
+        // v288: volledige factuur (lijnen + velden) + keuzelijsten parallel ophalen.
+        let inv = null, journals = [], payconds = [];
+        const [i, j, p] = await Promise.all([
+            invoiceId ? RobawsAPI.getPurchaseInvoiceFull(invoiceId).catch(() => null) : Promise.resolve(null),
+            RobawsAPI.getJournals().catch(() => []),
+            RobawsAPI.getPaymentConditions().catch(() => []),
+        ]);
+        inv = i; journals = j; payconds = p;
+        this._factuurInvoice = inv;
+        this._factuurJournals = journals;
+        this._factuurPayconds = payconds;
+
+        const nr = (inv && inv.invoiceNumber) || detail.invoiceNumber || detail.logicId || '';
+        const inclN = (detail.totalVatIncl != null) ? detail.totalVatIncl : (inv && inv.totalInclVat);
+        const exclN = (detail.totalVatExcl != null) ? detail.totalVatExcl : (inv && inv.totalExclVat);
+        const inclV = (inclN != null) ? ('€ ' + Number(inclN).toFixed(2)) : '';
+        const exclV = (exclN != null) ? ('€ ' + Number(exclN).toFixed(2)) : '';
+        const sup = (detail.supplier && detail.supplier.name) || (inv && inv.supplier && inv.supplier.name) || (detail.supplierId ? ('Leverancier ' + detail.supplierId) : '');
         const states = Array.isArray(detail.userStates) ? detail.userStates : [];
         const stRow = (s) => {
             const st = String(s.status || '');
@@ -8995,6 +9020,8 @@ const app = {
                 </div>
             </div>
             <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="app.openFactuurPdf('${this._escapeJsArg(id)}')">Factuur openen (PDF)</button>
+            ${this._renderFacturatiePanel(inv, sup)}
+            ${this._renderFactuurLines(inv)}
             <div class="card" style="margin-bottom:12px;padding:14px 16px">
                 <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:2px">Goedkeurders</div>
                 ${approvers}
@@ -9005,6 +9032,184 @@ const app = {
                 <button class="btn btn-primary" style="flex:1" onclick="app.decideFactuur('${this._escapeJsArg(id)}', true)">Goedkeuren</button>
             </div>
             <div style="font-size:11px;color:var(--qe-grey);text-align:center;margin:10px 0 4px;line-height:1.4">Goedkeuren/afkeuren wordt geregistreerd op het gedeelde kantoor-account.</div>`;
+    },
+
+    // v288: inklapbaar bewerkbaar facturatie-gegevens-paneel.
+    _renderFacturatiePanel(inv, sup) {
+        if (!inv) {
+            return `<div class="card" style="margin-bottom:12px;padding:14px 16px"><div style="font-size:12.5px;color:var(--qe-grey)">Factuurgegevens niet beschikbaar.</div></div>`;
+        }
+        const esc = (v) => this.escapeHtml(v == null ? '' : String(v));
+        const opt = (v, cur, lbl) => `<option value="${esc(v)}"${String(cur == null ? '' : cur) === String(v) ? ' selected' : ''}>${esc(lbl)}</option>`;
+        const journals = this._factuurJournals || [];
+        const payconds = this._factuurPayconds || [];
+        const bureel = (RobawsAPI.getBureelApprovers ? RobawsAPI.getBureelApprovers() : []);
+        const jOpts = journals.map(o => opt(o.id, inv.journalId, o.name)).join('');
+        const pOpts = '<option value="">—</option>' + payconds.map(o => opt(o.id, inv.paymentConditionId, o.name)).join('');
+        const uOpts = '<option value="">—</option>' + bureel.map(u => opt(u.userId, inv.assignedUserId, u.name)).join('');
+        const grp = (label, inner) => `<div style="margin-bottom:10px"><label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:3px">${label}</label>${inner}</div>`;
+        const inp = (id, val, type) => `<input id="${id}" class="form-input" ${type ? ('type="' + type + '" ') : ''}value="${esc(val)}">`;
+        const body = `
+            ${grp('Factuur nr.', inp('fgNr', inv.invoiceNumber))}
+            ${grp('Type', `<select id="fgType" class="form-input">${opt('INVOICE', inv.type, 'Factuur')}${opt('CREDIT_NOTE', inv.type, 'Creditnota')}</select>`)}
+            ${grp('Dagboek', `<select id="fgJournal" class="form-input"><option value="">—</option>${jOpts}</select>`)}
+            ${grp('Leverancier', `<input class="form-input" value="${esc(sup)}" disabled>`)}
+            ${grp('Betaalvoorwaarde', `<select id="fgPay" class="form-input">${pOpts}</select>`)}
+            ${grp('Datum', inp('fgDate', inv.date, 'date'))}
+            ${grp('Vervaldatum', inp('fgExpire', inv.expireDate, 'date'))}
+            ${grp('Boekingsdatum', inp('fgBooking', inv.bookingDate, 'date'))}
+            ${grp('Verantwoordelijke', `<select id="fgUser" class="form-input">${uOpts}</select>`)}
+            ${grp('Status', inp('fgStatus', inv.status))}
+            ${grp('Mededeling', inp('fgRemit', inv.paymentInstruction))}
+            ${grp('Opmerking', `<textarea id="fgRemark" class="form-input" rows="2">${esc(inv.remark)}</textarea>`)}
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 12px"><input type="checkbox" id="fgConf"${inv.confidential ? ' checked' : ''}> Confidentieel</label>
+            <button class="btn btn-primary btn-full" onclick="app.saveFactuurFields()">Opslaan</button>`;
+        return `<div class="card" style="margin-bottom:12px;padding:4px 16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;cursor:pointer" onclick="app.toggleFacturatiePanel()">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey)">Facturatie gegevens</div>
+                <span id="fgChev" style="color:var(--qe-grey);font-size:15px">▾</span>
+            </div>
+            <div id="fgBody" style="display:none;padding:2px 0 14px">${body}</div>
+        </div>`;
+    },
+
+    toggleFacturatiePanel() {
+        const b = document.getElementById('fgBody');
+        const c = document.getElementById('fgChev');
+        if (!b) return;
+        const open = b.style.display === 'none';
+        b.style.display = open ? 'block' : 'none';
+        if (c) c.textContent = open ? '▴' : '▾';
+    },
+
+    async saveFactuurFields() {
+        const invId = this._factuurInvoiceId;
+        const orig = this._factuurInvoice;
+        if (!invId || !orig) { this.toast('Factuur niet geladen', true); return; }
+        const val = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+        const changes = {};
+        const put = (field, nv, ov) => {
+            if (nv === undefined) return;
+            const a = (nv === null ? '' : String(nv));
+            const b = (ov == null ? '' : String(ov));
+            if (a !== b) changes[field] = (nv === '' ? null : nv);
+        };
+        put('invoiceNumber', val('fgNr'), orig.invoiceNumber);
+        put('type', val('fgType'), orig.type);
+        put('journalId', val('fgJournal'), orig.journalId);
+        put('paymentConditionId', val('fgPay'), orig.paymentConditionId);
+        put('date', val('fgDate'), orig.date);
+        put('expireDate', val('fgExpire'), orig.expireDate);
+        put('bookingDate', val('fgBooking'), orig.bookingDate);
+        put('assignedUserId', val('fgUser'), orig.assignedUserId);
+        put('status', val('fgStatus'), orig.status);
+        put('paymentInstruction', val('fgRemit'), orig.paymentInstruction);
+        put('remark', val('fgRemark'), orig.remark);
+        const confEl = document.getElementById('fgConf');
+        if (confEl && !!confEl.checked !== !!orig.confidential) changes.confidential = !!confEl.checked;
+        if (!Object.keys(changes).length) { this.toast('Niets gewijzigd'); return; }
+        if (this._saveFieldsBusy) return;
+        this._saveFieldsBusy = true;
+        try {
+            await RobawsAPI.patchPurchaseInvoice(invId, changes);
+            this.toast('Factuurgegevens opgeslagen');
+            await this.loadFactuurDetail();
+        } catch (e) {
+            this.toast('Opslaan mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._saveFieldsBusy = false;
+        }
+    },
+
+    // v288: alle factuurlijnen + project-toewijzing (per lijn / alles ineens).
+    _renderFactuurLines(inv) {
+        if (!inv) {
+            return `<div class="card" style="margin-bottom:12px;padding:14px 16px"><div style="font-size:12.5px;color:var(--qe-grey)">Lijnen niet beschikbaar.</div></div>`;
+        }
+        const lines = Array.isArray(inv.lineItems) ? inv.lineItems : [];
+        const rows = lines.map((l) => {
+            const isLine = l.type === 'LINE';
+            const proj = (l.project && ((l.project.logicId || '') + ' ' + (l.project.planningName || l.project.name || '')).trim())
+                || (l.projectId ? ('Project ' + l.projectId) : '');
+            const amt = (isLine && l.price != null) ? ('€ ' + (Number(l.price) * Number(l.quantity || 1)).toFixed(2)) : '';
+            const qty = isLine && l.quantity != null ? (Number(l.quantity) + '× ') : '';
+            const desc = l.description || (l.type === 'TEXT' ? '(tekst)' : '(lijn)');
+            return `<div style="padding:10px 0;border-bottom:1px solid var(--l2,#eee)">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+                    <span style="font-size:13px;min-width:0">${this.escapeHtml(desc)}</span>
+                    <span style="font-size:12.5px;color:var(--qe-grey);flex-shrink:0">${qty}${amt}</span>
+                </div>
+                ${isLine ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:5px">
+                    <span style="font-size:12px;color:${proj ? 'var(--ink,#1A237E)' : 'var(--qe-grey)'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${proj ? this.escapeHtml(proj) : 'Geen project'}</span>
+                    <button class="btn btn-outline btn-sm" style="padding:4px 12px;font-size:12px;flex-shrink:0" onclick="app.assignLineProject('${this._escapeJsArg(String(l.id))}')">Toewijzen</button>
+                </div>` : ''}
+            </div>`;
+        }).join('');
+        return `<div class="card" style="margin-bottom:12px;padding:14px 16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey)">Lijnen (${lines.length})</div>
+                ${lines.some(l => l.type === 'LINE') ? `<button class="btn btn-outline btn-sm" style="padding:4px 12px;font-size:12px" onclick="app.assignAllLinesProject()">Alles toewijzen</button>` : ''}
+            </div>
+            ${rows || '<div style="font-size:12.5px;color:var(--qe-grey);padding:6px 0">Geen lijnen.</div>'}
+        </div>`;
+    },
+
+    assignLineProject(lineId) { this._projectPickTarget = 'line:' + lineId; this.openProjectPicker(); },
+    assignAllLinesProject() { this._projectPickTarget = 'all'; this.openProjectPicker(); },
+
+    openProjectPicker() {
+        this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
+            <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app._projPickDebounce(this.value)" style="margin-bottom:10px">
+            <div id="projPickResults" style="max-height:48vh;overflow:auto"><div class="spinner"></div></div>
+            <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
+            <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
+        this.searchProjectPicker('');
+    },
+
+    _projPickDebounce(q) {
+        clearTimeout(this._projPickTimer);
+        this._projPickTimer = setTimeout(() => this.searchProjectPicker(q), 250);
+    },
+
+    async searchProjectPicker(q) {
+        const box = document.getElementById('projPickResults');
+        if (!box) return;
+        box.innerHTML = '<div class="spinner"></div>';
+        try {
+            const list = await RobawsAPI.searchProjects(q, 30);
+            if (!list.length) { box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:8px">Geen projecten gevonden.</div>'; return; }
+            box.innerHTML = list.map(p =>
+                `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left" onclick="app.pickProject('${this._escapeJsArg(p.id)}','${this._escapeJsArg((p.logicId + ' ' + p.name).trim())}')">${this.escapeHtml((p.logicId + ' — ' + p.name).trim())}</button>`
+            ).join('');
+        } catch (e) {
+            box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-red,#B4372F);padding:8px">Zoeken mislukt.</div>';
+        }
+    },
+
+    async pickProject(projectId, label) {
+        this.closeModal();
+        const invId = this._factuurInvoiceId;
+        const inv = this._factuurInvoice;
+        if (!invId || !inv) { this.toast('Factuur niet geladen', true); return; }
+        if (this._assignBusy) return;
+        this._assignBusy = true;
+        try {
+            const target = this._projectPickTarget;
+            if (target === 'all') {
+                const lines = (inv.lineItems || []).filter(l => l.type === 'LINE');
+                for (const l of lines) await RobawsAPI.setLineItemProject(invId, l.id, projectId || null);
+                this.toast(projectId ? ('Alle lijnen → ' + (label || 'project')) : 'Project gewist op alle lijnen');
+            } else if (target && target.indexOf('line:') === 0) {
+                const lineId = target.slice(5);
+                await RobawsAPI.setLineItemProject(invId, lineId, projectId || null);
+                this.toast(projectId ? ('Lijn → ' + (label || 'project')) : 'Project gewist');
+            }
+            await this.loadFactuurDetail();
+        } catch (e) {
+            this.toast('Toewijzen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._assignBusy = false;
+        }
     },
 
     async openFactuurPdf(approvalId) {
@@ -9024,24 +9229,76 @@ const app = {
         }
     },
 
-    // Fullscreen PDF-viewer via pdf.js (v287): de Android-WebView toont PDF niet
-    // in een iframe, dus renderen we elke pagina naar een canvas. pdf.js + de
-    // worker worden lui geladen uit js/vendor/pdfjs/ (geen opstartkost).
+    // Fullscreen PDF-viewer via pdf.js (v288): de Android-WebView toont PDF niet
+    // in een iframe, dus renderen we elke pagina naar een canvas. Inzoombaar via
+    // knijp-gebaar, dubbeltik en +/--knoppen — inzoomen = CSS-breedte vergroten
+    // (native pannen/scrollen); intern op 2x fit gerenderd zodat het scherp blijft.
+    // pdf.js + worker lui geladen uit js/vendor/pdfjs/.
     _openPdfOverlay(title) {
         let ov = document.getElementById('pdfFullscreen');
         if (ov) ov.remove();
+        this._pdfZoom = 1;
+        this._pdfBaseCss = 0;
         ov = document.createElement('div');
         ov.id = 'pdfFullscreen';
         ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#33383f;display:flex;flex-direction:column';
+        const btn = (onclick, label, fs) => '<button onclick="' + onclick + '" style="width:38px;height:38px;flex-shrink:0;border:none;border-radius:19px;background:rgba(255,255,255,.16);color:#fff;font-size:' + (fs || 20) + 'px;line-height:1;cursor:pointer">' + label + '</button>';
         ov.innerHTML =
-            '<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#1b1b1b;color:#fff;flex-shrink:0">' +
+            '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1b1b1b;color:#fff;flex-shrink:0">' +
                 '<div style="flex:1;min-width:0;font:600 14px var(--font,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(String(title || 'Document')) + '</div>' +
-                '<button onclick="app._closePdfFullscreen()" aria-label="Sluiten" style="width:38px;height:38px;flex-shrink:0;border:none;border-radius:19px;background:rgba(255,255,255,.16);color:#fff;font-size:18px;line-height:1;cursor:pointer">✕</button>' +
+                btn('app._pdfZoomBy(1/1.4)', '−') +
+                btn('app._pdfZoomBy(1.4)', '+') +
+                btn('app._closePdfFullscreen()', '✕', 18) +
             '</div>' +
-            '<div id="pdfScroll" style="flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 0">' +
-                '<div id="pdfLoading" style="color:#fff;text-align:center;font:500 14px var(--font,sans-serif);padding:44px 0">Factuur laden…</div>' +
+            '<div id="pdfScroll" style="flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:12px 0;touch-action:pan-x pan-y">' +
+                '<div id="pdfPages" style="text-align:center">' +
+                    '<div id="pdfLoading" style="color:#fff;text-align:center;font:500 14px var(--font,sans-serif);padding:44px 0">Factuur laden…</div>' +
+                '</div>' +
             '</div>';
         document.body.appendChild(ov);
+        this._attachPdfGestures(document.getElementById('pdfScroll'));
+    },
+
+    // Knijp-zoom + dubbeltik-zoom op de PDF-scroller.
+    _attachPdfGestures(scroll) {
+        if (!scroll) return;
+        const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+        let startDist = 0, startZoom = 1, lastTap = 0;
+        scroll.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) { startDist = dist(e.touches); startZoom = this._pdfZoom || 1; }
+        }, { passive: true });
+        scroll.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2 && startDist) {
+                e.preventDefault();
+                this._pdfZoom = Math.max(1, Math.min(4, startZoom * (dist(e.touches) / startDist)));
+                this._applyPdfZoom();
+            }
+        }, { passive: false });
+        scroll.addEventListener('touchend', (e) => {
+            startDist = 0;
+            if (e.touches.length) return;
+            const now = Date.now();
+            if (now - lastTap < 300) { this._pdfZoom = (this._pdfZoom > 1.2) ? 1 : 2; this._applyPdfZoom(); lastTap = 0; }
+            else lastTap = now;
+        }, { passive: true });
+    },
+
+    _applyPdfZoom() {
+        const base = this._pdfBaseCss || 0;
+        if (!base) return;
+        const z = this._pdfZoom || 1;
+        const list = document.querySelectorAll('#pdfPages canvas');
+        for (let i = 0; i < list.length; i++) {
+            const c = list[i];
+            const aspect = parseFloat(c.getAttribute('data-aspect')) || 1.414;
+            c.style.width = (base * z) + 'px';
+            c.style.height = (base * z * aspect) + 'px';
+        }
+    },
+
+    _pdfZoomBy(factor) {
+        this._pdfZoom = Math.max(1, Math.min(4, (this._pdfZoom || 1) * factor));
+        this._applyPdfZoom();
     },
 
     _ensurePdfLib() {
@@ -9070,14 +9327,15 @@ const app = {
 
     async _renderPdfIntoOverlay(doc) {
         const scroll = document.getElementById('pdfScroll');
-        if (!scroll) return;
+        const pages = document.getElementById('pdfPages');
+        if (!scroll || !pages) return;
         // Afbeelding? Direct tonen (de WebView rendert images wél).
         if (doc.contentType && doc.contentType.includes('image')) {
-            scroll.innerHTML = '';
+            pages.innerHTML = '';
             const img = document.createElement('img');
             img.src = doc.blobUrl;
             img.style.cssText = 'max-width:100%;height:auto;display:block;margin:0 auto';
-            scroll.appendChild(img);
+            pages.appendChild(img);
             this._pdfBlobUrl = doc.blobUrl;
             return;
         }
@@ -9085,19 +9343,26 @@ const app = {
         await this._ensurePdfWorker();
         const buf = await doc.blob.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-        scroll.innerHTML = '';
+        pages.innerHTML = '';
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const cssWidth = Math.min((scroll.clientWidth || 360) - 16, 900);
+        const QUALITY = 2;           // intern op 2x fit → scherp bij inzoomen
+        const MAX_CANVAS_W = 2200;   // geheugenplafond
+        const base = Math.min((scroll.clientWidth || 360) - 16, 900);
+        this._pdfBaseCss = base;
+        this._pdfZoom = 1;
         for (let p = 1; p <= pdf.numPages; p++) {
             const page = await pdf.getPage(p);
             const vp1 = page.getViewport({ scale: 1 });
-            const scale = (cssWidth / vp1.width) * dpr;
-            const vp = page.getViewport({ scale });
+            let renderScale = (base / vp1.width) * dpr * QUALITY;
+            if (vp1.width * renderScale > MAX_CANVAS_W) renderScale = MAX_CANVAS_W / vp1.width;
+            const vp = page.getViewport({ scale: renderScale });
+            const aspect = vp.height / vp.width;
             const canvas = document.createElement('canvas');
             canvas.width = Math.floor(vp.width);
             canvas.height = Math.floor(vp.height);
-            canvas.style.cssText = 'width:' + cssWidth + 'px;height:' + Math.floor(vp.height / dpr) + 'px;display:block;margin:0 auto 12px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)';
-            scroll.appendChild(canvas);
+            canvas.setAttribute('data-aspect', String(aspect));
+            canvas.style.cssText = 'width:' + base + 'px;height:' + Math.floor(base * aspect) + 'px;display:block;margin:0 auto 12px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.4)';
+            pages.appendChild(canvas);
             await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
         }
         if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
@@ -13770,8 +14035,14 @@ const app = {
 
     /** "Terugblik"-knop: kies een maand om de recap (opnieuw) te bekijken. */
     async openTerugblik() {
+        // v288: echte pagina i.p.v. pop-up (de centered overlay rendert onbetrouwbaar
+        // in deze WebView). We tekenen de maandkeuze gewoon in het scherm.
+        this.navigate('screenRecap');
+        const box = document.getElementById('recapListContent');
+        if (!box) return;
         const empId = this.currentUser && this.currentUser.robawsEmployeeId;
-        if (!empId || !window.QERecap) { if (this.toast) this.toast('Geen werknemer-koppeling', true); return; }
+        if (!empId || !window.QERecap) { box.innerHTML = '<p style="text-align:center;color:var(--g1,#85847C);font-size:14px;padding:26px 10px">Geen werknemer-koppeling gevonden.</p>'; return; }
+        box.innerHTML = '<div class="spinner"></div>';
         let cached = [];
         try { cached = await QERecap.list(empId); } catch (_e) {}
         const set = {}, items = [];
@@ -13784,23 +14055,16 @@ const app = {
             if (!set[ym]) { set[ym] = 1; items.push({ ym: ym, label: QERecap.monthLabel(ym), cached: false }); }
         }
         items.sort((a, b) => String(b.ym).localeCompare(String(a.ym)));
-        this._ensureRecapStyles();
-        this._closeRecapChooser();
-        const ov = document.createElement('div');
-        ov.className = 'qr-chooser';
-        ov.innerHTML =
-            '<div class="qr-ch-box">' +
-            '<div class="qr-ch-head">📅 Maandrecap<button class="qr-ch-x" aria-label="Sluiten">&times;</button></div>' +
-            '<div class="qr-ch-note">Kies een maand · ▸ klaar · ＋ nog te berekenen</div>' +
-            '<div class="qr-ch-list">' +
-            items.map(it => '<button class="qr-ch-item" data-ym="' + it.ym + '"><span>' + this.escapeHtml(it.label) + '</span><span class="qr-ch-arrow">' + (it.cached ? '▸' : '＋') + '</span></button>').join('') +
-            '</div>' +
-            '</div>';
-        document.body.appendChild(ov);
-        this._recapChooser = ov;
-        ov.querySelector('.qr-ch-x').onclick = () => this._closeRecapChooser();
-        ov.onclick = (e) => { if (e.target === ov) this._closeRecapChooser(); };
-        ov.querySelectorAll('.qr-ch-item').forEach(btn => { btn.onclick = () => this.openRecap(btn.getAttribute('data-ym')); });
+        const rows = items.map(it =>
+            '<button data-ym="' + it.ym + '" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 16px;margin-bottom:10px;border:1px solid var(--b1,#DCD9D0);border-radius:14px;background:var(--card,#FDFCFA);color:var(--ink,#26334B);font:700 16px/1.1 var(--font,inherit);cursor:pointer;-webkit-appearance:none;appearance:none">' +
+            '<span>' + this.escapeHtml(it.label) + '</span>' +
+            '<span style="color:var(--accent,#F99D3E);font-size:20px;font-weight:700">' + (it.cached ? '▸' : '＋') + '</span></button>'
+        ).join('');
+        box.innerHTML =
+            '<div style="font-size:22px;font-weight:800;color:var(--ink,#26334B);margin:4px 2px 4px">📅 Maandrecap</div>' +
+            '<div style="font-size:13px;color:var(--g1,#85847C);margin:0 2px 18px;line-height:1.4">Kies een maand om je recap te (her)bekijken. <b style="color:var(--accent,#F99D3E)">▸</b> = klaar · <b style="color:var(--accent,#F99D3E)">＋</b> = nog te berekenen.</div>' +
+            rows;
+        box.querySelectorAll('button[data-ym]').forEach(btn => { btn.onclick = () => this.openRecap(btn.getAttribute('data-ym')); });
     },
     _closeRecapChooser() {
         if (this._recapChooser && this._recapChooser.parentNode) this._recapChooser.parentNode.removeChild(this._recapChooser);

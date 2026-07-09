@@ -585,6 +585,69 @@ const RobawsAPI = {
     },
 
     // ============================================================
+    // v288: AANKOOPFACTUUR-DETAIL — volledige factuur (lijnen + relaties),
+    // project-toewijzing per lijn (merge-patch, geen full replace) en
+    // veld-bewerking via merge-patch (geverifieerd → 204; géén full PUT).
+    // ============================================================
+    async patchMerge(endpoint, body) {
+        this._invalidateCache(endpoint);
+        const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
+        const headers = Object.assign({}, this.getHeaders(), { 'Content-Type': 'application/merge-patch+json' });
+        const res = await this._fetchWithTimeout(url, { method: 'PATCH', headers, body: JSON.stringify(body) });
+        if (res.status === 204) return { code: 204, data: null };
+        const txt = await res.text();
+        try { return { code: res.status, data: txt ? JSON.parse(txt) : null }; }
+        catch (e) { return { code: res.status, data: { raw: txt } }; }
+    },
+
+    async getPurchaseInvoiceFull(invoiceId) {
+        const r = await this.get('purchase-invoices/' + invoiceId + '?include=lineItems,supplier,assignedUser,journal,paymentCondition', { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        return r.data || null;
+    },
+
+    /** Wijs een project (of null = wissen) toe aan één factuurlijn. */
+    async setLineItemProject(invoiceId, lineId, projectId) {
+        const res = await this.patchMerge('purchase-invoices/' + invoiceId + '/line-items/' + lineId,
+            { projectId: (projectId != null && projectId !== '') ? String(projectId) : null });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Bewerk factuur-basisvelden (merge-patch — enkel de gewijzigde velden). */
+    async patchPurchaseInvoice(invoiceId, changes) {
+        const res = await this.patchMerge('purchase-invoices/' + invoiceId, changes || {});
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Projecten zoeken voor de toewijs-picker (searchText + lokale filter). */
+    async searchProjects(query, limit) {
+        const q = query ? ('&searchText=' + encodeURIComponent(query)) : '';
+        const r = await this.get('projects?page=0&size=' + (limit || 25) + q, { bypassCache: false });
+        if (r.code !== 200) return [];
+        const out = ((r.data && r.data.items) || []).map(p => ({ id: String(p.id), logicId: p.logicId || '', name: p.planningName || p.name || '' }));
+        if (query) {
+            const ql = query.toLowerCase();
+            const f = out.filter(p => (p.logicId + ' ' + p.name).toLowerCase().indexOf(ql) !== -1);
+            if (f.length) return f;
+        }
+        return out;
+    },
+
+    /** Kleine keuzelijsten voor het bewerk-paneel. */
+    async getJournals() {
+        const r = await this.get('journals?page=0&size=100', { bypassCache: false });
+        if (r.code !== 200) return [];
+        return ((r.data && r.data.items) || []).map(j => ({ id: String(j.id), name: j.name || j.code || ('Dagboek ' + j.id) }));
+    },
+    async getPaymentConditions() {
+        const r = await this.get('payment-conditions?page=0&size=100', { bypassCache: false });
+        if (r.code !== 200) return [];
+        return ((r.data && r.data.items) || []).map(p => ({ id: String(p.id), name: p.name || ('Voorwaarde ' + p.id) }));
+    },
+
+    // ============================================================
     // MATERIEEL VERHUUR / UITLEEN (v282) — reserveringssysteem bovenop het
     // native Robaws-materieelregister (/materials). Robaws heeft geen
     // reservatie-API; /planning-items dragen wél materialIds maar worden er

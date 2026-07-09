@@ -50,10 +50,12 @@
         screenUrenAnalyse: { sub: 'Alle werknemers', title: 'Uren-analyse' },
         screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
         screenAanvragen:   { sub: 'Verlof · Materiaal · Materieel', title: 'Aanvragen' },
+        screenRecap:       { sub: 'Terugblik per maand', title: 'Maandrecap' },
         screenVerlofDetail:{ sub: 'Details & communicatie', title: 'Verlofaanvraag' },
         screenGoedkeuren:  { sub: 'Verlof · Facturen · Materieel', title: 'Goedkeuren' },
         screenFactuurDetail:{ sub: 'Aankoopfactuur goedkeuren', title: 'Factuur' },
-        screenMaterieelDetail:{ sub: 'Reserveren & beschikbaarheid', title: 'Materieel' }
+        screenMaterieelDetail:{ sub: 'Reserveren & beschikbaarheid', title: 'Materieel' },
+        screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' }
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
     };
