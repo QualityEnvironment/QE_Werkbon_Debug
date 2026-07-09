@@ -164,6 +164,14 @@ const app = {
         // de app naar het vorige scherm te navigeren.
         if (!window._qeBackHandlerInstalled) {
             window.addEventListener('popstate', () => {
+                // 0. Fullscreen PDF-overlay heeft voorrang: sluit hem + compenseer de pop
+                //    (v283 — anders navigeert de back-knop ONDER de overlay door).
+                const pdfOv = document.getElementById('pdfFullscreen');
+                if (pdfOv) {
+                    this._closePdfFullscreen();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
                 // 1. Modal heeft prioriteit: sluit hem en compenseer de pop
                 const modal = document.getElementById('modalOverlay');
                 if (modal && modal.classList.contains('show')) {
@@ -1625,6 +1633,7 @@ const app = {
             screenAanvragen: 'Aanvragen',  // v278
             screenVerlofDetail: 'Verlofaanvraag',  // v278
             screenGoedkeuren: 'Goedkeuren',  // v278
+            screenFactuurDetail: 'Factuur',  // v283
             screenAdmin: 'Beheer',  // v233
             screenUrenAnalyse: 'Uren-analyse',  // v247
         };
@@ -8363,6 +8372,7 @@ const app = {
             if (p) p.style.display = (t === tab) ? 'block' : 'none';
         });
         if (tab === 'verlof') { this._renderVerlofBudget(); this.loadMyVerlof(); }
+        else if (tab === 'materieel') { this.loadMaterieel(); }
     },
 
     async _refreshAanvraagGoedkeurCount() {
@@ -8370,11 +8380,12 @@ const app = {
         if (!badge) return;
         try {
             const empId = this.currentUser && this.currentUser.robawsEmployeeId;
-            const [verlof, fact] = await Promise.all([
+            const [verlof, fact, mat] = await Promise.all([
                 RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
                 RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+                RobawsAPI.getMaterieelAanvragen().catch(() => []),
             ]);
-            const n = (verlof.length || 0) + (fact.length || 0);
+            const n = (verlof.length || 0) + (fact.length || 0) + (mat.length || 0);
             if (n > 0) { badge.textContent = String(n); badge.style.display = ''; } else badge.style.display = 'none';
         } catch (e) { badge.style.display = 'none'; }
     },
@@ -8508,7 +8519,9 @@ const app = {
             b.classList.toggle('active', b.dataset.gtab === tab));
         const vp = document.getElementById('goedkeurVerlof'); if (vp) vp.style.display = (tab === 'verlof') ? 'block' : 'none';
         const fp = document.getElementById('goedkeurFacturen'); if (fp) fp.style.display = (tab === 'facturen') ? 'block' : 'none';
+        const mp = document.getElementById('goedkeurMaterieel'); if (mp) mp.style.display = (tab === 'materieel') ? 'block' : 'none';
         if (tab === 'verlof') this.loadVerlofApprovals();
+        else if (tab === 'materieel') this.loadMaterieelApprovals();
         else this.loadFactuurApprovals();
         this._refreshGoedkeurTabCounts();
     },
@@ -8516,14 +8529,296 @@ const app = {
     async _refreshGoedkeurTabCounts() {
         try {
             const empId = this.currentUser && this.currentUser.robawsEmployeeId;
-            const [v, f] = await Promise.all([
+            const [v, f, mat] = await Promise.all([
                 RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
                 RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+                RobawsAPI.getMaterieelAanvragen().catch(() => []),
             ]);
             const setB = (id, n) => { const b = document.getElementById(id); if (b) { if (n > 0) { b.textContent = String(n); b.style.display = ''; } else b.style.display = 'none'; } };
             setB('goedkeurVerlofCount', v.length);
             setB('goedkeurFactuurCount', f.length);
+            setB('goedkeurMaterieelCount', mat.length);
         } catch (e) { /* tellers zijn niet kritisch */ }
+    },
+
+    // ============================================================
+    // v284: MATERIEEL VERHUUR / UITLEEN — reserveren + goedkeuren.
+    // Data-laag: RobawsAPI.getMaterials + reservering-CRUD (JSON op /materials).
+    // Statussen: AANGEVRAAGD → GOEDGEKEURD (blokkeert) | GEWEIGERD | GEANNULEERD;
+    // GOEDGEKEURD → IN_GEBRUIK → TERUGGEBRACHT.
+    // ============================================================
+    _materieelCache: null,
+    _materieelDetailId: null,
+    _materieelBusy: false,
+
+    _matToday() { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); },
+    _matDmy(iso) { const s = String(iso || '').split('-'); return s.length === 3 ? (s[2] + '/' + s[1]) : String(iso || ''); },
+    _matDmyLong(iso) { const s = String(iso || '').split('-'); return s.length === 3 ? (s[2] + '/' + s[1] + '/' + s[0]) : String(iso || ''); },
+    _matPeriode(from, to) { return from === to ? this._matDmyLong(from) : (this._matDmyLong(from) + ' → ' + this._matDmyLong(to)); },
+
+    async _loadMaterieelList(force) {
+        if (!force && this._materieelCache && (Date.now() - this._materieelCache.at) < 60000) return this._materieelCache.mats;
+        const mats = await RobawsAPI.getMaterials({ bypassCache: !!force });
+        this._materieelCache = { at: Date.now(), mats };
+        return mats;
+    },
+    _materieelById(id) { return ((this._materieelCache && this._materieelCache.mats) || []).find(m => String(m.id) === String(id)) || null; },
+
+    _matBadge(state, res) {
+        if (state === 'IN_GEBRUIK') return { label: 'In gebruik' + (res && res.to ? ' · tot ' + this._matDmy(res.to) : ''), color: '#8a4b00', bg: 'rgba(249,157,62,0.16)' };
+        if (state === 'GERESERVEERD') return { label: 'Gereserveerd' + (res && res.from ? ' · vanaf ' + this._matDmy(res.from) : ''), color: '#1f4f8a', bg: 'rgba(60,120,220,0.14)' };
+        return { label: 'Beschikbaar', color: '#0a6b3f', bg: 'rgba(20,160,90,0.14)' };
+    },
+    _matStatusLabel(s) {
+        return ({ AANGEVRAAGD: 'Aangevraagd', GOEDGEKEURD: 'Goedgekeurd', GEWEIGERD: 'Geweigerd', IN_GEBRUIK: 'In gebruik', TERUGGEBRACHT: 'Teruggebracht', GEANNULEERD: 'Geannuleerd' })[s] || s || '';
+    },
+
+    async loadMaterieel() {
+        const wrap = document.getElementById('materieelList');
+        if (!wrap) return;
+        wrap.innerHTML = '<div class="spinner"></div>';
+        try {
+            const all = await this._loadMaterieelList(true);
+            const mats = all.filter(m => RobawsAPI._materieelUitleenbaar(m));
+            if (!mats.length) {
+                wrap.innerHTML = '<p class="text-grey text-sm text-center" style="padding:20px">Nog geen uitleenbaar materieel.<br>Vink in Robaws de items aan met het veld "Uitleenbaar".</p>';
+                return;
+            }
+            const today = this._matToday();
+            const byCat = {};
+            for (const m of mats) { const c = RobawsAPI._materieelCategorie(m) || 'Overig'; (byCat[c] = byCat[c] || []).push(m); }
+            let html = '';
+            Object.keys(byCat).sort().forEach(cat => {
+                html += `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin:16px 4px 8px">${this.escapeHtml(cat)}</div>`;
+                byCat[cat].forEach(m => {
+                    const st = RobawsAPI.materieelStatus(RobawsAPI._materieelReserveringen(m), today);
+                    const b = this._matBadge(st.state, st.res);
+                    html += `<div class="card" style="margin-bottom:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="app.openMaterieelDetail('${m.id}')">
+                        <div style="flex:1;min-width:0">
+                            <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(m.name || 'Materieel')}</div>
+                            <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(m.brand || '')}</div>
+                        </div>
+                        <span style="flex-shrink:0;font-size:11px;font-weight:600;color:${b.color};background:${b.bg};border-radius:12px;padding:4px 10px">${this.escapeHtml(b.label)}</span>
+                        <span style="flex-shrink:0;color:var(--qe-grey);font-size:16px">→</span>
+                    </div>`;
+                });
+            });
+            wrap.innerHTML = html;
+        } catch (e) {
+            wrap.innerHTML = `<p class="text-grey text-sm text-center">Materieel laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    openMaterieelDetail(id) {
+        this._materieelDetailId = String(id);
+        this.navigate('screenMaterieelDetail');
+        this._renderMaterieelDetail();
+    },
+
+    async _renderMaterieelDetail() {
+        const id = this._materieelDetailId;
+        const wrap = document.getElementById('materieelDetail');
+        if (!wrap || !id) return;
+        wrap.innerHTML = '<div class="spinner"></div>';
+        try {
+            const mat = await RobawsAPI._getMaterieelFresh(id);
+            if (!this._materieelCache) this._materieelCache = { at: Date.now(), mats: [] };
+            { const _i = this._materieelCache.mats.findIndex(x => String(x.id) === String(id)); if (_i >= 0) this._materieelCache.mats[_i] = mat; else this._materieelCache.mats.push(mat); }
+            const today = this._matToday();
+            const reserveringen = RobawsAPI._materieelReserveringen(mat);
+            const st = RobawsAPI.materieelStatus(reserveringen, today);
+            const b = this._matBadge(st.state, st.res);
+            const myEmp = this.currentUser && this.currentUser.robawsEmployeeId;
+
+            const blocking = reserveringen.filter(r => RobawsAPI.MATERIEEL.BLOCKING.indexOf(r.status) !== -1 && r.to >= today).sort((a, c) => a.from.localeCompare(c.from));
+            const blokHtml = blocking.length
+                ? blocking.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--cb,#eee)">
+                        <span style="font-size:13px">${this.escapeHtml(this._matPeriode(r.from, r.to))}</span>
+                        <span style="font-size:12px;color:var(--qe-grey)">${this.escapeHtml(r.employeeName || '')}${r.status === 'IN_GEBRUIK' ? ' · in gebruik' : ''}</span>
+                    </div>`).join('')
+                : '<div style="font-size:13px;color:var(--qe-grey);padding:6px 0">Geen komende reservaties — volledig beschikbaar.</div>';
+
+            const mine = reserveringen.filter(r => String(r.employeeId) === String(myEmp) && ['AANGEVRAAGD', 'GOEDGEKEURD', 'IN_GEBRUIK'].indexOf(r.status) !== -1).sort((a, c) => a.from.localeCompare(c.from));
+            const mineHtml = mine.map(r => {
+                const canCancel = r.status === 'AANGEVRAAGD' || r.status === 'GOEDGEKEURD';
+                const canReturn = (r.status === 'GOEDGEKEURD' || r.status === 'IN_GEBRUIK') && r.from <= today;
+                return `<div class="card" style="margin-bottom:8px;padding:12px 14px">
+                    <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:13.5px;font-weight:600">${this.escapeHtml(this._matPeriode(r.from, r.to))}</span><span style="font-size:11.5px;color:var(--qe-grey)">${this._matStatusLabel(r.status)}</span></div>
+                    ${r.purpose ? `<div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(r.purpose)}</div>` : ''}
+                    <div style="display:flex;gap:8px;margin-top:8px">
+                        ${canReturn ? `<button class="btn btn-outline btn-sm" onclick="app.materieelTerugbrengen('${this._escapeJsArg(r.id)}')">Teruggebracht</button>` : ''}
+                        ${canCancel ? `<button class="btn btn-outline btn-sm" onclick="app.materieelAnnuleren('${this._escapeJsArg(r.id)}')">Annuleren</button>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+
+            wrap.innerHTML = `
+                <div class="card" style="padding:16px;margin-bottom:14px">
+                    <div style="font-size:17px;font-weight:600">${this.escapeHtml(mat.name || 'Materieel')}</div>
+                    <div style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(mat.brand || '')}${mat.serialNumber ? ' · ' + this.escapeHtml(mat.serialNumber) : ''}</div>
+                    <span style="display:inline-block;margin-top:10px;font-size:12px;font-weight:600;color:${b.color};background:${b.bg};border-radius:12px;padding:4px 12px">${this.escapeHtml(b.label)}</span>
+                </div>
+                <div class="card" style="padding:16px;margin-bottom:14px">
+                    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey);margin-bottom:6px">Beschikbaarheid</div>
+                    ${blokHtml}
+                </div>
+                <div class="card" style="padding:16px;margin-bottom:14px">
+                    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey);margin-bottom:10px">Reserveren</div>
+                    <div style="display:flex;gap:10px;margin-bottom:10px">
+                        <div style="flex:1"><label style="font-size:11px;color:var(--qe-grey)">Van</label><input type="date" id="matResVan" class="form-input" value="${today}" min="${today}" oninput="app._matCheckConflict()"></div>
+                        <div style="flex:1"><label style="font-size:11px;color:var(--qe-grey)">Tot</label><input type="date" id="matResTot" class="form-input" value="${today}" min="${today}" oninput="app._matCheckConflict()"></div>
+                    </div>
+                    <label style="font-size:11px;color:var(--qe-grey)">Reden / opmerking</label>
+                    <textarea id="matResReden" class="form-input" rows="2" placeholder="Waarvoor heb je dit nodig?"></textarea>
+                    <div id="matResMsg" style="font-size:12.5px;margin:8px 0;display:none"></div>
+                    <button class="btn btn-primary btn-full" id="btnMatReserveer" onclick="app.submitMaterieelReservering()">Reserveren aanvragen</button>
+                </div>
+                ${mine.length ? `<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--qe-grey);margin:4px 4px 8px">Mijn reservaties</div>${mineHtml}` : ''}
+            `;
+            this._matCheckConflict();
+        } catch (e) {
+            wrap.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    _matCheckConflict() {
+        const mat = this._materieelById(this._materieelDetailId);
+        const van = (document.getElementById('matResVan') || {}).value;
+        const tot = (document.getElementById('matResTot') || {}).value || van;
+        const msg = document.getElementById('matResMsg');
+        const btn = document.getElementById('btnMatReserveer');
+        if (!mat || !van || !msg) return;
+        if (tot < van) { msg.style.display = 'block'; msg.style.color = 'var(--qe-red)'; msg.textContent = 'De einddatum ligt vóór de begindatum.'; if (btn) btn.disabled = true; return; }
+        const conflicts = RobawsAPI.materieelConflicts(RobawsAPI._materieelReserveringen(mat), van, tot);
+        if (conflicts.length) {
+            const c = conflicts[0];
+            msg.style.display = 'block'; msg.style.color = 'var(--qe-red)';
+            msg.textContent = 'Niet beschikbaar: al gereserveerd ' + this._matPeriode(c.from, c.to) + (c.employeeName ? ' (' + c.employeeName + ')' : '') + '.';
+            if (btn) btn.disabled = true;
+        } else { msg.style.display = 'none'; if (btn) btn.disabled = false; }
+    },
+
+    async submitMaterieelReservering() {
+        if (this._materieelBusy) return;
+        const id = this._materieelDetailId;
+        const van = (document.getElementById('matResVan') || {}).value;
+        const tot = (document.getElementById('matResTot') || {}).value || van;
+        const reden = ((document.getElementById('matResReden') || {}).value || '').trim();
+        const msg = document.getElementById('matResMsg');
+        const btn = document.getElementById('btnMatReserveer');
+        const showErr = (m) => { if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--qe-red)'; msg.textContent = m; } else this.toast(m, true); };
+        if (!van) return showErr('Kies een begindatum.');
+        if (tot < van) return showErr('De einddatum ligt vóór de begindatum.');
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) return showErr('Geen werknemer-koppeling gevonden.');
+        this._materieelBusy = true;
+        if (btn) { btn.disabled = true; btn.textContent = 'Versturen...'; }
+        try {
+            const mat = await RobawsAPI._getMaterieelFresh(id);
+            const arr = RobawsAPI._materieelReserveringen(mat);
+            const conflicts = RobawsAPI.materieelConflicts(arr, van, tot);
+            if (conflicts.length) { const c = conflicts[0]; throw new Error('Ondertussen gereserveerd ' + this._matPeriode(c.from, c.to) + '.'); }
+            arr.push({
+                id: RobawsAPI._resNewId(),
+                materialId: mat.id,
+                employeeId: empId,
+                employeeName: (this.currentUser && this.currentUser.name) || '',
+                from: van, to: tot,
+                status: 'AANGEVRAAGD',
+                purpose: reden,
+                createdAt: new Date().toISOString(),
+            });
+            await RobawsAPI._putMaterieelReserveringen(mat, arr);
+            this.toast('Reservatie aangevraagd');
+            this._materieelCache = null;
+            this._renderMaterieelDetail();
+            if (RobawsAPI.getLoggedInUser() && RobawsAPI.getLoggedInUser().role === 'bureel') this._refreshAanvraagGoedkeurCount();
+        } catch (e) {
+            showErr('Aanvragen mislukt: ' + (e.message || '?'));
+        } finally {
+            this._materieelBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Reserveren aanvragen'; }
+        }
+    },
+
+    async materieelAnnuleren(resId) {
+        const confirmFn = (window.QEClock && QEClock._showConfirmModal) ? QEClock._showConfirmModal.bind(QEClock) : (t, m) => Promise.resolve(window.confirm(m));
+        const ok = await confirmFn('Annuleren', 'Deze reservatie annuleren?', 'Ja, annuleren', 'Nee');
+        if (!ok) return;
+        try {
+            await RobawsAPI.patchMaterieelReservering(this._materieelDetailId, resId, { status: 'GEANNULEERD', decidedAt: new Date().toISOString() });
+            this._materieelCache = null;
+            this.toast('Reservatie geannuleerd');
+            this._renderMaterieelDetail();
+        } catch (e) { this.toast('Annuleren mislukt: ' + (e.message || '?'), true); }
+    },
+
+    async materieelTerugbrengen(resId) {
+        try {
+            await RobawsAPI.patchMaterieelReservering(this._materieelDetailId, resId, { status: 'TERUGGEBRACHT', returnedAt: new Date().toISOString() });
+            this._materieelCache = null;
+            this.toast('Genoteerd als teruggebracht');
+            this._renderMaterieelDetail();
+        } catch (e) { this.toast('Mislukt: ' + (e.message || '?'), true); }
+    },
+
+    // --- bureel: materieel-aanvragen goedkeuren ---
+    async loadMaterieelApprovals() {
+        const list = document.getElementById('materieelBeheerList');
+        if (!list) return;
+        list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const items = await RobawsAPI.getMaterieelAanvragen();
+            if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande materieel-aanvragen.</p>'; return; }
+            list.innerHTML = items.map(r => `<div class="card" style="margin-bottom:10px;padding:14px 16px">
+                <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(r.materialName || 'Materieel')}</span><span style="font-size:12px;color:var(--qe-grey);flex-shrink:0">${this.escapeHtml(this._matPeriode(r.from, r.to))}</span></div>
+                <div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(r.employeeName || '')}${r.purpose ? ' — ' + this.escapeHtml(r.purpose) : ''}</div>
+                <div style="display:flex;gap:8px;margin-top:10px">
+                    <button class="btn btn-primary btn-sm" style="flex:1" onclick="app.decideMaterieel('${this._escapeJsArg(String(r.materialId))}','${this._escapeJsArg(String(r.id))}',true)">Goedkeuren</button>
+                    <button class="btn btn-outline btn-sm" style="flex:1" onclick="app.decideMaterieel('${this._escapeJsArg(String(r.materialId))}','${this._escapeJsArg(String(r.id))}',false)">Weigeren</button>
+                </div>
+            </div>`).join('');
+        } catch (e) {
+            list.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    async decideMaterieel(materialId, resId, approve) {
+        if (this._materieelDecideBusy) return;
+        const decider = (this.currentUser && this.currentUser.name) || 'Bureel';
+        const confirmFn = (window.QEClock && QEClock._showConfirmModal) ? QEClock._showConfirmModal.bind(QEClock) : (t, m) => Promise.resolve(window.confirm(m));
+        this._materieelDecideBusy = true;
+        try {
+            if (approve) {
+                const mat = await RobawsAPI._getMaterieelFresh(materialId);
+                const arr = RobawsAPI._materieelReserveringen(mat);
+                const i = arr.findIndex(r => String(r.id) === String(resId));
+                if (i === -1) throw new Error('Reservering niet gevonden');
+                const target = arr[i];
+                const conflicts = RobawsAPI.materieelConflicts(arr, target.from, target.to, resId);
+                if (conflicts.length) {
+                    const c = conflicts[0];
+                    const ok = await confirmFn('Let op — overlap', 'Botst met een goedgekeurde reservatie ' + this._matPeriode(c.from, c.to) + (c.employeeName ? ' (' + this.escapeHtml(c.employeeName) + ')' : '') + '. Toch goedkeuren?', 'Toch goedkeuren', 'Annuleren');
+                    if (!ok) { this._materieelDecideBusy = false; return; }
+                }
+                arr[i] = Object.assign({}, target, { status: 'GOEDGEKEURD', decidedBy: decider, decidedAt: new Date().toISOString() });
+                await RobawsAPI._putMaterieelReserveringen(mat, arr);
+                this.toast('Reservatie goedgekeurd');
+            } else {
+                const ok = await confirmFn('Weigeren', 'Deze materieel-aanvraag weigeren?', 'Weigeren', 'Annuleren');
+                if (!ok) { this._materieelDecideBusy = false; return; }
+                await RobawsAPI.patchMaterieelReservering(materialId, resId, { status: 'GEWEIGERD', decidedBy: decider, decidedAt: new Date().toISOString() });
+                this.toast('Reservatie geweigerd');
+            }
+            this._materieelCache = null;
+            this.loadMaterieelApprovals();
+            this._refreshGoedkeurTabCounts();
+            this._refreshAanvraagGoedkeurCount();
+        } catch (e) {
+            this.toast('Beslissen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._materieelDecideBusy = false;
+        }
     },
 
     async loadFactuurApprovals() {
@@ -8532,22 +8827,191 @@ const app = {
         list.innerHTML = '<div class="spinner"></div>';
         try {
             const items = await RobawsAPI.getPurchaseInvoiceApprovals();
+            this._factuurApprovalCache = {};
             if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande factuur-goedkeuringen.</p>'; return; }
             list.innerHTML = items.map(a => {
+                this._factuurApprovalCache[String(a.id)] = a;
                 const nr = a.invoiceNumber || a.logicId || (a.resourceUnderApprovalRef || '');
                 const bedrag = (a.totalVatIncl != null) ? ('€ ' + Number(a.totalVatIncl).toFixed(2)) : '';
                 const sup = (a.supplier && a.supplier.name) || (a.supplierId ? ('Leverancier ' + a.supplierId) : '');
-                return `<div class="card" style="margin-bottom:10px;padding:14px 16px">
+                return `<div class="card card-clickable" style="margin-bottom:10px;padding:14px 16px;cursor:pointer" onclick="app.openFactuurDetail('${this._escapeJsArg(String(a.id))}')">
                     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
                         <span style="font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(String(nr))}</span>
                         <span style="font-size:14px;font-weight:600;flex-shrink:0">${bedrag}</span>
                     </div>
-                    <div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(sup)}${a.date ? ' · ' + this.escapeHtml(String(a.date)) : ''}</div>
-                    <div style="font-size:11.5px;color:var(--qe-grey);margin-top:8px;font-style:italic">Goedkeuren van facturen in de app komt binnenkort.</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:3px">
+                        <span style="font-size:12.5px;color:var(--qe-grey);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(sup)}${a.date ? ' · ' + this.escapeHtml(String(a.date)) : ''}</span>
+                        <span style="flex-shrink:0;color:var(--qe-grey);font-size:16px">→</span>
+                    </div>
                 </div>`;
             }).join('');
         } catch (e) {
             list.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    // ===== v283: factuur-goedkeuring — detail, PDF (fullscreen), beslissen,
+    // goedkeurder toevoegen. De accept/reject-beslissing gaat via de gedeelde
+    // sleutel (kantoor); add-approver zet een echte extra goedkeurder. =====
+    openFactuurDetail(approvalId) {
+        this._factuurDetailId = String(approvalId);
+        this.navigate('screenFactuurDetail');
+        this.loadFactuurDetail();
+    },
+
+    async loadFactuurDetail() {
+        const host = document.getElementById('factuurDetailContent');
+        if (!host) return;
+        const id = this._factuurDetailId;
+        if (!id) { host.innerHTML = '<p class="text-grey text-sm text-center">Geen factuur geselecteerd.</p>'; return; }
+        host.innerHTML = '<div class="spinner"></div>';
+        let detail = (this._factuurApprovalCache || {})[id] || {};
+        // Merge het lijst-item (heeft resourceUnderApprovalRef + displayvelden) met
+        // het verse detail (heeft userStates) — nooit de ref-drager wegwerken.
+        try { const fresh = await RobawsAPI.getApprovalDetail(id); if (fresh) detail = Object.assign({}, detail, fresh); } catch (e) { /* val terug op de lijst-data */ }
+        this._factuurApprovalCache = this._factuurApprovalCache || {};
+        this._factuurApprovalCache[id] = detail;
+
+        const nr = detail.invoiceNumber || detail.logicId || '';
+        const inclV = (detail.totalVatIncl != null) ? ('€ ' + Number(detail.totalVatIncl).toFixed(2)) : '';
+        const exclV = (detail.totalVatExcl != null) ? ('€ ' + Number(detail.totalVatExcl).toFixed(2)) : '';
+        const sup = (detail.supplier && detail.supplier.name) || (detail.supplierId ? ('Leverancier ' + detail.supplierId) : '');
+        const states = Array.isArray(detail.userStates) ? detail.userStates : [];
+        const stRow = (s) => {
+            const st = String(s.status || '');
+            const lbl = st === 'ACCEPTED' ? 'Goedgekeurd' : (st === 'REJECTED' ? 'Geweigerd' : 'In afwachting');
+            const col = st === 'ACCEPTED' ? 'var(--qe-green,#3E7A54)' : (st === 'REJECTED' ? 'var(--qe-red,#B4372F)' : 'var(--qe-grey)');
+            return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--l2,#eee)">
+                <span style="font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(RobawsAPI.nameForUserId(s.userId))}</span>
+                <span style="font-size:12px;font-weight:600;flex-shrink:0;color:${col}">${lbl}</span>
+            </div>`;
+        };
+        const approvers = states.length
+            ? states.map(stRow).join('')
+            : '<div style="font-size:12.5px;color:var(--qe-grey);padding:6px 0">Geen goedkeurders-info beschikbaar.</div>';
+
+        host.innerHTML = `
+            <div class="card" style="margin-bottom:12px;padding:16px">
+                <div style="font-size:17px;font-weight:600;color:var(--ink,#1A237E)">${this.escapeHtml(String(nr))}</div>
+                <div style="font-size:13px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(sup)}${detail.date ? ' · ' + this.escapeHtml(String(detail.date)) : ''}</div>
+                <div style="display:flex;gap:20px;margin-top:14px">
+                    <div><div style="font:400 22px var(--font,inherit);color:var(--ink,#1A237E)">${inclV}</div><div style="font-size:11px;color:var(--qe-grey)">incl. btw</div></div>
+                    ${exclV ? `<div><div style="font:400 22px var(--font,inherit);color:var(--ink,#1A237E)">${exclV}</div><div style="font-size:11px;color:var(--qe-grey)">excl. btw</div></div>` : ''}
+                </div>
+            </div>
+            <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="app.openFactuurPdf('${this._escapeJsArg(id)}')">Factuur openen (PDF)</button>
+            <div class="card" style="margin-bottom:12px;padding:14px 16px">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:2px">Goedkeurders</div>
+                ${approvers}
+                <button class="btn btn-outline btn-sm btn-full" style="margin-top:12px" onclick="app.addFactuurApprover('${this._escapeJsArg(id)}')">+ Goedkeurder toevoegen</button>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-outline" style="flex:1" onclick="app.decideFactuur('${this._escapeJsArg(id)}', false)">Afkeuren</button>
+                <button class="btn btn-primary" style="flex:1" onclick="app.decideFactuur('${this._escapeJsArg(id)}', true)">Goedkeuren</button>
+            </div>
+            <div style="font-size:11px;color:var(--qe-grey);text-align:center;margin:10px 0 4px;line-height:1.4">Goedkeuren/afkeuren wordt geregistreerd op het gedeelde kantoor-account.</div>`;
+    },
+
+    async openFactuurPdf(approvalId) {
+        const detail = (this._factuurApprovalCache || {})[String(approvalId)] || {};
+        const ref = detail.resourceUnderApprovalRef;
+        const invoiceId = ref ? String(ref).split('/').pop() : null;
+        if (!invoiceId) { this.toast('Factuur niet gevonden', true); return; }
+        this._showPdfFullscreen(null, detail.invoiceNumber || 'Factuur');
+        try {
+            const docId = await RobawsAPI.getPurchaseInvoiceDocumentId(invoiceId);
+            if (!docId) throw new Error('Geen document aan deze factuur gekoppeld');
+            const doc = await RobawsAPI.getDocumentUrl(docId);
+            this._showPdfFullscreen(doc, detail.invoiceNumber || 'Factuur');
+        } catch (e) {
+            this._closePdfFullscreen();
+            this.toast('PDF openen mislukt: ' + (e.message || '?'), true);
+        }
+    },
+
+    _showPdfFullscreen(doc, title) {
+        let ov = document.getElementById('pdfFullscreen');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'pdfFullscreen';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:#111;display:flex;flex-direction:column';
+            document.body.appendChild(ov);
+        }
+        const closeBtn = `<button onclick="app._closePdfFullscreen()" aria-label="Sluiten" style="width:38px;height:38px;flex-shrink:0;border:none;border-radius:19px;background:rgba(255,255,255,.16);color:#fff;font-size:18px;line-height:1;cursor:pointer">✕</button>`;
+        const bar = (t) => `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#1b1b1b;color:#fff">
+            <div style="flex:1;min-width:0;font:600 14px var(--font,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(String(t || 'Document'))}</div>${closeBtn}</div>`;
+        if (!doc) {
+            ov.innerHTML = bar(title) + `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:#fff;font:500 14px var(--font,sans-serif)">Factuur laden…</div>`;
+            return;
+        }
+        const isImg = doc.contentType && doc.contentType.includes('image');
+        const view = isImg
+            ? `<div style="flex:1;overflow:auto;display:flex"><img src="${doc.blobUrl}" style="max-width:100%;max-height:100%;margin:auto;display:block"></div>`
+            : `<iframe src="${doc.blobUrl}" style="flex:1;width:100%;border:none;background:#fff"></iframe>`;
+        ov.innerHTML = bar(title) + view;
+        this._pdfBlobUrl = doc.blobUrl;
+    },
+
+    _closePdfFullscreen() {
+        const ov = document.getElementById('pdfFullscreen');
+        if (ov) ov.remove();
+        if (this._pdfBlobUrl) { try { URL.revokeObjectURL(this._pdfBlobUrl); } catch (_e) {} this._pdfBlobUrl = null; }
+    },
+
+    async decideFactuur(approvalId, approve) {
+        if (this._factuurDecideBusy) return;   // guard vóór de confirm — geen dubbele dialogen
+        this._factuurDecideBusy = true;
+        try {
+            const confirmFn = (window.QEClock && QEClock._showConfirmModal)
+                ? QEClock._showConfirmModal.bind(QEClock)
+                : (t, m) => Promise.resolve(window.confirm(m));
+            const ok = await confirmFn(
+                approve ? 'Factuur goedkeuren?' : 'Factuur afkeuren?',
+                (approve ? 'Deze aankoopfactuur goedkeuren?' : 'Deze aankoopfactuur afkeuren?') + ' De beslissing wordt op het gedeelde kantoor-account geregistreerd.',
+                approve ? 'Goedkeuren' : 'Afkeuren', 'Annuleren'
+            );
+            if (!ok) return;
+            await RobawsAPI.decideApproval(approvalId, approve, '');
+            this.toast(approve ? 'Factuur goedgekeurd' : 'Factuur afgekeurd');
+            // pushHistory=false: het besliste detail hoort niet meer in de back-stack.
+            this.navigate('screenGoedkeuren', false);
+            this.setGoedkeurTab('facturen');
+            this._refreshAanvraagGoedkeurCount();
+        } catch (e) {
+            this.toast('Mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._factuurDecideBusy = false;
+        }
+    },
+
+    addFactuurApprover(approvalId) {
+        const detail = (this._factuurApprovalCache || {})[String(approvalId)] || {};
+        const existing = new Set((Array.isArray(detail.userStates) ? detail.userStates : []).map(s => String(s.userId)));
+        const bureel = RobawsAPI.getBureelApprovers().filter(u => !existing.has(String(u.userId)));
+        if (!bureel.length) { this.toast('Iedereen van bureel staat al op de flow'); return; }
+        const rows = bureel.map(u =>
+            `<button class="btn btn-outline btn-full" style="margin-bottom:8px;text-align:left" onclick="app._doAddFactuurApprover('${this._escapeJsArg(approvalId)}','${this._escapeJsArg(u.userId)}','${this._escapeJsArg(u.name)}')">${this.escapeHtml(u.name)}</button>`
+        ).join('');
+        this.showModal(`<div><h3 style="margin:0 0 10px">Goedkeurder toevoegen</h3>
+            <div style="font-size:12.5px;color:var(--qe-grey);margin-bottom:14px;line-height:1.4">Alleen bureelpersoneel. De gekozen persoon moet de factuur daarna ook goedkeuren.</div>
+            ${rows}
+            <button class="btn btn-outline btn-full" style="margin-top:4px" onclick="app.closeModal()">Annuleren</button></div>`);
+    },
+
+    async _doAddFactuurApprover(approvalId, userId, name) {
+        this.closeModal();
+        if (this._addApproverBusy) return;
+        this._addApproverBusy = true;
+        try {
+            await RobawsAPI.addApprovalApprover(approvalId, userId);
+            this.toast((name || 'Goedkeurder') + ' toegevoegd');
+            this.loadFactuurDetail();
+            this._refreshGoedkeurTabCounts();
+            this._refreshAanvraagGoedkeurCount();
+        } catch (e) {
+            this.toast('Toevoegen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._addApproverBusy = false;
         }
     },
 
@@ -13121,6 +13585,214 @@ const app = {
         }
         const chev = chevId ? document.getElementById(chevId) : null;
         if (chev) chev.textContent = open ? '▾' : '▴';
+    },
+
+    // ============================================================
+    // MAANDRECAP (v285 / 1.x v280) — "Spotify-Wrapped"-stories.
+    // Data + opslag zit in window.QERecap (js/maand-recap.js); hier
+    // enkel de trigger + de UI. De stories zijn zelfstandig (inline
+    // styles), dus identiek in beide www-mappen.
+    // ============================================================
+
+    /** Na een uitklok: toon 1×/maand de recap van de doelmaand. Doet
+     *  niets op gewone dagen (dueMonth + shown-vlag vóór elke fetch). */
+    async maybeShowMonthRecap(empId) {
+        try {
+            empId = empId || (this.currentUser && this.currentUser.robawsEmployeeId);
+            if (!empId || !window.QERecap) return;
+            const ym = QERecap.dueMonth(new Date());
+            if (!ym || QERecap.isShown(empId, ym)) return;
+            this._showRecapLoading('Je maandrecap wordt gemaakt…');
+            let stats = null;
+            try {
+                stats = await QERecap.get(empId, ym, this.currentUser && this.currentUser.name);
+            } catch (e) {
+                console.warn('[Recap] genereren faalde:', e && e.message);
+                this._hideRecapLoading();
+                return; // niet markeren → een volgende uitklok probeert opnieuw
+            }
+            this._hideRecapLoading();
+            QERecap.markShown(empId, ym); // ook markeren als er niets te tonen valt
+            if (stats && stats.hasData) this.openRecapStories(stats);
+        } catch (e) { console.warn('[Recap] maybeShow faalde:', e && e.message); try { this._hideRecapLoading(); } catch (_e) {} }
+    },
+
+    /** "Terugblik"-knop: kies een maand om de recap (opnieuw) te bekijken. */
+    async openTerugblik() {
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId || !window.QERecap) { if (this.toast) this.toast('Geen werknemer-koppeling', true); return; }
+        let cached = [];
+        try { cached = await QERecap.list(empId); } catch (_e) {}
+        const set = {}, items = [];
+        cached.forEach(s => { if (!set[s.ym]) { set[s.ym] = 1; items.push({ ym: s.ym, label: QERecap.monthLabel(s.ym), cached: true }); } });
+        const now = new Date();
+        for (let k = 1; k <= 3; k++) {
+            const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+            const mm = d.getMonth() + 1;
+            const ym = d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm;
+            if (!set[ym]) { set[ym] = 1; items.push({ ym: ym, label: QERecap.monthLabel(ym), cached: false }); }
+        }
+        items.sort((a, b) => String(b.ym).localeCompare(String(a.ym)));
+        this._ensureRecapStyles();
+        this._closeRecapChooser();
+        const ov = document.createElement('div');
+        ov.className = 'qr-chooser';
+        ov.innerHTML =
+            '<div class="qr-ch-box">' +
+            '<div class="qr-ch-head">Terugblik<button class="qr-ch-x" aria-label="Sluiten">&times;</button></div>' +
+            '<div class="qr-ch-list">' +
+            items.map(it => '<button class="qr-ch-item" data-ym="' + it.ym + '"><span>' + this.escapeHtml(it.label) + '</span><span class="qr-ch-arrow">' + (it.cached ? '▸' : '＋') + '</span></button>').join('') +
+            '</div>' +
+            '<div class="qr-ch-note">＋ = nog te berekenen · ▸ = klaar</div>' +
+            '</div>';
+        document.body.appendChild(ov);
+        this._recapChooser = ov;
+        ov.querySelector('.qr-ch-x').onclick = () => this._closeRecapChooser();
+        ov.onclick = (e) => { if (e.target === ov) this._closeRecapChooser(); };
+        ov.querySelectorAll('.qr-ch-item').forEach(btn => { btn.onclick = () => this.openRecap(btn.getAttribute('data-ym')); });
+    },
+    _closeRecapChooser() {
+        if (this._recapChooser && this._recapChooser.parentNode) this._recapChooser.parentNode.removeChild(this._recapChooser);
+        this._recapChooser = null;
+    },
+    /** Laad (uit cache of bereken) en toon de recap van één maand. */
+    async openRecap(ym) {
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId || !window.QERecap) return;
+        this._closeRecapChooser();
+        this._showRecapLoading('Recap laden…');
+        let stats = null;
+        try { stats = await QERecap.get(empId, ym, this.currentUser && this.currentUser.name); }
+        catch (e) { this._hideRecapLoading(); if (this.toast) this.toast('Laden mislukt: ' + (e.message || '?'), true); return; }
+        this._hideRecapLoading();
+        if (stats && stats.hasData) this.openRecapStories(stats);
+        else if (this.toast) this.toast('Geen klok-gegevens voor ' + QERecap.monthLabel(ym), true);
+    },
+    // Kleine laad-overlay tijdens het (eenmalige) berekenen van een recap.
+    _showRecapLoading(text) {
+        this._ensureRecapStyles();
+        this._hideRecapLoading();
+        const ov = document.createElement('div');
+        ov.className = 'qr-loading';
+        ov.innerHTML = '<div class="qr-spin"></div><div class="qr-load-txt">' + this.escapeHtml(text || 'Even geduld…') + '</div>';
+        document.body.appendChild(ov);
+        this._recapLoading = ov;
+    },
+    _hideRecapLoading() {
+        if (this._recapLoading && this._recapLoading.parentNode) this._recapLoading.parentNode.removeChild(this._recapLoading);
+        this._recapLoading = null;
+    },
+
+    /** De Spotify-Wrapped-achtige stories-overlay (tik links/rechts). */
+    openRecapStories(stats) {
+        if (!stats) return;
+        try { this._hideRecapLoading(); } catch (_e) {}
+        this._closeRecapStories();
+        const s = stats;
+        const cap = (w) => w ? (w.charAt(0).toUpperCase() + w.slice(1)) : '';
+        const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
+        const _m0 = parseInt(String(s.ym).split('-')[1], 10) - 1;
+        const nextMonth = MONTHS[(((_m0 + 1) % 12) + 12) % 12] || '';
+
+        const cards = [];
+        const add = (bg, emoji, big, label, sub) => cards.push({ bg: bg, emoji: emoji, big: String(big), label: label || '', sub: sub || '' });
+        add('linear-gradient(160deg,#1A237E,#6A2C91)', '📅', cap(s.monthLabel), 'jouw maand in cijfers', 'Tik om te bladeren →');
+        add('linear-gradient(160deg,#0072B2,#012f49)', '⏱️', s.totalHours + 'u', 'gewerkt deze maand', s.workedDays + ' werkdagen');
+        add('linear-gradient(160deg,#E8850C,#6f3800)', '📊', s.avgHoursPerDay + 'u', 'gemiddeld per dag', s.longestDayHours > 0 ? ('Langste dag: ' + s.longestDayHours + 'u' + (s.longestDayLabel ? ' — ' + s.longestDayLabel : '')) : '');
+        if (s.avgArrivalStr) add('linear-gradient(160deg,#00897B,#01302a)', '🌅', s.avgArrivalStr, 'je gemiddelde aankomst', s.earliestArrivalStr ? ('Vroegste: ' + s.earliestArrivalStr) : '');
+        if (s.overtimeHours > 0) add('linear-gradient(160deg,#8E24AA,#2f0d3a)', '🔥', s.overtimeHours + 'u', 'overuren gedraaid', 'Doorzetter 💪');
+        add(s.lateCount === 0 ? 'linear-gradient(160deg,#009E73,#013026)' : 'linear-gradient(160deg,#D55E00,#4a2300)', s.lateCount === 0 ? '⭐' : '⏰', s.lateCount + '×', s.lateCount === 0 ? 'nooit te laat' : 'na 08:00 ingeklokt', s.lateCount === 0 ? 'Altijd op tijd!' : '');
+        if ((s.sickCount + s.verlofCount) > 0) add('linear-gradient(160deg,#455A64,#141a1d)', '🗓️', (s.sickCount + s.verlofCount) + '', [s.sickCount ? (s.sickCount + ' ziek') : '', s.verlofCount ? (s.verlofCount + ' verlof') : ''].filter(Boolean).join(' · '), 'afwezige dagen');
+        if (s.totalKm > 0) add('linear-gradient(160deg,#3949AB,#101541)', '🚗', s.totalKm + ' km', 'onderweg', '');
+        if (s.weekendDaysWorked > 0) add('linear-gradient(160deg,#5D4037,#1d130d)', '🏗️', s.weekendDaysWorked + '', 'weekenddag(en) gewerkt', '');
+        if (s.favWeekday) add('linear-gradient(160deg,#C2185B,#3f0820)', '❤️', cap(s.favWeekday), 'je favoriete werkdag', s.favWeekdayHours + 'u in totaal');
+        add('linear-gradient(160deg,#1A237E,#6A2C91)', '🎉', 'Bedankt!', '', 'Tot in ' + nextMonth + '! Terugblik: knop op de Klok.');
+
+        this._ensureRecapStyles();
+        const ov = document.createElement('div');
+        ov.className = 'qr-ov';
+        ov.innerHTML =
+            '<div class="qr-bars" id="qrBars"></div>' +
+            '<button class="qr-x" aria-label="Sluiten">&times;</button>' +
+            '<div class="qr-card" id="qrCard"></div>' +
+            '<div class="qr-tap qr-tap-l" id="qrTapL"></div>' +
+            '<div class="qr-tap qr-tap-r" id="qrTapR"></div>';
+        document.body.appendChild(ov);
+        const bars = ov.querySelector('#qrBars');
+        bars.innerHTML = cards.map(() => '<div class="qr-bar"><i></i></div>').join('');
+
+        const reduce = document.body.classList.contains('a11y-motion');
+        const DUR = 5200;
+        const state = { idx: -1, timer: null, ov: ov };
+        this._recapState = state;
+
+        const render = () => {
+            const c = cards[state.idx];
+            const card = ov.querySelector('#qrCard');
+            card.style.background = c.bg;
+            card.innerHTML =
+                '<div class="qr-emoji">' + c.emoji + '</div>' +
+                '<div class="qr-big">' + this.escapeHtml(c.big) + '</div>' +
+                (c.label ? '<div class="qr-label">' + this.escapeHtml(c.label) + '</div>' : '') +
+                (c.sub ? '<div class="qr-sub">' + this.escapeHtml(c.sub) + '</div>' : '');
+            if (!reduce) { card.style.animation = 'none'; void card.offsetWidth; card.style.animation = 'qrIn .5s cubic-bezier(.22,1,.36,1)'; }
+            const fills = bars.querySelectorAll('.qr-bar > i');
+            fills.forEach((fill, i) => {
+                fill.style.transition = 'none';
+                if (i < state.idx) fill.style.width = '100%';
+                else if (i > state.idx) fill.style.width = '0%';
+                else { fill.style.width = '0%'; void fill.offsetWidth; fill.style.transition = 'width ' + (reduce ? 0 : DUR) + 'ms linear'; fill.style.width = '100%'; }
+            });
+        };
+        const clear = () => { if (state.timer) { clearTimeout(state.timer); state.timer = null; } };
+        const go = (i) => {
+            clear();
+            if (i < 0) i = 0;
+            if (i >= cards.length) { this._closeRecapStories(); return; }
+            state.idx = i; render();
+            if (!reduce) state.timer = setTimeout(() => go(state.idx + 1), DUR);
+        };
+        ov.querySelector('.qr-x').onclick = () => this._closeRecapStories();
+        ov.querySelector('#qrTapR').onclick = () => go(state.idx + 1);
+        ov.querySelector('#qrTapL').onclick = () => go(state.idx - 1);
+        requestAnimationFrame(() => go(0));
+        try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('success'); } catch (_e) {}
+    },
+    _closeRecapStories() {
+        const st = this._recapState;
+        if (st) { if (st.timer) clearTimeout(st.timer); if (st.ov && st.ov.parentNode) st.ov.parentNode.removeChild(st.ov); }
+        this._recapState = null;
+    },
+    _ensureRecapStyles() {
+        if (document.getElementById('qrStyles')) return;
+        const st = document.createElement('style');
+        st.id = 'qrStyles';
+        st.textContent =
+            '.qr-ov{position:fixed;inset:0;z-index:100000;background:#000;overflow:hidden;display:flex;flex-direction:column;font-family:var(--font,"Archivo",system-ui,-apple-system,sans-serif)}' +
+            '.qr-bars{position:absolute;top:0;left:0;right:0;display:flex;gap:4px;padding:12px 12px;z-index:3}' +
+            '.qr-bar{flex:1;height:3px;border-radius:3px;background:rgba(255,255,255,.28);overflow:hidden}' +
+            '.qr-bar>i{display:block;height:100%;width:0;background:#fff;border-radius:3px}' +
+            '.qr-x{position:absolute;top:19px;right:12px;z-index:4;background:none;border:none;color:#fff;font-size:30px;line-height:1;cursor:pointer;opacity:.92;-webkit-appearance:none;appearance:none;padding:4px 10px}' +
+            '.qr-card{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 26px 90px;color:#fff}' +
+            '.qr-emoji{font-size:62px;margin-bottom:16px;filter:drop-shadow(0 4px 12px rgba(0,0,0,.25))}' +
+            '.qr-big{font-size:clamp(38px,12.5vw,82px);font-weight:800;line-height:1.03;letter-spacing:-.02em;max-width:100%;word-break:break-word}' +
+            '.qr-label{font-size:19px;font-weight:600;margin-top:14px;opacity:.96;max-width:82%}' +
+            '.qr-sub{font-size:14px;margin-top:12px;opacity:.82;max-width:82%;line-height:1.4}' +
+            '.qr-tap{position:absolute;top:46px;bottom:0;z-index:2;cursor:pointer}' +
+            '.qr-tap-l{left:0;width:33%}.qr-tap-r{left:33%;right:0}' +
+            '@keyframes qrIn{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}' +
+            '.qr-chooser{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center;font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
+            '.qr-ch-box{background:var(--card,#fff);color:var(--ink,#222);width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:14px 16px calc(20px + env(safe-area-inset-bottom));max-height:76vh;overflow:auto}' +
+            '.qr-ch-head{display:flex;align-items:center;justify-content:space-between;font-size:17px;font-weight:700;margin:4px 2px 12px}' +
+            '.qr-ch-x{background:none;border:none;font-size:26px;line-height:1;color:var(--g1,#888);cursor:pointer;-webkit-appearance:none;appearance:none}' +
+            '.qr-ch-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 14px;margin-bottom:8px;border:1px solid var(--b1,#e5e2da);border-radius:12px;background:var(--bg,#f7f5f0);color:inherit;font:600 15px/1 var(--font,inherit);cursor:pointer;-webkit-appearance:none;appearance:none}' +
+            '.qr-ch-arrow{color:var(--accent,#F99D3E);font-size:18px}' +
+            '.qr-ch-note{font-size:11.5px;color:var(--g1,#888);text-align:center;margin-top:6px}' +
+            '.qr-loading{position:fixed;inset:0;z-index:99999;background:rgba(10,12,24,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:#fff;font-family:var(--font,"Archivo",system-ui,sans-serif)}' +
+            '.qr-spin{width:52px;height:52px;border:4px solid rgba(255,255,255,.22);border-top-color:#F99D3E;border-radius:50%;animation:qrSpin .9s linear infinite}' +
+            '.qr-load-txt{font-size:15px;font-weight:600;opacity:.92;text-align:center;padding:0 34px}' +
+            '@keyframes qrSpin{to{transform:rotate(360deg)}}';
+        document.head.appendChild(st);
     },
 };
 

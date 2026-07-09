@@ -675,10 +675,16 @@ window.QEClock = {
                     const woId = scanResult.workOrderId;
                     const empId = scanResult.employeeId;
                     const afterScan = async () => {
-                        if (!refresh) return;
-                        try { await this.syncWithRobaws(); } catch(_) {}
-                        try { app.updateClockUI(); } catch(_) {}
-                        try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
+                        if (refresh) {
+                            try { await this.syncWithRobaws(); } catch(_) {}
+                            try { app.updateClockUI(); } catch(_) {}
+                            try { if (app.currentScreen === 'screenClock') app.navigate('screenClock'); } catch(_) {}
+                        }
+                        // v285: na een UITKLOK (celeb) → mogelijk de maandrecap tonen
+                        // (1×/maand, gecachet; doet niets op gewone dagen).
+                        if (scanResult && scanResult.celeb && window.app && typeof app.maybeShowMonthRecap === 'function') {
+                            try { await app.maybeShowMonthRecap(empId); } catch (e) { console.warn('[Recap] maandrecap faalde:', e && e.message); }
+                        }
                     };
                     // v272: de kilometers zijn al VÓÓR de uitklok ingevuld (het
                     // km-formulier is de bevestiging) — hier alleen nog het

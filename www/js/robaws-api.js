@@ -424,14 +424,21 @@ const RobawsAPI = {
         return out;
     },
 
-    /** Keur een verlof-goedkeuring goed (accept) of weiger ze (reject). */
-    async decideLeaveApproval(approvalId, approve, reason) {
+    /** Generiek: keur een approval-request goed (accept) of weiger (reject).
+     *  LET OP: de beslissing wordt geregistreerd op de gebruiker van de gedeelde
+     *  API-sleutel (kantoor), NIET op de ingelogde app-gebruiker — de accept/
+     *  reject-endpoints hebben geen per-gebruiker-veld. */
+    async decideApproval(approvalId, approve, reason) {
         const action = approve ? 'accept' : 'reject';
         const res = await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
         return true;
+    },
+    /** Verlof-goedkeuring — alias op decideApproval (zelfde endpoint). */
+    async decideLeaveApproval(approvalId, approve, reason) {
+        return this.decideApproval(approvalId, approve, reason);
     },
 
     // v278 (Aanvragen-tab): verlofsaldo + chat + factuur-goedkeuringen.
@@ -527,6 +534,211 @@ const RobawsAPI = {
             if (added === 0) break;
         }
         return all.filter(a => /^\/purchase-invoices\/\d+/.test(a.resourceUnderApprovalRef || ''));
+    },
+
+    /** Detail van één approval-request incl. de goedkeurders
+     *  (userStates: [{userId, status: ACCEPTED|AWAITING_DECISION|REJECTED}]). */
+    async getApprovalDetail(approvalId) {
+        const r = await this.get('approval-requests/' + approvalId + '?include=supplier,userStates', { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        return r.data || null;
+    },
+
+    /** De document-id (meestal de PDF) van een aankoopfactuur ophalen. */
+    async getPurchaseInvoiceDocumentId(invoiceId) {
+        const r = await this.get('purchase-invoices/' + invoiceId, { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        return (r.data && r.data.documentId) ? String(r.data.documentId) : null;
+    },
+
+    /** Voeg een extra goedkeurder (Robaws userId) toe aan een approval-request
+     *  (POST .../add-approver, geverifieerd → 204). */
+    async addApprovalApprover(approvalId, userId) {
+        const res = await this.post('approval-requests/' + approvalId + '/add-approver', { userId: String(userId) });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
+            throw new Error('Robaws gaf status ' + res.code);
+        }
+        return true;
+    },
+
+    /** Bureel-gebruikers voor de goedkeurder-picker uit de EMPLOYEES-map:
+     *  [{userId, name, email}] — alleen wie rol 'bureel' + een userId heeft. */
+    getBureelApprovers() {
+        const out = [];
+        const seen = new Set();
+        for (const [email, e] of Object.entries(this.EMPLOYEES || {})) {
+            if (e && e.role === 'bureel' && e.userId != null && !seen.has(String(e.userId))) {
+                seen.add(String(e.userId));
+                out.push({ userId: String(e.userId), name: e.name || email, email });
+            }
+        }
+        return out.sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    /** Naam bij een Robaws userId (voor het tonen van goedkeurders). */
+    nameForUserId(userId) {
+        const uid = String(userId);
+        for (const [email, e] of Object.entries(this.EMPLOYEES || {})) {
+            if (e && String(e.userId) === uid) return e.name || email;
+        }
+        return 'Gebruiker ' + uid;
+    },
+
+    // ============================================================
+    // MATERIEEL VERHUUR / UITLEEN (v282) — reserveringssysteem bovenop het
+    // native Robaws-materieelregister (/materials). Robaws heeft geen
+    // reservatie-API; /planning-items dragen wél materialIds maar worden er
+    // in de praktijk niet voor gebruikt en zijn niet betrouwbaar op materiaal
+    // filterbaar. Daarom bewaren we de reserveringen als compacte JSON in de
+    // extraField "Reserveringen" van élk materiaal (co-located → snelle
+    // beschikbaarheid, geen wankele list-filters, één bron van waarheid).
+    // Statussen:
+    //   AANGEVRAAGD → GOEDGEKEURD (blokkeert datums) | GEWEIGERD | GEANNULEERD
+    //   GOEDGEKEURD → IN_GEBRUIK → TERUGGEBRACHT
+    // Enkel GOEDGEKEURD + IN_GEBRUIK blokkeren de beschikbaarheid.
+    // Levi maakt op /materials twee extraFields aan: "Uitleenbaar" (ja/nee) en
+    // "Reserveringen" (tekst/memo, door de app beheerd). "Type" (bestaand) =
+    // categorie. PUT = full-replace (zelfde patroon als _savePinToRobaws).
+    // ============================================================
+    MATERIEEL: {
+        RES_FIELD: 'Reserveringen',
+        LENDABLE_FIELD: 'Uitleenbaar',
+        TYPE_FIELD: 'Type',
+        GROUP: 'QE Werkbon app',
+        BLOCKING: ['GOEDGEKEURD', 'IN_GEBRUIK'],
+    },
+
+    /** Lees een extraField-waarde robuust (alle Robaws-varianten). */
+    _efValue(obj, fieldName) {
+        const ef = (obj && obj.extraFields) || {};
+        let f = ef[fieldName];
+        if (f === undefined) {
+            const low = String(fieldName).toLowerCase();
+            for (const k of Object.keys(ef)) { if (k.toLowerCase() === low) { f = ef[k]; break; } }
+        }
+        if (f == null) return null;
+        if (typeof f !== 'object') return f;
+        return (f.stringValue != null) ? f.stringValue
+            : (f.value != null) ? f.value
+            : (f.booleanValue != null) ? f.booleanValue
+            : (f.numberValue != null) ? f.numberValue
+            : (f.intValue != null) ? f.intValue : null;
+    },
+
+    /** Alle materialen (page-wrapper, ~26). offset-paginering met vangnet. */
+    async getMaterials(opts) {
+        const all = []; const SIZE = 100; let offset = 0;
+        for (let i = 0; i < 20; i++) {
+            const r = await this.get('materials?limit=' + SIZE + '&offset=' + offset, opts);
+            if (r.code !== 200) throw new Error('Materialen laden mislukt (' + r.code + ')');
+            const body = r.data || {};
+            const items = body.items || (Array.isArray(body) ? body : (body.data || []));
+            all.push(...items);
+            if (items.length < SIZE) break;
+            offset += SIZE;
+        }
+        return all;
+    },
+
+    async _getMaterieelFresh(materialId) {
+        const res = await this.get('materials/' + materialId, { bypassCache: true });
+        if (res.code !== 200 || !res.data) throw new Error('Materiaal niet gevonden (' + res.code + ')');
+        const body = res.data;
+        return (body && body.id != null) ? body : (body.data || body);
+    },
+
+    _materieelUitleenbaar(m) {
+        const v = this._efValue(m, this.MATERIEEL.LENDABLE_FIELD);
+        if (v === true) return true;
+        return /^(ja|true|1|yes|ok|x|✓|waar)$/i.test(String(v == null ? '' : v).trim());
+    },
+    _materieelCategorie(m) {
+        return this._efValue(m, this.MATERIEEL.TYPE_FIELD) || 'Overig';
+    },
+    /** Reserveringen-array uit de extraField-JSON (robuust; [] bij leeg/kapot). */
+    _materieelReserveringen(m) {
+        const raw = this._efValue(m, this.MATERIEEL.RES_FIELD);
+        if (!raw) return [];
+        try { const a = JSON.parse(String(raw)); return Array.isArray(a) ? a : []; }
+        catch (e) { console.warn('[Materieel] Reserveringen-JSON onleesbaar voor materiaal #' + (m && m.id)); return []; }
+    },
+
+    _resNewId() { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); },
+    _rangesOverlap(aFrom, aTo, bFrom, bTo) { return aFrom <= bTo && bFrom <= aTo; },
+
+    /** Botsende blokkerende reserveringen voor [from,to] (optioneel resId negeren). */
+    materieelConflicts(reserveringen, from, to, ignoreId) {
+        return (reserveringen || []).filter(r =>
+            r && String(r.id) !== String(ignoreId == null ? '' : ignoreId) &&
+            this.MATERIEEL.BLOCKING.indexOf(r.status) !== -1 &&
+            this._rangesOverlap(from, to, r.from, r.to));
+    },
+
+    /** Afgeleide beschikbaarheids-status van een materiaal op 'todayStr' (YYYY-MM-DD). */
+    materieelStatus(reserveringen, todayStr) {
+        const blocking = (reserveringen || []).filter(r => this.MATERIEEL.BLOCKING.indexOf(r.status) !== -1);
+        const active = blocking.find(r => r.from <= todayStr && todayStr <= r.to);
+        if (active) return { state: 'IN_GEBRUIK', res: active };
+        const upcoming = blocking.filter(r => r.from > todayStr).sort((a, b) => String(a.from).localeCompare(String(b.from)))[0];
+        if (upcoming) return { state: 'GERESERVEERD', res: upcoming };
+        return { state: 'BESCHIKBAAR', res: null };
+    },
+
+    // /materials-GET expandt relaties (article/supplier/assigned*/stockLocation/
+    // company/_metadata) die je NIET mag terugsturen bij een full-replace PUT.
+    // Schrijf-test bevestigd: opgeschoonde body → 204 + alle velden intact.
+    // Alleen de geëxpandeerde relatie-OBJECTEN + read-only audit-velden droppen.
+    // De scalaire spiegel-ids (articleId/supplierId/assignedEmployeeId/
+    // stockLocationId/…) BLIJVEN staan, zodat de koppelingen behouden blijven.
+    _MATERIEEL_PUT_DROP: ['article', 'supplier', 'assignedProject', 'assignedEmployee', 'assignedClient', 'assignedEndClient', 'assignedSubcontractor', 'stockLocation', 'company', '_metadata', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'logicId'],
+
+    /** Vervang de Reserveringen-extraField op een VERS opgehaald materiaal en PUT (opgeschoonde full-replace). */
+    async _putMaterieelReserveringen(mat, arr) {
+        const body = {};
+        const drop = this._MATERIEEL_PUT_DROP;
+        for (const k of Object.keys(mat)) { if (drop.indexOf(k) === -1) body[k] = mat[k]; }
+        body.extraFields = Object.assign({}, mat.extraFields || {});
+        body.extraFields[this.MATERIEEL.RES_FIELD] = {
+            type: 'TEXT',
+            group: this.MATERIEEL.GROUP,
+            stringValue: JSON.stringify(arr),
+        };
+        const put = await this.put('materials/' + mat.id, body);
+        if (put.code !== 200 && put.code !== 204) throw new Error('Opslaan mislukt (' + put.code + ')');
+        return arr;
+    },
+
+    /** Nieuwe reservering toevoegen (GET vers → append → PUT). */
+    async addMaterieelReservering(materialId, res) {
+        const mat = await this._getMaterieelFresh(materialId);
+        const arr = this._materieelReserveringen(mat);
+        arr.push(res);
+        await this._putMaterieelReserveringen(mat, arr);
+        return res;
+    },
+    /** Bestaande reservering patchen (beslissing/ophalen/terugbrengen/annuleren). */
+    async patchMaterieelReservering(materialId, resId, patch) {
+        const mat = await this._getMaterieelFresh(materialId);
+        const arr = this._materieelReserveringen(mat);
+        const i = arr.findIndex(r => String(r.id) === String(resId));
+        if (i === -1) throw new Error('Reservering niet gevonden');
+        arr[i] = Object.assign({}, arr[i], patch);
+        await this._putMaterieelReserveringen(mat, arr);
+        return arr[i];
+    },
+
+    /** Alle openstaande aanvragen (AANGEVRAAGD) over alle materialen — bureel-teller/lijst. */
+    async getMaterieelAanvragen() {
+        const mats = await this.getMaterials({ bypassCache: true });
+        const out = [];
+        for (const m of mats) {
+            for (const r of this._materieelReserveringen(m)) {
+                if (r && r.status === 'AANGEVRAAGD') {
+                    out.push(Object.assign({ materialId: m.id, materialName: m.name, brand: m.brand }, r));
+                }
+            }
+        }
+        return out.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     },
 
     async uploadFile(endpoint, file, fileName) {
