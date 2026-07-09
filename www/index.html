@@ -735,6 +735,12 @@
         </div>
     </div>
 
+    <!-- v278: Klok+Uren samengevoegd — knop naar het uren-overzicht -->
+    <button onclick="app.navigate('screenDagoverzicht')" style="width:100%;padding:14px 16px;margin-bottom:20px;border:1px solid var(--cb);border-radius:12px;background:var(--card);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:14px;font-weight:600;color:var(--ink)">Mijn uren bekijken</span>
+        <span style="color:var(--g1)">→</span>
+    </button>
+
     <!-- Mijn week (prototype "DEZE WEEK") -->
     <div style="font-size:12px;font-weight:600;color:var(--g1);letter-spacing:0.5px;border-bottom:2px solid var(--ink);padding-bottom:8px">DEZE WEEK</div>
     <div id="clockHistory" class="mb-16">
@@ -850,41 +856,78 @@
     </div>
 </div>
 
-<!-- ========== SCREEN: VERLOF AANVRAGEN (v276, self-service alle rollen) ========== -->
-<div class="screen" id="screenVerlof">
-    <div class="card" style="margin-bottom:16px;padding:16px">
-        <div style="font-size:13px;color:var(--g1);margin-bottom:14px;line-height:1.55">
-            Vraag verlof aan — je aanvraag gaat ter goedkeuring naar kantoor.
-            <b>Ben je ziek?</b> Meld dat via bericht; ziekte kan niet via de app.
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-            <div class="form-group" style="margin:0">
-                <label>Van</label>
-                <input type="date" id="verlofVan" class="form-input">
+<!-- ========== SCREEN: AANVRAGEN (v278 — hub met sub-pagina's) ========== -->
+<div class="screen" id="screenAanvragen">
+    <!-- Bureel: goedkeuren (teller = aantal wachtend op jou) -->
+    <div class="card mb-prowcard" id="aanvraagGoedkeurenCard" style="display:none;margin-bottom:14px;padding:4px 18px">
+        <div class="mb-prow" style="border-bottom:none" onclick="app.openGoedkeuren()">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Goedkeuren <span id="aanvraagGoedkeurenCount" class="mb-count" style="display:none">0</span></div>
+                <div class="mb-prow-s">Aanvragen die op jou wachten</div>
             </div>
-            <div class="form-group" style="margin:0">
-                <label>Tot en met</label>
-                <input type="date" id="verlofTot" class="form-input">
-            </div>
+            <span class="mb-prow-arrow">→</span>
         </div>
-        <div class="form-group">
-            <label>Opmerking (optioneel)</label>
-            <textarea id="verlofComment" class="form-input" rows="2" placeholder="Reden of extra info..."></textarea>
-        </div>
-        <div id="verlofError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:8px;display:none"></div>
-        <button class="btn btn-primary btn-full" id="btnVerlofSubmit" onclick="app.submitVerlofRequest()">Verlof aanvragen</button>
     </div>
-    <div class="section-header"><h2>Mijn aanvragen</h2></div>
-    <div id="verlofList"><div class="spinner"></div></div>
+
+    <div class="mb-subtabs" id="aanvraagSubtabs">
+        <button class="mb-subtab active" data-atab="verlof" onclick="app.setAanvraagTab('verlof')">Verlof</button>
+        <button class="mb-subtab" data-atab="materiaal" onclick="app.setAanvraagTab('materiaal')">Materiaal</button>
+        <button class="mb-subtab" data-atab="materieel" onclick="app.setAanvraagTab('materieel')">Materieel</button>
+    </div>
+
+    <!-- VERLOF -->
+    <div class="aanvraag-panel" id="aanvraagVerlof">
+        <div id="verlofBudgetBox" style="margin-bottom:14px"></div>
+        <div class="card" style="margin-bottom:16px;padding:16px">
+            <div style="font-size:13px;color:var(--g1);margin-bottom:14px;line-height:1.55">
+                Vraag verlof aan — je aanvraag gaat ter goedkeuring naar kantoor.
+                <b>Ben je ziek?</b> Meld dat via bericht; ziekte kan niet via de app.
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                <div class="form-group" style="margin:0"><label>Van</label><input type="date" id="verlofVan" class="form-input"></div>
+                <div class="form-group" style="margin:0"><label>Tot en met</label><input type="date" id="verlofTot" class="form-input"></div>
+            </div>
+            <div class="form-group"><label>Opmerking (optioneel)</label><textarea id="verlofComment" class="form-input" rows="2" placeholder="Reden of extra info..."></textarea></div>
+            <div id="verlofError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:8px;display:none"></div>
+            <button class="btn btn-primary btn-full" id="btnVerlofSubmit" onclick="app.submitVerlofRequest()">Verlof aanvragen</button>
+        </div>
+        <div class="section-header"><h2>Mijn aanvragen</h2></div>
+        <div id="verlofList"><div class="spinner"></div></div>
+    </div>
+
+    <!-- MATERIAAL (placeholder) -->
+    <div class="aanvraag-panel" id="aanvraagMateriaal" style="display:none">
+        <div class="mb-placeholder">Materiaal-aanvragen komen hier — binnenkort beschikbaar.</div>
+    </div>
+    <!-- MATERIEEL (placeholder — later verhuurbonnen) -->
+    <div class="aanvraag-panel" id="aanvraagMaterieel" style="display:none">
+        <div class="mb-placeholder">Materieel &amp; verhuur komen hier — binnenkort beschikbaar.</div>
+    </div>
 </div>
 
-<!-- ========== SCREEN: VERLOF GOEDKEUREN (v277, bureel) ========== -->
-<div class="screen" id="screenVerlofBeheer">
-    <div style="font-size:13px;color:var(--g1);margin:0 0 14px;line-height:1.5">
-        Openstaande verlofaanvragen van je team. Goedkeuren of weigeren stuurt
-        de beslissing meteen naar Robaws.
+<!-- ========== SCREEN: VERLOF DETAIL + CHAT (v278) ========== -->
+<div class="screen" id="screenVerlofDetail">
+    <div id="verlofDetailHead" style="margin-bottom:16px"></div>
+    <div class="section-header"><h2>Communicatie</h2></div>
+    <div id="verlofChatList" style="margin-bottom:12px"><div class="spinner"></div></div>
+    <div style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="verlofChatInput" class="form-input" rows="1" placeholder="Typ een bericht..." style="flex:1;resize:none"></textarea>
+        <button class="btn btn-primary" id="btnVerlofChatSend" onclick="app.sendVerlofComment()">Stuur</button>
     </div>
-    <div id="verlofBeheerList"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: GOEDKEUREN HUB (v278, bureel) ========== -->
+<div class="screen" id="screenGoedkeuren">
+    <div class="mb-subtabs" id="goedkeurSubtabs">
+        <button class="mb-subtab active" data-gtab="verlof" onclick="app.setGoedkeurTab('verlof')">Verlof <span id="goedkeurVerlofCount" class="mb-count" style="display:none">0</span></button>
+        <button class="mb-subtab" data-gtab="facturen" onclick="app.setGoedkeurTab('facturen')">Facturen <span id="goedkeurFactuurCount" class="mb-count" style="display:none">0</span></button>
+    </div>
+    <div class="goedkeur-panel" id="goedkeurVerlof">
+        <div id="verlofBeheerList"><div class="spinner"></div></div>
+    </div>
+    <div class="goedkeur-panel" id="goedkeurFacturen" style="display:none">
+        <div id="factuurBeheerList"><div class="spinner"></div></div>
+    </div>
 </div>
 
 <!-- ========== SCREEN: PROFIEL ========== -->
@@ -933,27 +976,7 @@
         </label>
     </div>
 
-    <!-- v276: Verlof aanvragen (self-service, alle rollen) -->
-    <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
-        <div class="mb-prow" style="border-bottom:none" onclick="app.openVerlof()">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Verlof aanvragen</div>
-                <div class="mb-prow-s">Dien een verlofaanvraag in — ziekte via bericht</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-    </div>
-
-    <!-- v277: Verlof goedkeuren (alleen bureel) -->
-    <div class="card mb-prowcard" id="verlofBeheerCard" style="margin-bottom:14px;display:none;padding:4px 18px">
-        <div class="mb-prow" style="border-bottom:none" onclick="app.openVerlofBeheer()">
-            <div style="flex:1;min-width:0">
-                <div class="mb-prow-t">Verlof goedkeuren <span id="verlofBeheerCount" style="display:none;font-size:11px;font-weight:700;color:#fff;background:var(--accent,#F99D3E);border-radius:10px;padding:1px 7px;margin-left:6px">0</span></div>
-                <div class="mb-prow-s">Openstaande verlofaanvragen van het team</div>
-            </div>
-            <span class="mb-prow-arrow">→</span>
-        </div>
-    </div>
+    <!-- v278: verlof-aanvragen/-goedkeuren verhuisd naar de 'Aanvragen'-tab -->
 
     <!-- v117: Rol-switcher (alleen voor bureel + technieker, monteurs zien dit niet)
          Marble 1:1: rij met de select rechts (prototype "Actieve rol") -->
@@ -1153,17 +1176,17 @@
         </svg>
         Klok
     </button>
-    <button class="nav-item" data-screen="screenDagoverzicht" onclick="app.navigate('screenDagoverzicht')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-        </svg>
-        Uren
-    </button>
     <button class="nav-item" data-screen="screenUitgevoerd" onclick="app.navigate('screenUitgevoerd')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
         Klaar
+    </button>
+    <button class="nav-item" data-screen="screenAanvragen" onclick="app.navigate('screenAanvragen')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 5h16M4 12h16M4 19h10"/><circle cx="19" cy="19" r="2"/>
+        </svg>
+        Aanvragen
     </button>
 </nav>
 

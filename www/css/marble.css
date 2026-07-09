@@ -921,6 +921,33 @@ body.dark-mode #clockHeroCard { background: var(--card); }
 #kmPromptModal #kmPromptSubmit { font-family: var(--font); }
 #kmPromptModal > div > div:last-child { padding-bottom: calc(20px + var(--safe-bottom, 0px)) !important; }
 
+/* --- v278: Aanvragen-tab — sub-tabs, tellers, placeholder --- */
+.mb-subtabs {
+    display: flex; gap: 6px; margin-bottom: 16px;
+    border-bottom: 1px solid var(--l1); padding-bottom: 0;
+}
+.mb-subtab {
+    background: none; border: none; cursor: pointer;
+    padding: 6px 2px 11px; margin-right: 14px;
+    font: 600 14px var(--font); color: var(--g3);
+    position: relative;
+}
+.mb-subtab.active { color: var(--ink); }
+.mb-subtab.active::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -1px;
+    height: 2px; background: var(--accent);
+}
+.mb-count {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--accent); border-radius: 10px;
+    padding: 1px 7px; margin-left: 4px; vertical-align: 1px;
+}
+.mb-placeholder {
+    text-align: center; color: var(--g1); font-size: 13.5px;
+    padding: 40px 24px; line-height: 1.6;
+    border: 1px dashed var(--b2); border-radius: 14px; background: var(--wash);
+}
+
 /* --- aanpassing-aanvraag: reden-rijen selecteren in ink (motor zet paars;
        deze overrides winnen van de inline JS-styles) — prototype reqReasons --- */
 #aanpassingRedenen .aanp-reden { border-color: var(--cb) !important; background: var(--card); }

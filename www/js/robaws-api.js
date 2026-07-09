@@ -334,7 +334,7 @@ const RobawsAPI = {
             }
             totalPages = (body.totalPages != null) ? body.totalPages : 1;
             page++;
-            if (items.length < SIZE || added === 0) break;   // klaar, of page-param genegeerd
+            if (added === 0) break;   // enkel stoppen bij een genegeerde page-param; page<totalPages bepaalt het echte einde (server kan size lager cappen)   // klaar, of page-param genegeerd
         }
         return all
             .filter(x => String(x.employeeId) === String(employeeId))
@@ -379,8 +379,10 @@ const RobawsAPI = {
     // POST /approval-requests/{approvalId}/accept|reject (body {reason}) —
     // dat zet de verlofstatus (bevestigd: reject -> REJECTED). NIET via PATCH
     // status (dat wordt genegeerd) en time-off zit niet in de status-PATCH.
-    /** Openstaande verlof-goedkeuringen (bureel), verrijkt met de aanvraag. */
-    async getPendingLeaveApprovals() {
+    /** Openstaande verlof-goedkeuringen (bureel), verrijkt met de aanvraag.
+     *  excludeEmployeeId: sluit de eigen aanvragen uit (vier-ogen — je keurt
+     *  je eigen verlof niet goed; voorkomt ook een vastlopende 4xx). */
+    async getPendingLeaveApprovals(excludeEmployeeId) {
         const all = [];
         const seen = new Set();
         const SIZE = 100, MAX_PAGES = 20;
@@ -394,7 +396,7 @@ const RobawsAPI = {
             for (const a of items) { const id = String(a.id); if (seen.has(id)) continue; seen.add(id); all.push(a); added++; }
             totalPages = (body.totalPages != null) ? body.totalPages : 1;
             page++;
-            if (items.length < SIZE || added === 0) break;
+            if (added === 0) break;   // enkel stoppen bij een genegeerde page-param; page<totalPages bepaalt het echte einde (server kan size lager cappen)
         }
         const timeOff = all.filter(a => /^\/time-off-requests\/\d+/.test(a.resourceUnderApprovalRef || ''));
         const out = [];
@@ -406,6 +408,7 @@ const RobawsAPI = {
                 if (g.code === 200) tor = g.data;
             } catch (e) { /* aanvraag kon niet geladen worden — overslaan */ }
             if (tor && (tor.status === 'SUBMITTED' || tor.status === 'WAITING')) {
+                if (excludeEmployeeId != null && String(tor.employeeId) === String(excludeEmployeeId)) continue;
                 out.push({ approvalId: String(a.id), torId: torId, request: tor });
             }
         }
@@ -421,6 +424,80 @@ const RobawsAPI = {
             throw new Error('Robaws gaf status ' + res.code);
         }
         return true;
+    },
+
+    // v278 (Aanvragen-tab): verlofsaldo + chat + factuur-goedkeuringen.
+    /** Verlofbudget (uren/jaar) van een werknemer. Robaws exposeert geen apart
+     *  budget-endpoint; we lezen een extraField met 'verlofbudget'/'verlofuren'
+     *  in de naam van de fiche. Retourneert een getal (uren) of null. */
+    async getEmployeeVerlofBudget(employeeId) {
+        try {
+            const r = await this.get('employees/' + employeeId, { bypassCache: true });
+            const d = r.data || {};
+            const ef = d.extraFields || {};
+            for (const name of Object.keys(ef)) {
+                if (/verlof.?budget|verlof.?uren/i.test(name)) {
+                    const fld = ef[name] || {};
+                    const v = (fld.numberValue != null ? fld.numberValue
+                        : fld.intValue != null ? fld.intValue
+                        : fld.stringValue != null ? fld.stringValue : fld.value);
+                    const n = parseFloat(String(v == null ? '' : v).replace(',', '.'));
+                    if (!isNaN(n)) return n;
+                }
+            }
+        } catch (e) { console.warn('[Verlof] budget lezen faalde:', e && e.message); }
+        return null;
+    },
+
+    /** Gebruikte verlofuren in een jaar (som van GOEDGEKEURDE aanvragen). */
+    async getVerlofUsedHours(employeeId, year) {
+        const yr = year || new Date().getFullYear();
+        let used = 0;
+        try {
+            const reqs = await this.getMyTimeOffRequests(employeeId);
+            for (const r of reqs) {
+                if (String(r.status || '').toUpperCase() !== 'APPROVED') continue;
+                if (new Date(r.fromDate).getFullYear() !== yr) continue;
+                used += (parseFloat(r.durationInMinutes || 0) || 0) / 60;
+            }
+        } catch (e) { console.warn('[Verlof] gebruik berekenen faalde:', e && e.message); }
+        return Math.round(used * 100) / 100;
+    },
+
+    /** Chat/commentaar van een verlofaanvraag (oudste eerst). */
+    async getTimeOffComments(torId) {
+        const r = await this.get('time-off-requests/' + torId + '/comments?include=author', { bypassCache: true });
+        const arr = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || []);
+        return arr.slice().sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    },
+
+    /** Voeg een comment toe aan een verlofaanvraag (authorId = Robaws userId). */
+    async postTimeOffComment(torId, content, authorId) {
+        const body = { content: String(content) };
+        if (authorId != null) body.authorId = String(authorId);
+        const res = await this.post('time-off-requests/' + torId + '/comments', body);
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return res.data;
+    },
+
+    /** Openstaande factuur-goedkeuringen (aankoopfacturen) — voor teller + lijst. */
+    async getPurchaseInvoiceApprovals() {
+        const all = [];
+        const seen = new Set();
+        const SIZE = 100, MAX_PAGES = 20;
+        let page = 0, totalPages = 1;
+        while (page < totalPages && page < MAX_PAGES) {
+            const r = await this.get('approval-requests?open=true&page=' + page + '&size=' + SIZE, { bypassCache: true });
+            if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+            const body = r.data || {};
+            const items = body.items || [];
+            let added = 0;
+            for (const a of items) { const id = String(a.id); if (seen.has(id)) continue; seen.add(id); all.push(a); added++; }
+            totalPages = (body.totalPages != null) ? body.totalPages : 1;
+            page++;
+            if (added === 0) break;
+        }
+        return all.filter(a => /^\/purchase-invoices\/\d+/.test(a.resourceUnderApprovalRef || ''));
     },
 
     async uploadFile(endpoint, file, fileName) {

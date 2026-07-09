@@ -49,8 +49,9 @@
         screenAdmin:       { sub: 'Werknemers beheren via Robaws', title: 'Beheer' },
         screenUrenAnalyse: { sub: 'Alle werknemers', title: 'Uren-analyse' },
         screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
-        screenVerlof:      { sub: 'Aanvragen & status', title: 'Verlof' },
-        screenVerlofBeheer:{ sub: 'Openstaande aanvragen', title: 'Verlof goedkeuren' }
+        screenAanvragen:   { sub: 'Verlof · Materiaal · Materieel', title: 'Aanvragen' },
+        screenVerlofDetail:{ sub: 'Details & communicatie', title: 'Verlofaanvraag' },
+        screenGoedkeuren:  { sub: 'Verlof · Facturen', title: 'Goedkeuren' }
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
     };

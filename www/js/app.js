@@ -758,14 +758,7 @@ const app = {
             adminCard.style.display = (_u && _u.role === 'bureel') ? 'block' : 'none';
         }
 
-        // v277: Verlof-goedkeuren enkel voor bureel + openstaande teller laden
-        const vbCard = document.getElementById('verlofBeheerCard');
-        if (vbCard) {
-            const _ub = RobawsAPI.getLoggedInUser();
-            const _isBureel = _ub && _ub.role === 'bureel';
-            vbCard.style.display = _isBureel ? 'block' : 'none';
-            if (_isBureel) this._refreshVerlofBeheerCount();
-        }
+        // v278: verlof-goedkeuren-ingang verhuisd naar de Aanvragen-tab
 
         // v247: Uren-analyse enkel voor geselecteerd bureel (Levi & Vince)
         const uaCard = document.getElementById('urenAnalyseCard');
@@ -1693,8 +1686,9 @@ const app = {
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
-            screenVerlof: 'Verlof aanvragen',  // v276
-            screenVerlofBeheer: 'Verlof goedkeuren',  // v277
+            screenAanvragen: 'Aanvragen',  // v278
+            screenVerlofDetail: 'Verlofaanvraag',  // v278
+            screenGoedkeuren: 'Goedkeuren',  // v278
             screenAdmin: 'Beheer',  // v233
             screenUrenAnalyse: 'Uren-analyse',  // v247
         };
@@ -1715,8 +1709,8 @@ const app = {
         if (screenId === 'screenClock') this.onNavigateToClock();
         if (screenId === 'screenAdmin') this.loadAdmin();
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
-        if (screenId === 'screenVerlof') this.loadMyVerlof();  // v276
-        if (screenId === 'screenVerlofBeheer') this.loadVerlofApprovals();  // v277
+        if (screenId === 'screenAanvragen') this.openAanvragenTab();  // v278
+        if (screenId === 'screenGoedkeuren') this.loadGoedkeuren();  // v278
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -8262,8 +8256,6 @@ const app = {
     // De aanvraag wordt meteen ingediend ter goedkeuring (Fase 2 = bureel
     // keurt goed). Robaws berekent zelf de uren uit het uurrooster.
     // ============================================================
-    openVerlof() { this.navigate('screenVerlof'); },
-
     async loadMyVerlof() {
         const van = document.getElementById('verlofVan');
         const tot = document.getElementById('verlofTot');
@@ -8277,15 +8269,17 @@ const app = {
         try {
             const reqs = await RobawsAPI.getMyTimeOffRequests(empId);
             if (!reqs.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen aanvragen.</p>'; return; }
+            this._verlofReqCache = {};
             list.innerHTML = reqs.map(r => {
+                this._verlofReqCache[String(r.id)] = r;
                 const st = this._verlofStatus(r.status);
                 const periode = this._verlofPeriode(r.fromDate, r.toDate);
                 const dur = (r.durationInMinutes != null) ? (' · ' + (Math.round(r.durationInMinutes / 60 * 100) / 100) + ' u') : '';
                 const cat = (r.timeOffCategory && r.timeOffCategory.name) || 'Verlof';
-                return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:1px solid var(--l2,#eee)">
+                return `<div onclick="app.openVerlofDetail('${this._escapeJsArg(String(r.id))}')" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:1px solid var(--l2,#eee);cursor:pointer">
                     <div style="min-width:0">
                         <div style="font-size:14px;font-weight:600">${this.escapeHtml(periode)}</div>
-                        <div style="font-size:12px;color:var(--qe-grey)">${this.escapeHtml(cat)}${dur}</div>
+                        <div style="font-size:12px;color:var(--qe-grey)">${this.escapeHtml(cat)}${dur} · tik voor details</div>
                     </div>
                     <span style="font-size:11.5px;font-weight:600;color:${st.color};background:${st.bg};border:1px solid ${st.border};border-radius:12px;padding:3px 10px;white-space:nowrap">${st.label}</span>
                 </div>`;
@@ -8352,22 +8346,6 @@ const app = {
     // v277 (Fase 2): VERLOF GOEDKEUREN (bureel). Openstaande aanvragen
     // goedkeuren/weigeren via de approval-request (accept/reject).
     // ============================================================
-    openVerlofBeheer() {
-        const u = RobawsAPI.getLoggedInUser();
-        if (!u || u.role !== 'bureel') { this.toast('Alleen bureel kan verlof goedkeuren', true); return; }
-        this.navigate('screenVerlofBeheer');
-    },
-
-    async _refreshVerlofBeheerCount() {
-        const badge = document.getElementById('verlofBeheerCount');
-        if (!badge) return;
-        try {
-            const list = await RobawsAPI.getPendingLeaveApprovals();
-            if (list.length > 0) { badge.textContent = String(list.length); badge.style.display = ''; }
-            else { badge.style.display = 'none'; }
-        } catch (e) { badge.style.display = 'none'; }
-    },
-
     async loadVerlofApprovals() {
         const u = RobawsAPI.getLoggedInUser();
         const list = document.getElementById('verlofBeheerList');
@@ -8375,7 +8353,7 @@ const app = {
         if (!u || u.role !== 'bureel') { list.innerHTML = '<p class="text-grey text-sm text-center">Alleen bureel.</p>'; return; }
         list.innerHTML = '<div class="spinner"></div>';
         try {
-            const items = await RobawsAPI.getPendingLeaveApprovals();
+            const items = await RobawsAPI.getPendingLeaveApprovals(this.currentUser && this.currentUser.robawsEmployeeId);
             this._verlofApprovalCache = {};
             if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande verlofaanvragen.</p>'; return; }
             list.innerHTML = items.map(it => {
@@ -8417,11 +8395,222 @@ const app = {
             await RobawsAPI.decideLeaveApproval(approvalId, approve, '');
             this.toast(approve ? 'Verlof goedgekeurd' : 'Verlof geweigerd');
             await this.loadVerlofApprovals();
-            this._refreshVerlofBeheerCount();
+            this._refreshGoedkeurTabCounts();
+            this._refreshAanvraagGoedkeurCount();
         } catch (e) {
             this.toast('Mislukt: ' + (e.message || '?'), true);
         } finally {
             this._verlofDecideBusy = false;
+        }
+    },
+
+    // ============================================================
+    // v278: AANVRAGEN-tab (hub: Verlof / Materiaal / Materieel) +
+    // verlofsaldo + chat op een aanvraag + goedkeur-hub (Verlof/Facturen).
+    // ============================================================
+    _aanvraagTab: 'verlof',
+    openAanvragenTab() {
+        const u = RobawsAPI.getLoggedInUser();
+        const card = document.getElementById('aanvraagGoedkeurenCard');
+        const isBureel = u && u.role === 'bureel';
+        if (card) card.style.display = isBureel ? 'block' : 'none';
+        if (isBureel) this._refreshAanvraagGoedkeurCount();
+        this.setAanvraagTab(this._aanvraagTab || 'verlof');
+    },
+
+    setAanvraagTab(tab) {
+        this._aanvraagTab = tab;
+        document.querySelectorAll('#aanvraagSubtabs .mb-subtab').forEach(b =>
+            b.classList.toggle('active', b.dataset.atab === tab));
+        [['verlof', 'aanvraagVerlof'], ['materiaal', 'aanvraagMateriaal'], ['materieel', 'aanvraagMaterieel']].forEach(([t, id]) => {
+            const p = document.getElementById(id);
+            if (p) p.style.display = (t === tab) ? 'block' : 'none';
+        });
+        if (tab === 'verlof') { this._renderVerlofBudget(); this.loadMyVerlof(); }
+    },
+
+    async _refreshAanvraagGoedkeurCount() {
+        const badge = document.getElementById('aanvraagGoedkeurenCount');
+        if (!badge) return;
+        try {
+            const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+            const [verlof, fact] = await Promise.all([
+                RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
+                RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+            ]);
+            const n = (verlof.length || 0) + (fact.length || 0);
+            if (n > 0) { badge.textContent = String(n); badge.style.display = ''; } else badge.style.display = 'none';
+        } catch (e) { badge.style.display = 'none'; }
+    },
+
+    async _renderVerlofBudget() {
+        const box = document.getElementById('verlofBudgetBox');
+        if (!box) return;
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) { box.innerHTML = ''; return; }
+        try {
+            const [budget, used] = await Promise.all([
+                RobawsAPI.getEmployeeVerlofBudget(empId).catch(() => null),
+                RobawsAPI.getVerlofUsedHours(empId).catch(() => 0),
+            ]);
+            const jaar = new Date().getFullYear();
+            if (budget != null) {
+                const rest = Math.round((budget - used) * 100) / 100;
+                box.innerHTML = `<div class="card" style="padding:16px;display:flex;justify-content:space-between;align-items:center">
+                    <div><div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)">${rest} u</div><div style="font-size:11px;font-weight:600;color:var(--g1);letter-spacing:0.5px">RESTEREND ${jaar}</div></div>
+                    <div style="text-align:right;font-size:12.5px;color:var(--g1)">${used} u gebruikt<br>van ${budget} u</div>
+                </div>`;
+            } else {
+                box.innerHTML = `<div class="card" style="padding:16px;display:flex;justify-content:space-between;align-items:center">
+                    <div><div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--ink)">${used} u</div><div style="font-size:11px;font-weight:600;color:var(--g1);letter-spacing:0.5px">GEBRUIKT ${jaar}</div></div>
+                    <div style="text-align:right;font-size:11px;color:var(--g1);max-width:50%">Jaartotaal niet ingesteld in Robaws</div>
+                </div>`;
+            }
+        } catch (e) { box.innerHTML = ''; }
+    },
+
+    // --- detail + chat ---
+    openVerlofDetail(torId) {
+        this._verlofDetailTorId = String(torId);
+        const r = (this._verlofReqCache || {})[String(torId)];
+        this.navigate('screenVerlofDetail');
+        const head = document.getElementById('verlofDetailHead');
+        if (head) {
+            if (r) {
+                const st = this._verlofStatus(r.status);
+                head.innerHTML = `<div class="card" style="padding:16px">
+                    <div style="font-size:16px;font-weight:600">${this.escapeHtml((r.timeOffCategory && r.timeOffCategory.name) || 'Verlof')}</div>
+                    <div style="font-size:13px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(this._verlofPeriode(r.fromDate, r.toDate))}</div>
+                    <span style="display:inline-block;margin-top:8px;font-size:11.5px;font-weight:600;color:${st.color};background:${st.bg};border:1px solid ${st.border};border-radius:12px;padding:3px 10px">${st.label}</span>
+                </div>`;
+            } else { head.innerHTML = ''; }
+        }
+        this.loadVerlofChat();
+    },
+
+    async loadVerlofChat() {
+        const torId = this._verlofDetailTorId;
+        const list = document.getElementById('verlofChatList');
+        if (!list || !torId) return;
+        list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const comments = await RobawsAPI.getTimeOffComments(torId);
+            if (!comments.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen berichten.</p>'; return; }
+            const myUserId = String(this._myRobawsUserId() || '');
+            list.innerHTML = comments.map(c => {
+                const mine = myUserId && String(c.authorId) === myUserId;
+                const who = (c.author && (c.author.name || c.author.fullName)) || ('Gebruiker ' + (c.authorId || '?'));
+                return `<div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin-bottom:8px">
+                    <div style="max-width:82%;padding:10px 13px;border-radius:12px;background:${mine ? 'var(--wash,#eee)' : 'var(--card,#fff)'};border:1px solid var(--cb,#e5e5e5)">
+                        <div style="font-size:11px;color:var(--qe-grey);margin-bottom:3px">${this.escapeHtml(who)} · ${this._verlofChatTime(c.createdAt)}</div>
+                        <div style="font-size:13.5px;white-space:pre-wrap">${this.escapeHtml(c.content || '')}</div>
+                    </div>
+                </div>`;
+            }).join('');
+            list.scrollTop = list.scrollHeight;
+        } catch (e) {
+            list.innerHTML = `<p class="text-grey text-sm text-center">Berichten laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    _verlofChatTime(iso) {
+        try {
+            const d = new Date(iso);
+            return d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' ' +
+                d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+        } catch (e) { return ''; }
+    },
+
+    _myRobawsUserId() {
+        const u = this.currentUser || {};
+        if (u.robawsUserId) return u.robawsUserId;
+        if (u.userId) return u.userId;
+        try { const e = (RobawsAPI.EMPLOYEES || {})[String(u.email || '').toLowerCase()]; if (e && e.userId) return e.userId; } catch (_) {}
+        return null;
+    },
+
+    async sendVerlofComment() {
+        const torId = this._verlofDetailTorId;
+        const input = document.getElementById('verlofChatInput');
+        const btn = document.getElementById('btnVerlofChatSend');
+        if (!torId || !input) return;
+        const txt = (input.value || '').trim();
+        if (!txt) return;
+        if (this._verlofChatBusy) return;
+        this._verlofChatBusy = true;
+        if (btn) btn.disabled = true;
+        try {
+            await RobawsAPI.postTimeOffComment(torId, txt, this._myRobawsUserId());
+            input.value = '';
+            await this.loadVerlofChat();
+        } catch (e) {
+            this.toast('Versturen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._verlofChatBusy = false;
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    // --- goedkeur-hub (bureel): Verlof / Facturen ---
+    _goedkeurTab: 'verlof',
+    openGoedkeuren() {
+        const u = RobawsAPI.getLoggedInUser();
+        if (!u || u.role !== 'bureel') { this.toast('Alleen bureel kan goedkeuren', true); return; }
+        this.navigate('screenGoedkeuren');
+    },
+
+    loadGoedkeuren() {
+        const u = RobawsAPI.getLoggedInUser();
+        if (!u || u.role !== 'bureel') { this.navigate('screenAanvragen'); return; }
+        this.setGoedkeurTab(this._goedkeurTab || 'verlof');
+    },
+
+    setGoedkeurTab(tab) {
+        this._goedkeurTab = tab;
+        document.querySelectorAll('#goedkeurSubtabs .mb-subtab').forEach(b =>
+            b.classList.toggle('active', b.dataset.gtab === tab));
+        const vp = document.getElementById('goedkeurVerlof'); if (vp) vp.style.display = (tab === 'verlof') ? 'block' : 'none';
+        const fp = document.getElementById('goedkeurFacturen'); if (fp) fp.style.display = (tab === 'facturen') ? 'block' : 'none';
+        if (tab === 'verlof') this.loadVerlofApprovals();
+        else this.loadFactuurApprovals();
+        this._refreshGoedkeurTabCounts();
+    },
+
+    async _refreshGoedkeurTabCounts() {
+        try {
+            const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+            const [v, f] = await Promise.all([
+                RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
+                RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+            ]);
+            const setB = (id, n) => { const b = document.getElementById(id); if (b) { if (n > 0) { b.textContent = String(n); b.style.display = ''; } else b.style.display = 'none'; } };
+            setB('goedkeurVerlofCount', v.length);
+            setB('goedkeurFactuurCount', f.length);
+        } catch (e) { /* tellers zijn niet kritisch */ }
+    },
+
+    async loadFactuurApprovals() {
+        const list = document.getElementById('factuurBeheerList');
+        if (!list) return;
+        list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const items = await RobawsAPI.getPurchaseInvoiceApprovals();
+            if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande factuur-goedkeuringen.</p>'; return; }
+            list.innerHTML = items.map(a => {
+                const nr = a.invoiceNumber || a.logicId || (a.resourceUnderApprovalRef || '');
+                const bedrag = (a.totalVatIncl != null) ? ('€ ' + Number(a.totalVatIncl).toFixed(2)) : '';
+                const sup = (a.supplier && a.supplier.name) || (a.supplierId ? ('Leverancier ' + a.supplierId) : '');
+                return `<div class="card" style="margin-bottom:10px;padding:14px 16px">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+                        <span style="font-size:14.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(String(nr))}</span>
+                        <span style="font-size:14px;font-weight:600;flex-shrink:0">${bedrag}</span>
+                    </div>
+                    <div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(sup)}${a.date ? ' · ' + this.escapeHtml(String(a.date)) : ''}</div>
+                    <div style="font-size:11.5px;color:var(--qe-grey);margin-top:8px;font-style:italic">Goedkeuren van facturen in de app komt binnenkort.</div>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            list.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
         }
     },
 
