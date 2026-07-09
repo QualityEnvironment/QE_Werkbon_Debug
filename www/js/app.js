@@ -9186,15 +9186,28 @@ const app = {
     async searchProjectPicker(q) {
         const box = document.getElementById('projPickResults');
         if (!box) return;
-        box.innerHTML = '<div class="spinner"></div>';
+        box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px;text-align:center">Zoeken…</div>';
+        const token = (this._projPickToken = (this._projPickToken || 0) + 1);
         try {
-            const list = await RobawsAPI.searchProjects(q, 30);
-            if (!list.length) { box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:8px">Geen projecten gevonden.</div>'; return; }
-            box.innerHTML = list.map(p =>
+            if (typeof RobawsAPI === 'undefined' || typeof RobawsAPI.searchProjects !== 'function') throw new Error('zoekfunctie ontbreekt — app bijwerken');
+            const list = await Promise.race([
+                RobawsAPI.searchProjects(q, 30),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('duurt te lang')), 15000))
+            ]);
+            if (token !== this._projPickToken) return;
+            const b = document.getElementById('projPickResults');
+            if (!b) return;
+            if (!list || !list.length) {
+                b.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px">Geen projecten gevonden' + (q ? (' voor "' + this.escapeHtml(q) + '"') : '') + '.</div>';
+                return;
+            }
+            b.innerHTML = list.map(p =>
                 `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left" onclick="app.pickProject('${this._escapeJsArg(p.id)}','${this._escapeJsArg((p.logicId + ' ' + p.name).trim())}')">${this.escapeHtml((p.logicId + ' — ' + p.name).trim())}</button>`
             ).join('');
         } catch (e) {
-            box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-red,#B4372F);padding:8px">Zoeken mislukt.</div>';
+            if (token !== this._projPickToken) return;
+            const b = document.getElementById('projPickResults');
+            if (b) b.innerHTML = '<div style="font-size:12px;color:var(--qe-red,#B4372F);padding:12px">Zoeken mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
         }
     },
 

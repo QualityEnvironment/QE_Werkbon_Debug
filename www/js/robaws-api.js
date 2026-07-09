@@ -624,9 +624,11 @@ const RobawsAPI = {
     /** Projecten zoeken voor de toewijs-picker (searchText + lokale filter). */
     async searchProjects(query, limit) {
         const q = query ? ('&searchText=' + encodeURIComponent(query)) : '';
-        const r = await this.get('projects?page=0&size=' + (limit || 25) + q, { bypassCache: false });
-        if (r.code !== 200) return [];
-        const out = ((r.data && r.data.items) || []).map(p => ({ id: String(p.id), logicId: p.logicId || '', name: p.planningName || p.name || '' }));
+        const r = await this.get('projects?page=0&size=' + (limit || 25) + q, { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        const data = r.data || {};
+        const items = data.items || (Array.isArray(data) ? data : []);
+        const out = items.map(p => ({ id: String(p.id), logicId: p.logicId || '', name: p.planningName || p.name || p.title || '' }));
         if (query) {
             const ql = query.toLowerCase();
             const f = out.filter(p => (p.logicId + ' ' + p.name).toLowerCase().indexOf(ql) !== -1);
