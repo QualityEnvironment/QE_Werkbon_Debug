@@ -373,6 +373,56 @@ const RobawsAPI = {
         return created;
     },
 
+    // v277 (Fase 2): VERLOF GOEDKEUREN (bureel). Een ingediende verlofaanvraag
+    // genereert een approval-request met resourceUnderApprovalRef =
+    // /time-off-requests/{id}. Goedkeuren/weigeren gaat via
+    // POST /approval-requests/{approvalId}/accept|reject (body {reason}) —
+    // dat zet de verlofstatus (bevestigd: reject -> REJECTED). NIET via PATCH
+    // status (dat wordt genegeerd) en time-off zit niet in de status-PATCH.
+    /** Openstaande verlof-goedkeuringen (bureel), verrijkt met de aanvraag. */
+    async getPendingLeaveApprovals() {
+        const all = [];
+        const seen = new Set();
+        const SIZE = 100, MAX_PAGES = 20;
+        let page = 0, totalPages = 1;
+        while (page < totalPages && page < MAX_PAGES) {
+            const r = await this.get('approval-requests?open=true&page=' + page + '&size=' + SIZE, { bypassCache: true });
+            if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+            const body = r.data || {};
+            const items = body.items || [];
+            let added = 0;
+            for (const a of items) { const id = String(a.id); if (seen.has(id)) continue; seen.add(id); all.push(a); added++; }
+            totalPages = (body.totalPages != null) ? body.totalPages : 1;
+            page++;
+            if (items.length < SIZE || added === 0) break;
+        }
+        const timeOff = all.filter(a => /^\/time-off-requests\/\d+/.test(a.resourceUnderApprovalRef || ''));
+        const out = [];
+        for (const a of timeOff) {
+            const torId = String(a.resourceUnderApprovalRef).split('/').pop();
+            let tor = null;
+            try {
+                const g = await this.get('time-off-requests/' + torId + '?include=timeOffCategory,employee', { bypassCache: true });
+                if (g.code === 200) tor = g.data;
+            } catch (e) { /* aanvraag kon niet geladen worden — overslaan */ }
+            if (tor && (tor.status === 'SUBMITTED' || tor.status === 'WAITING')) {
+                out.push({ approvalId: String(a.id), torId: torId, request: tor });
+            }
+        }
+        out.sort((x, y) => String(x.request.fromDate || '').localeCompare(String(y.request.fromDate || '')));
+        return out;
+    },
+
+    /** Keur een verlof-goedkeuring goed (accept) of weiger ze (reject). */
+    async decideLeaveApproval(approvalId, approve, reason) {
+        const action = approve ? 'accept' : 'reject';
+        const res = await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
+            throw new Error('Robaws gaf status ' + res.code);
+        }
+        return true;
+    },
+
     async uploadFile(endpoint, file, fileName) {
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const _ap = this._authPair();  // v231: per-werknemer key indien aanwezig

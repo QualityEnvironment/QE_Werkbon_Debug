@@ -878,6 +878,15 @@
     <div id="verlofList"><div class="spinner"></div></div>
 </div>
 
+<!-- ========== SCREEN: VERLOF GOEDKEUREN (v277, bureel) ========== -->
+<div class="screen" id="screenVerlofBeheer">
+    <div style="font-size:13px;color:var(--g1);margin:0 0 14px;line-height:1.5">
+        Openstaande verlofaanvragen van je team. Goedkeuren of weigeren stuurt
+        de beslissing meteen naar Robaws.
+    </div>
+    <div id="verlofBeheerList"><div class="spinner"></div></div>
+</div>
+
 <!-- ========== SCREEN: PROFIEL ========== -->
 <div class="screen" id="screenProfile">
     <div class="section-header"><h2>Mijn profiel</h2></div>
@@ -930,6 +939,17 @@
             <div style="flex:1;min-width:0">
                 <div class="mb-prow-t">Verlof aanvragen</div>
                 <div class="mb-prow-s">Dien een verlofaanvraag in — ziekte via bericht</div>
+            </div>
+            <span class="mb-prow-arrow">→</span>
+        </div>
+    </div>
+
+    <!-- v277: Verlof goedkeuren (alleen bureel) -->
+    <div class="card mb-prowcard" id="verlofBeheerCard" style="margin-bottom:14px;display:none;padding:4px 18px">
+        <div class="mb-prow" style="border-bottom:none" onclick="app.openVerlofBeheer()">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Verlof goedkeuren <span id="verlofBeheerCount" style="display:none;font-size:11px;font-weight:700;color:#fff;background:var(--accent,#F99D3E);border-radius:10px;padding:1px 7px;margin-left:6px">0</span></div>
+                <div class="mb-prow-s">Openstaande verlofaanvragen van het team</div>
             </div>
             <span class="mb-prow-arrow">→</span>
         </div>

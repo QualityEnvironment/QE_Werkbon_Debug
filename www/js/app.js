@@ -758,6 +758,15 @@ const app = {
             adminCard.style.display = (_u && _u.role === 'bureel') ? 'block' : 'none';
         }
 
+        // v277: Verlof-goedkeuren enkel voor bureel + openstaande teller laden
+        const vbCard = document.getElementById('verlofBeheerCard');
+        if (vbCard) {
+            const _ub = RobawsAPI.getLoggedInUser();
+            const _isBureel = _ub && _ub.role === 'bureel';
+            vbCard.style.display = _isBureel ? 'block' : 'none';
+            if (_isBureel) this._refreshVerlofBeheerCount();
+        }
+
         // v247: Uren-analyse enkel voor geselecteerd bureel (Levi & Vince)
         const uaCard = document.getElementById('urenAnalyseCard');
         if (uaCard) uaCard.style.display = this._isUrenAnalyseAllowed() ? 'block' : 'none';
@@ -1685,6 +1694,7 @@ const app = {
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
             screenVerlof: 'Verlof aanvragen',  // v276
+            screenVerlofBeheer: 'Verlof goedkeuren',  // v277
             screenAdmin: 'Beheer',  // v233
             screenUrenAnalyse: 'Uren-analyse',  // v247
         };
@@ -1706,6 +1716,7 @@ const app = {
         if (screenId === 'screenAdmin') this.loadAdmin();
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
         if (screenId === 'screenVerlof') this.loadMyVerlof();  // v276
+        if (screenId === 'screenVerlofBeheer') this.loadVerlofApprovals();  // v277
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -8334,6 +8345,83 @@ const app = {
         } finally {
             this._verlofBusy = false;
             if (btn) { btn.disabled = false; btn.textContent = oldTxt || 'Verlof aanvragen'; }
+        }
+    },
+
+    // ============================================================
+    // v277 (Fase 2): VERLOF GOEDKEUREN (bureel). Openstaande aanvragen
+    // goedkeuren/weigeren via de approval-request (accept/reject).
+    // ============================================================
+    openVerlofBeheer() {
+        const u = RobawsAPI.getLoggedInUser();
+        if (!u || u.role !== 'bureel') { this.toast('Alleen bureel kan verlof goedkeuren', true); return; }
+        this.navigate('screenVerlofBeheer');
+    },
+
+    async _refreshVerlofBeheerCount() {
+        const badge = document.getElementById('verlofBeheerCount');
+        if (!badge) return;
+        try {
+            const list = await RobawsAPI.getPendingLeaveApprovals();
+            if (list.length > 0) { badge.textContent = String(list.length); badge.style.display = ''; }
+            else { badge.style.display = 'none'; }
+        } catch (e) { badge.style.display = 'none'; }
+    },
+
+    async loadVerlofApprovals() {
+        const u = RobawsAPI.getLoggedInUser();
+        const list = document.getElementById('verlofBeheerList');
+        if (!list) return;
+        if (!u || u.role !== 'bureel') { list.innerHTML = '<p class="text-grey text-sm text-center">Alleen bureel.</p>'; return; }
+        list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const items = await RobawsAPI.getPendingLeaveApprovals();
+            this._verlofApprovalCache = {};
+            if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande verlofaanvragen.</p>'; return; }
+            list.innerHTML = items.map(it => {
+                this._verlofApprovalCache[it.approvalId] = it;
+                const r = it.request;
+                const naam = (r.employee && (r.employee.name || r.employee.firstName)) || ('Werknemer ' + r.employeeId);
+                const periode = this._verlofPeriode(r.fromDate, r.toDate);
+                const cat = (r.timeOffCategory && r.timeOffCategory.name) || 'Verlof';
+                return `<div class="card" style="margin-bottom:10px;padding:14px 16px">
+                    <div style="font-size:15px;font-weight:600">${this.escapeHtml(naam)}</div>
+                    <div style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">${this.escapeHtml(cat)} · ${this.escapeHtml(periode)}</div>
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        <button class="btn btn-outline btn-sm" style="flex:1" onclick="app.decideVerlof('${this._escapeJsArg(it.approvalId)}', false)">Weigeren</button>
+                        <button class="btn btn-primary btn-sm" style="flex:1" onclick="app.decideVerlof('${this._escapeJsArg(it.approvalId)}', true)">Goedkeuren</button>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            list.innerHTML = `<p class="text-grey text-sm text-center">Laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    async decideVerlof(approvalId, approve) {
+        const it = (this._verlofApprovalCache || {})[approvalId];
+        const naam = (it && it.request && it.request.employee && it.request.employee.name) || '';
+        const confirmFn = (window.QEClock && QEClock._showConfirmModal)
+            ? QEClock._showConfirmModal.bind(QEClock)
+            : (t, m, ok) => Promise.resolve(window.confirm(m));
+        const ok = await confirmFn(
+            approve ? 'Verlof goedkeuren?' : 'Verlof weigeren?',
+            (approve ? 'Verlof' : 'Verlofaanvraag') + (naam ? ' van ' + naam : '') + (approve ? ' goedkeuren?' : ' weigeren?'),
+            approve ? 'Goedkeuren' : 'Weigeren',
+            'Annuleren'
+        );
+        if (!ok) return;
+        if (this._verlofDecideBusy) return;
+        this._verlofDecideBusy = true;
+        try {
+            await RobawsAPI.decideLeaveApproval(approvalId, approve, '');
+            this.toast(approve ? 'Verlof goedgekeurd' : 'Verlof geweigerd');
+            await this.loadVerlofApprovals();
+            this._refreshVerlofBeheerCount();
+        } catch (e) {
+            this.toast('Mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._verlofDecideBusy = false;
         }
     },
 
