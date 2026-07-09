@@ -51,6 +51,7 @@
         screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
         screenAanvragen:   { sub: 'Verlof · Materiaal · Materieel', title: 'Aanvragen' },
         screenRecap:       { sub: 'Terugblik per maand', title: 'Maandrecap' },
+        screenJaar:        { sub: 'Boekjaar 2025-2026 · bouwverlof', title: 'Jaaroverzicht' },
         screenVerlofDetail:{ sub: 'Details & communicatie', title: 'Verlofaanvraag' },
         screenGoedkeuren:  { sub: 'Verlof · Facturen · Materieel', title: 'Goedkeuren' },
         screenFactuurDetail:{ sub: 'Aankoopfactuur goedkeuren', title: 'Factuur' },

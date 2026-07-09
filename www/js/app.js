@@ -1637,6 +1637,7 @@ const app = {
             screenProfile: 'Mijn profiel',
             screenDagoverzicht: 'Mijn registraties',
             screenRecap: 'Maandrecap',  // v288
+            screenJaar: 'Jaaroverzicht',  // v290
             screenAanpassing: 'Aanpassing aanvragen',
             screenOverschrijving: 'Overschrijving',
             screenClock: 'Klok',
@@ -9168,47 +9169,54 @@ const app = {
     assignLineProject(lineId) { this._projectPickTarget = 'line:' + lineId; this.openProjectPicker(); },
     assignAllLinesProject() { this._projectPickTarget = 'all'; this.openProjectPicker(); },
 
-    openProjectPicker() {
+    async openProjectPicker() {
+        if (this._projPickBusy) return;
+        this._projPickBusy = true;
+        this.toast('Projecten laden…');
+        let list = [];
+        try {
+            list = await RobawsAPI.searchProjects('', 60);
+        } catch (e) {
+            this._projPickBusy = false;
+            this.toast('Projecten laden mislukt: ' + ((e && e.message) || '?'), true);
+            return;
+        }
+        this._projPickBusy = false;
+        this._projPickAll = list || [];
         this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
-            <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app._projPickDebounce(this.value)" style="margin-bottom:10px">
+            <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app.searchProjectPicker(this.value)" style="margin-bottom:10px">
             <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">Tik een project om het toe te wijzen.</div>
-            <div id="projPickResults" style="max-height:48vh;overflow:auto"><div class="spinner"></div></div>
+            <div id="projPickResults" style="max-height:48vh;overflow:auto">${this._projPickRows(this._projPickAll)}</div>
             <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
             <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
-        this.searchProjectPicker('');
     },
 
-    _projPickDebounce(q) {
-        clearTimeout(this._projPickTimer);
-        this._projPickTimer = setTimeout(() => this.searchProjectPicker(q), 250);
+    _projPickRows(list) {
+        if (!list || !list.length) return '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px">Geen projecten gevonden.</div>';
+        return list.map(p =>
+            `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left" onclick="app.pickProject('${this._escapeJsArg(p.id)}','${this._escapeJsArg((p.logicId + ' ' + p.name).trim())}')">${this.escapeHtml((p.logicId + ' — ' + p.name).trim())}</button>`
+        ).join('');
     },
 
-    async searchProjectPicker(q) {
+    // Typen: eerst INSTANT lokaal filteren op de reeds geladen lijst (kan niet
+    // stil falen); bij een langere query ook server-side zoeken zodat ook
+    // projecten buiten de eerste 60 gevonden worden.
+    searchProjectPicker(q) {
         const box = document.getElementById('projPickResults');
-        if (!box) return;
-        box.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px;text-align:center">Zoeken…</div>';
+        const ql = (q || '').toLowerCase();
+        const local = (this._projPickAll || []).filter(p => (p.logicId + ' ' + p.name).toLowerCase().indexOf(ql) !== -1);
+        if (box) box.innerHTML = this._projPickRows(local);
+        clearTimeout(this._projPickTimer);
+        if (!q || q.length < 2) return;
         const token = (this._projPickToken = (this._projPickToken || 0) + 1);
-        try {
-            if (typeof RobawsAPI === 'undefined' || typeof RobawsAPI.searchProjects !== 'function') throw new Error('zoekfunctie ontbreekt — app bijwerken');
-            const list = await Promise.race([
-                RobawsAPI.searchProjects(q, 30),
-                new Promise((_, rej) => setTimeout(() => rej(new Error('duurt te lang')), 15000))
-            ]);
-            if (token !== this._projPickToken) return;
-            const b = document.getElementById('projPickResults');
-            if (!b) return;
-            if (!list || !list.length) {
-                b.innerHTML = '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px">Geen projecten gevonden' + (q ? (' voor "' + this.escapeHtml(q) + '"') : '') + '.</div>';
-                return;
-            }
-            b.innerHTML = list.map(p =>
-                `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left" onclick="app.pickProject('${this._escapeJsArg(p.id)}','${this._escapeJsArg((p.logicId + ' ' + p.name).trim())}')">${this.escapeHtml((p.logicId + ' — ' + p.name).trim())}</button>`
-            ).join('');
-        } catch (e) {
-            if (token !== this._projPickToken) return;
-            const b = document.getElementById('projPickResults');
-            if (b) b.innerHTML = '<div style="font-size:12px;color:var(--qe-red,#B4372F);padding:12px">Zoeken mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
-        }
+        this._projPickTimer = setTimeout(async () => {
+            try {
+                const srv = await RobawsAPI.searchProjects(q, 40);
+                if (token !== this._projPickToken) return;
+                const b = document.getElementById('projPickResults');
+                if (b && srv && srv.length) b.innerHTML = this._projPickRows(srv);
+            } catch (_e) { /* de lokale filter staat er al */ }
+        }, 300);
     },
 
     async pickProject(projectId, label) {
@@ -14072,6 +14080,8 @@ const app = {
      *  niets op gewone dagen (dueMonth + shown-vlag vóór elke fetch). */
     async maybeShowMonthRecap(empId) {
         try {
+            // v290: rond het bouwverlof heeft het jaaroverzicht voorrang.
+            try { if (this.maybeShowYearRecap && this.maybeShowYearRecap()) return; } catch (_y) {}
             empId = empId || (this.currentUser && this.currentUser.robawsEmployeeId);
             if (!empId || !window.QERecap) return;
             const ym = QERecap.dueMonth(new Date());
@@ -14118,10 +14128,15 @@ const app = {
             '<span>' + this.escapeHtml(it.label) + '</span>' +
             '<span style="color:var(--accent,#F99D3E);font-size:20px;font-weight:700">' + (it.cached ? '▸' : '＋') + '</span></button>'
         ).join('');
+        // v291: het jaaroverzicht staat bovenaan bij de maandrecaps (geen aparte knop meer)
+        const jaarRec = window.QEJaar ? QEJaar.find(empId, this.currentUser && this.currentUser.name) : null;
+        const jaarBtn = jaarRec ? ('<button data-jaar="1" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 16px;margin-bottom:14px;border:1.5px solid var(--accent,#F99D3E);border-radius:14px;background:var(--card,#FDFCFA);color:var(--ink,#26334B);font:800 16px/1.1 var(--font,inherit);cursor:pointer;-webkit-appearance:none;appearance:none"><span>🏆 Jaaroverzicht 2025-2026</span><span style="color:var(--accent,#F99D3E);font-size:20px">→</span></button>') : '';
         box.innerHTML =
             '<div style="font-size:22px;font-weight:800;color:var(--ink,#26334B);margin:4px 2px 4px">📅 Maandrecap</div>' +
             '<div style="font-size:13px;color:var(--g1,#85847C);margin:0 2px 18px;line-height:1.4">Kies een maand om je recap te (her)bekijken. <b style="color:var(--accent,#F99D3E)">▸</b> = klaar · <b style="color:var(--accent,#F99D3E)">＋</b> = nog te berekenen.</div>' +
+            jaarBtn +
             rows;
+        box.querySelectorAll('button[data-jaar]').forEach(btn => { btn.onclick = () => this.openJaaroverzicht(); });
         box.querySelectorAll('button[data-ym]').forEach(btn => { btn.onclick = () => this.openRecap(btn.getAttribute('data-ym')); });
     },
     _closeRecapChooser() {
@@ -14277,6 +14292,115 @@ const app = {
             '.qr-load-txt{font-size:15px;font-weight:600;text-align:center;padding:0 34px}' +
             '@keyframes qrSpin{to{transform:rotate(360deg)}}';
         document.head.appendChild(st);
+    },
+
+    // ============================================================
+    // JAAROVERZICHT 2025-2026 (v290) — eenmalige jaarterugblik vóór het
+    // bouwverlof. Streng bij veel ziekte, trots bij volle aanwezigheid.
+    // Data uit window.QEJaar (gebundeld); betrouwbare pagina (screenJaar).
+    // ============================================================
+
+    /** Toont automatisch rond het bouwverlof (9-13 juli 2026), 1×. Geeft true
+     *  terug als getoond (dan slaat de maandrecap over). */
+    maybeShowYearRecap() {
+        try {
+            const KEY = 'qe_jaar_shown_2025_2026';
+            if (localStorage.getItem(KEY) === '1') return false;
+            const t = new Date();
+            if (!(t.getFullYear() === 2026 && t.getMonth() === 6 && t.getDate() === 10)) return false;
+            if (!window.QEJaar) return false;
+            const rec = QEJaar.find(this.currentUser && this.currentUser.robawsEmployeeId, this.currentUser && this.currentUser.name);
+            if (!rec) return false;
+            localStorage.setItem(KEY, '1');
+            this.openJaaroverzicht();
+            return true;
+        } catch (e) { console.warn('[Jaar] auto faalde:', e && e.message); return false; }
+    },
+
+    openJaaroverzicht() {
+        this.navigate('screenJaar');
+        const box = document.getElementById('jaarContent');
+        if (!box) return;
+        if (!window.QEJaar) { box.innerHTML = '<p style="text-align:center;color:var(--g1,#85847C);padding:26px">Jaaroverzicht niet beschikbaar.</p>'; return; }
+        const rec = QEJaar.find(this.currentUser && this.currentUser.robawsEmployeeId, this.currentUser && this.currentUser.name);
+        if (!rec) { box.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--g1,#85847C)"><div style="font-size:40px;margin-bottom:10px">📅</div><div style="font-size:16px;font-weight:700;color:var(--ink,#26334B);margin-bottom:6px">Geen jaardata gevonden</div><div style="font-size:13px">Voor jou is er (nog) geen jaaroverzicht 2025-2026.</div></div>'; return; }
+        box.innerHTML = this._renderJaar(rec);
+    },
+
+    _jaarTier(r) {
+        const zd = r.ziektedagen || 0, pct = r.verzuim_pct || 0, wd = r.werkbare_dagen || 0;
+        if (zd === 0) return 'hero';
+        let t = 'proud';
+        if (zd >= 8) t = 'ok';
+        if (zd >= 20) t = 'stern';
+        if (zd >= 40) t = 'harsh';
+        if (wd >= 100) {
+            if (pct >= 45 && t !== 'harsh') t = 'harsh';
+            else if (pct >= 25 && (t === 'proud' || t === 'ok')) t = 'stern';
+        }
+        return t;
+    },
+
+    _renderJaar(r) {
+        const esc = (s) => this.escapeHtml(s);
+        const tier = this._jaarTier(r);
+        const COL = { hero: '#C9A227', proud: '#2FA36E', ok: '#3A4A6B', stern: '#E0791A', harsh: '#D1453B' }[tier];
+        const uren = (r.gewerkte_uren != null) ? Math.round(r.gewerkte_uren) : null;
+        const attPct = r.werkbare_dagen ? Math.round(r.gewerkte_dagen / r.werkbare_dagen * 100) : 0;
+        const urenRank = (r.gewerkte_uren != null && window.QEJaar) ? QEJaar.rankOf(r, 'gewerkte_uren', 'desc') : null;
+        const fullAtt = r.werkbare_dagen && r.gewerkte_dagen >= r.werkbare_dagen;
+
+        let zTitle, zBody, zEmoji;
+        if (tier === 'hero') {
+            zEmoji = '🏆'; zTitle = '0 ziektedagen';
+            zBody = 'Het hele jaar, elke keer paraat. Een absolute rots — chapeau. Zo hoort het.';
+        } else if (tier === 'proud') {
+            zEmoji = '💪'; zTitle = r.ziektedagen + ' ziektedag' + (r.ziektedagen === 1 ? '' : 'en');
+            zBody = 'Bijna altijd present (' + r.verzuim_pct + '%). Sterk. Hou dat zo vast.';
+        } else if (tier === 'ok') {
+            zEmoji = '🤔'; zTitle = r.ziektedagen + ' ziektedagen';
+            zBody = r.verzuim_pct + '% van het jaar. Het mag strakker — volgend jaar wat minder, hé.';
+        } else if (tier === 'stern') {
+            zEmoji = '⚠️'; zTitle = r.ziektedagen + ' ziektedagen';
+            zBody = r.verzuim_pct + '% van het jaar afwezig. Dat zijn er te veel. Dit moet naar beneden.';
+        } else {
+            zEmoji = '🚨'; zTitle = r.ziektedagen + ' ziektedagen';
+            zBody = r.verzuim_pct + '% van het jaar afwezig — in ' + r.ziekteperiodes + ' periodes, langste ' + r.langste_ziekteperiode + ' dagen. Zó hou je een ploeg niet recht. Volgend jaar rekenen we écht op je.';
+        }
+
+        let slot;
+        if (tier === 'hero' || tier === 'proud') slot = 'Geniet van je welverdiende vakantie. 🌴';
+        else if (tier === 'ok') slot = 'Fijne vakantie — en kom er fris aan.';
+        else slot = 'Rust nu goed uit. En kom terug met een propere lei — we hebben je nodig.';
+
+        const card = (inner) => '<div style="background:var(--card,#FDFCFA);border:1px solid var(--b1,#DCD9D0);border-radius:16px;padding:18px;margin-bottom:12px">' + inner + '</div>';
+        const stat = (big, label, sub) => '<div style="font-size:34px;font-weight:800;color:var(--ink,#26334B);line-height:1.05">' + esc(String(big)) + '</div><div style="font-size:14px;font-weight:600;color:var(--ink,#26334B);margin-top:4px">' + esc(label) + '</div>' + (sub ? '<div style="font-size:12.5px;color:var(--g1,#85847C);margin-top:4px">' + sub + '</div>' : '');
+
+        let html = '';
+        html += '<div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent,#F99D3E);margin:2px 2px 2px">Jaaroverzicht · ' + esc(r.afdeling) + '</div>';
+        html += '<div style="font-size:26px;font-weight:800;color:var(--ink,#26334B);margin:0 2px 2px">' + esc(r.naam) + '</div>';
+        html += '<div style="font-size:12.5px;color:var(--g1,#85847C);margin:0 2px 16px">Boekjaar ' + esc(QEJaar.BOEKJAAR) + '</div>';
+
+        html += card(stat(uren != null ? (uren + ' u') : '—', 'gepresteerd dit jaar',
+            (urenRank ? ('Plaats ' + urenRank.rank + ' van ' + urenRank.total + ' in de ploeg' + (urenRank.rank <= 3 ? ' — jij trok de kar. 🔥' : '.')) : '')));
+
+        html += card(stat(r.gewerkte_dagen + ' / ' + r.werkbare_dagen, 'gewerkte werkbare dagen',
+            (fullAtt ? 'Élke werkbare dag er. Legende. 💪' : (attPct + '% aanwezig'))) +
+            '<div style="height:8px;border-radius:6px;background:var(--b1,#DCD9D0);margin-top:12px;overflow:hidden"><div style="height:100%;width:' + Math.min(100, attPct) + '%;background:' + (fullAtt ? '#2FA36E' : 'var(--accent,#F99D3E)') + '"></div></div>');
+
+        html += '<div style="background:' + COL + '14;border:2px solid ' + COL + ';border-radius:16px;padding:18px;margin-bottom:12px">' +
+            '<div style="font-size:40px;margin-bottom:6px">' + zEmoji + '</div>' +
+            '<div style="font-size:30px;font-weight:800;color:' + COL + ';line-height:1.05">' + esc(zTitle) + '</div>' +
+            '<div style="font-size:14.5px;color:var(--ink,#26334B);margin-top:8px;line-height:1.5;font-weight:600">' + zBody + '</div>' +
+            '</div>';
+
+        let extra = '';
+        if (r.kilometers > 0) extra += '<div style="font-size:13.5px;padding:6px 0;border-top:1px solid var(--b1,#DCD9D0)"><b>' + r.kilometers + ' km</b> onderweg</div>';
+        if (r.sociaal_verlof_dagen > 0) extra += '<div style="font-size:13.5px;padding:6px 0;border-top:1px solid var(--b1,#DCD9D0)">Sociaal verlof: <b>' + r.sociaal_verlof_dagen + ' dag' + (r.sociaal_verlof_dagen === 1 ? '' : 'en') + '</b></div>';
+        if (extra) html += card(extra);
+
+        html += '<div style="text-align:center;font-size:14px;font-weight:600;color:var(--ink,#26334B);margin:18px 6px 8px">' + slot + '</div>';
+        return html;
     },
 };
 
