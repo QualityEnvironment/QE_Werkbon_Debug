@@ -627,7 +627,7 @@ const RobawsAPI = {
         const r = await this.get('projects?page=0&size=' + (limit || 25) + q, { bypassCache: true });
         if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
         const data = r.data || {};
-        const items = data.items || (Array.isArray(data) ? data : []);
+        const items = data.items || (data.data && data.data.items) || (Array.isArray(data) ? data : []);
         const out = items.map(p => ({ id: String(p.id), logicId: p.logicId || '', name: p.planningName || p.name || p.title || '' }));
         if (query) {
             const ql = query.toLowerCase();

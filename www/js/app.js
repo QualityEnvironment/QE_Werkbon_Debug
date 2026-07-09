@@ -9182,13 +9182,18 @@ const app = {
             return;
         }
         this._projPickBusy = false;
-        this._projPickAll = list || [];
+        this._projPickAll = Array.isArray(list) ? list : [];
+        const cnt = this._projPickAll.length;
         this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
             <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app.searchProjectPicker(this.value)" style="margin-bottom:10px">
-            <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">Tik een project om het toe te wijzen.</div>
-            <div id="projPickResults" style="max-height:48vh;overflow:auto">${this._projPickRows(this._projPickAll)}</div>
+            <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">${cnt} project(en) — tik er één of typ om te zoeken.</div>
+            <div id="projPickResults" style="max-height:48vh;overflow:auto"></div>
             <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
             <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
+        // Belt-and-suspenders: vul de resultaten NA het tonen van de modal.
+        const b = document.getElementById('projPickResults');
+        if (b) b.innerHTML = this._projPickRows(this._projPickAll);
+        else this.toast('Resultvak niet gevonden in de modal', true);
     },
 
     _projPickRows(list) {
@@ -14204,7 +14209,17 @@ const app = {
         if (s.favWeekday) add(PINK, '❤️', cap(s.favWeekday), 'je favoriete werkdag', s.favWeekdayHours + 'u in totaal');
         add(ORANGE, '🎉', 'Bedankt!', '', 'Tot in ' + nextMonth + '! Terugblik: knop op de Klok.');
 
+        this._playStories(cards, 'QE · ' + cap(s.monthLabel));
+    },
+
+    /** Speelt een reeks story-kaarten in de fullscreen-overlay (gedeeld door de
+     *  maand- én jaarrecap). card = {accent, emoji, big, label, sub} of
+     *  {accent, html} voor een custom kaart (bv. de maand-grafiek). */
+    _playStories(cards, tag) {
+        if (!cards || !cards.length) return;
         this._ensureRecapStyles();
+        this._closeRecapStories();
+        const esc = (x) => this.escapeHtml(x);
         const ov = document.createElement('div');
         ov.className = 'qr-ov';
         ov.innerHTML =
@@ -14216,22 +14231,20 @@ const app = {
         document.body.appendChild(ov);
         const bars = ov.querySelector('#qrBars');
         bars.innerHTML = cards.map(() => '<div class="qr-bar"><i></i></div>').join('');
-
         const reduce = document.body.classList.contains('a11y-motion');
         const DUR = 5200;
         const state = { idx: -1, timer: null, ov: ov };
         this._recapState = state;
-
+        const tagHtml = tag ? ('<div class="qr-tag">' + esc(tag) + '</div>') : '';
         const render = () => {
             const c = cards[state.idx];
             const card = ov.querySelector('#qrCard');
-            card.style.background = c.accent + '14';
-            card.innerHTML =
-                '<div class="qr-tag">QE · ' + this.escapeHtml(cap(s.monthLabel)) + '</div>' +
-                '<div class="qr-chip" style="background:' + c.accent + '2b">' + c.emoji + '</div>' +
-                '<div class="qr-big">' + this.escapeHtml(c.big) + '</div>' +
-                (c.label ? '<div class="qr-label">' + this.escapeHtml(c.label) + '</div>' : '') +
-                (c.sub ? '<div class="qr-sub">' + this.escapeHtml(c.sub) + '</div>' : '');
+            card.style.background = c.accent ? (c.accent + '14') : 'var(--bg,#F4F2ED)';
+            card.innerHTML = tagHtml + (c.html != null ? c.html :
+                ('<div class="qr-chip" style="background:' + (c.accent || '#888888') + '2b">' + (c.emoji || '') + '</div>' +
+                 '<div class="qr-big">' + esc(c.big) + '</div>' +
+                 (c.label ? '<div class="qr-label">' + esc(c.label) + '</div>' : '') +
+                 (c.sub ? '<div class="qr-sub">' + esc(c.sub) + '</div>' : '')));
             if (!reduce) { card.style.animation = 'none'; void card.offsetWidth; card.style.animation = 'qrIn .5s cubic-bezier(.22,1,.36,1)'; }
             const fills = bars.querySelectorAll('.qr-bar > i');
             fills.forEach((fill, i) => {
@@ -14318,17 +14331,48 @@ const app = {
     },
 
     openJaaroverzicht() {
-        this.navigate('screenJaar');
-        const box = document.getElementById('jaarContent');
-        if (!box) return;
-        if (!window.QEJaar) { box.innerHTML = '<p style="text-align:center;color:var(--g1,#85847C);padding:26px">Jaaroverzicht niet beschikbaar.</p>'; return; }
-        const rec = QEJaar.find(this.currentUser && this.currentUser.robawsEmployeeId, this.currentUser && this.currentUser.name);
-        if (!rec) { box.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--g1,#85847C)"><div style="font-size:40px;margin-bottom:10px">📅</div><div style="font-size:16px;font-weight:700;color:var(--ink,#26334B);margin-bottom:6px">Geen jaardata gevonden</div><div style="font-size:13px">Voor jou is er (nog) geen jaaroverzicht 2025-2026.</div></div>'; return; }
-        box.innerHTML = this._renderJaar(rec);
+        if (!window.QEJaar) { if (this.toast) this.toast('Jaaroverzicht niet beschikbaar', true); return; }
+        const r = QEJaar.find(this.currentUser && this.currentUser.robawsEmployeeId, this.currentUser && this.currentUser.name);
+        if (!r) { if (this.toast) this.toast('Geen jaardata voor jou gevonden', true); return; }
+        const cap = (w) => w ? (w.charAt(0).toUpperCase() + w.slice(1)) : '';
+        const nf = (n) => { try { return Number(n).toLocaleString('nl-BE'); } catch (_e) { return String(n); } };
+        const ORANGE = '#F99D3E', NAVY = '#3A4A6B', GREEN = '#2FA36E', INDIGO = '#4457C7', PURPLE = '#8A4BC7', TEAL = '#1FA39A', CORAL = '#E0674B', PINK = '#C7568C', GOLD = '#C9A227';
+        const cards = [];
+        const add = (accent, emoji, big, label, sub) => cards.push({ accent: accent, emoji: emoji, big: String(big), label: label || '', sub: sub || '' });
+        const uren = Math.round(r.gewerkteUren || 0);
+        const urenRank = QEJaar.rankOf(r, 'gewerkteUren', 'desc');
+        const dagRank = QEJaar.rankOf(r, 'gewerkteDagen', 'desc');
+        const tier = this._jaarTier(r);
+        // Intro -> totalen -> maandgrafiek -> hoogtepunten -> aanwezigheid -> ziekte (toon) -> slot.
+        add(NAVY, '🎬', '2025 – 2026', 'jouw jaar bij QE', 'Tik om te bladeren →');
+        add(INDIGO, '⏱️', nf(uren) + ' u', 'gewerkt dit jaar', r.gewerkteDagen + ' dagen · ' + r.aantalWerkMaanden + ' maanden actief');
+        add(ORANGE, '📊', r.gemUrenPerMaand + ' u', 'gemiddeld per maand', r.avgUrenPerDag + ' u op een gewerkte dag');
+        if (r.maanden && r.maanden.length) cards.push({ accent: INDIGO, html: this._jaarMaandChart(r) });
+        if (r.drukste) add(CORAL, '🔥', r.drukste.uren + ' u', cap(r.drukste.label) + ' — je drukste maand', r.drukste.dagen + ' dagen op de baan');
+        if (r.rustigste) add(TEAL, '😌', r.rustigste.uren + ' u', cap(r.rustigste.label) + ' — je rustigste maand', 'Iedereen mag eens ademen.');
+        if (r.langsteDag && r.langsteDag.uren > 0) add(PURPLE, '💪', r.langsteDag.uren + ' u', 'je langste dag', 'op ' + this._jaarDatum(r.langsteDag.datum));
+        if (r.langsteReeks >= 3) add(GREEN, '🔗', r.langsteReeks + '', 'dagen op rij present', 'Je langste reeks zonder afwezigheid — sterk!');
+        if (r.favWeekdag) add(PINK, '❤️', cap(r.favWeekdag), 'jouw dag van het jaar', r.favWeekdagUren + ' u op ' + r.favWeekdag + 'en');
+        if (r.weekendGewerkt > 0) add(ORANGE, '🏗️', r.weekendGewerkt + '', 'weekenddag' + (r.weekendGewerkt === 1 ? '' : 'en') + ' erbij gedaan', 'Als het moest, stond je er.');
+        if (r.km > 0) { const ritten = Math.round(r.km / 300); add(TEAL, '🚗', nf(r.km) + ' km', 'onderweg dit jaar', ritten > 0 ? ('Goed voor ' + ritten + '× Brussel–Parijs') : ''); }
+        add(NAVY, '📅', r.gewerkteDagen + ' / ' + r.werkbareDagen, 'werkbare dagen present', urenRank ? ('Uren: plaats ' + urenRank.rank + ' van ' + urenRank.total + ' in de ploeg' + (urenRank.rank <= 3 ? ' — jij trok de kar 🔥' : '')) : (dagRank ? ('Aanwezigheid: plaats ' + dagRank.rank + ' van ' + dagRank.total) : ''));
+        // Ziekteverzuim — kleurgecodeerde toon-kaart (positief hard, negatief harder).
+        const ZC = { hero: GOLD, proud: GREEN, ok: NAVY, stern: '#E0791A', harsh: '#D1453B' }[tier];
+        let zEm, zBig, zLab, zSub;
+        if (tier === 'hero') { zEm = '🏆'; zBig = '0'; zLab = 'ziektedagen — het hele jaar paraat'; zSub = 'Een absolute rots. Chapeau. Zo hoort het.'; }
+        else if (tier === 'proud') { zEm = '💪'; zBig = r.ziektedagen + ''; zLab = 'ziektedag' + (r.ziektedagen === 1 ? '' : 'en') + ' (' + r.verzuimPct + '%)'; zSub = 'Bijna altijd present. Sterk — hou dat vast.'; }
+        else if (tier === 'ok') { zEm = '🤔'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen (' + r.verzuimPct + '%)'; zSub = 'Het mag strakker volgend jaar, hé.'; }
+        else if (tier === 'stern') { zEm = '⚠️'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen (' + r.verzuimPct + '%)'; zSub = 'Dat zijn er te veel. Dit moet naar beneden.'; }
+        else { zEm = '🚨'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen — ' + r.verzuimPct + '% van het jaar'; zSub = 'In ' + r.ziekteperiodes + ' periodes, langste ' + r.langsteZiekteperiode + ' dagen. Zó hou je een ploeg niet recht. Volgend jaar rekenen we écht op je.'; }
+        cards.push({ accent: ZC, emoji: zEm, big: zBig, label: zLab, sub: zSub });
+        if (r.sociaalVerlof > 0) add(PURPLE, '🤝', r.sociaalVerlof + '', 'dag' + (r.sociaalVerlof === 1 ? '' : 'en') + ' sociaal verlof', '');
+        const slot = (tier === 'hero' || tier === 'proud') ? 'Geniet van je welverdiende vakantie. 🌴' : (tier === 'ok' ? 'Fijne vakantie — en kom er fris aan.' : 'Rust nu goed uit. En kom terug met een propere lei — we hebben je nodig.');
+        add(ORANGE, '🌴', 'Fijne vakantie!', '', slot);
+        this._playStories(cards, 'QE · JAAR 25-26');
     },
 
     _jaarTier(r) {
-        const zd = r.ziektedagen || 0, pct = r.verzuim_pct || 0, wd = r.werkbare_dagen || 0;
+        const zd = r.ziektedagen || 0, pct = r.verzuimPct || 0, wd = r.werkbareDagen || 0;
         if (zd === 0) return 'hero';
         let t = 'proud';
         if (zd >= 8) t = 'ok';
@@ -14341,66 +14385,27 @@ const app = {
         return t;
     },
 
-    _renderJaar(r) {
-        const esc = (s) => this.escapeHtml(s);
-        const tier = this._jaarTier(r);
-        const COL = { hero: '#C9A227', proud: '#2FA36E', ok: '#3A4A6B', stern: '#E0791A', harsh: '#D1453B' }[tier];
-        const uren = (r.gewerkte_uren != null) ? Math.round(r.gewerkte_uren) : null;
-        const attPct = r.werkbare_dagen ? Math.round(r.gewerkte_dagen / r.werkbare_dagen * 100) : 0;
-        const urenRank = (r.gewerkte_uren != null && window.QEJaar) ? QEJaar.rankOf(r, 'gewerkte_uren', 'desc') : null;
-        const fullAtt = r.werkbare_dagen && r.gewerkte_dagen >= r.werkbare_dagen;
+    /** Custom story-kaart: mini-staafgrafiek van de uren per maand (Marble-licht). */
+    _jaarMaandChart(r) {
+        const M = (r.maanden || []);
+        const mx = Math.max.apply(null, M.map(function (m) { return m.uren; }).concat([1]));
+        const bars = M.map(function (m) {
+            const h = Math.max(3, Math.round(m.uren / mx * 100));
+            const mm = String(m.label).split(' ')[0].slice(0, 3);
+            return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%">' +
+                '<div style="width:72%;max-width:18px;height:' + h + '%;background:var(--accent,#F99D3E);border-radius:3px 3px 0 0"></div>' +
+                '<div style="font-size:9px;color:var(--g1,#85847C)">' + mm + '</div></div>';
+        }).join('');
+        return '<div class="qr-big" style="font-size:24px">Je jaar in maanden</div>' +
+            '<div style="display:flex;align-items:flex-end;gap:5px;height:190px;width:100%;max-width:330px;margin-top:22px">' + bars + '</div>' +
+            '<div class="qr-sub" style="margin-top:16px">Gewerkte uren per maand</div>';
+    },
 
-        let zTitle, zBody, zEmoji;
-        if (tier === 'hero') {
-            zEmoji = '🏆'; zTitle = '0 ziektedagen';
-            zBody = 'Het hele jaar, elke keer paraat. Een absolute rots — chapeau. Zo hoort het.';
-        } else if (tier === 'proud') {
-            zEmoji = '💪'; zTitle = r.ziektedagen + ' ziektedag' + (r.ziektedagen === 1 ? '' : 'en');
-            zBody = 'Bijna altijd present (' + r.verzuim_pct + '%). Sterk. Hou dat zo vast.';
-        } else if (tier === 'ok') {
-            zEmoji = '🤔'; zTitle = r.ziektedagen + ' ziektedagen';
-            zBody = r.verzuim_pct + '% van het jaar. Het mag strakker — volgend jaar wat minder, hé.';
-        } else if (tier === 'stern') {
-            zEmoji = '⚠️'; zTitle = r.ziektedagen + ' ziektedagen';
-            zBody = r.verzuim_pct + '% van het jaar afwezig. Dat zijn er te veel. Dit moet naar beneden.';
-        } else {
-            zEmoji = '🚨'; zTitle = r.ziektedagen + ' ziektedagen';
-            zBody = r.verzuim_pct + '% van het jaar afwezig — in ' + r.ziekteperiodes + ' periodes, langste ' + r.langste_ziekteperiode + ' dagen. Zó hou je een ploeg niet recht. Volgend jaar rekenen we écht op je.';
-        }
-
-        let slot;
-        if (tier === 'hero' || tier === 'proud') slot = 'Geniet van je welverdiende vakantie. 🌴';
-        else if (tier === 'ok') slot = 'Fijne vakantie — en kom er fris aan.';
-        else slot = 'Rust nu goed uit. En kom terug met een propere lei — we hebben je nodig.';
-
-        const card = (inner) => '<div style="background:var(--card,#FDFCFA);border:1px solid var(--b1,#DCD9D0);border-radius:16px;padding:18px;margin-bottom:12px">' + inner + '</div>';
-        const stat = (big, label, sub) => '<div style="font-size:34px;font-weight:800;color:var(--ink,#26334B);line-height:1.05">' + esc(String(big)) + '</div><div style="font-size:14px;font-weight:600;color:var(--ink,#26334B);margin-top:4px">' + esc(label) + '</div>' + (sub ? '<div style="font-size:12.5px;color:var(--g1,#85847C);margin-top:4px">' + sub + '</div>' : '');
-
-        let html = '';
-        html += '<div style="font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent,#F99D3E);margin:2px 2px 2px">Jaaroverzicht · ' + esc(r.afdeling) + '</div>';
-        html += '<div style="font-size:26px;font-weight:800;color:var(--ink,#26334B);margin:0 2px 2px">' + esc(r.naam) + '</div>';
-        html += '<div style="font-size:12.5px;color:var(--g1,#85847C);margin:0 2px 16px">Boekjaar ' + esc(QEJaar.BOEKJAAR) + '</div>';
-
-        html += card(stat(uren != null ? (uren + ' u') : '—', 'gepresteerd dit jaar',
-            (urenRank ? ('Plaats ' + urenRank.rank + ' van ' + urenRank.total + ' in de ploeg' + (urenRank.rank <= 3 ? ' — jij trok de kar. 🔥' : '.')) : '')));
-
-        html += card(stat(r.gewerkte_dagen + ' / ' + r.werkbare_dagen, 'gewerkte werkbare dagen',
-            (fullAtt ? 'Élke werkbare dag er. Legende. 💪' : (attPct + '% aanwezig'))) +
-            '<div style="height:8px;border-radius:6px;background:var(--b1,#DCD9D0);margin-top:12px;overflow:hidden"><div style="height:100%;width:' + Math.min(100, attPct) + '%;background:' + (fullAtt ? '#2FA36E' : 'var(--accent,#F99D3E)') + '"></div></div>');
-
-        html += '<div style="background:' + COL + '14;border:2px solid ' + COL + ';border-radius:16px;padding:18px;margin-bottom:12px">' +
-            '<div style="font-size:40px;margin-bottom:6px">' + zEmoji + '</div>' +
-            '<div style="font-size:30px;font-weight:800;color:' + COL + ';line-height:1.05">' + esc(zTitle) + '</div>' +
-            '<div style="font-size:14.5px;color:var(--ink,#26334B);margin-top:8px;line-height:1.5;font-weight:600">' + zBody + '</div>' +
-            '</div>';
-
-        let extra = '';
-        if (r.kilometers > 0) extra += '<div style="font-size:13.5px;padding:6px 0;border-top:1px solid var(--b1,#DCD9D0)"><b>' + r.kilometers + ' km</b> onderweg</div>';
-        if (r.sociaal_verlof_dagen > 0) extra += '<div style="font-size:13.5px;padding:6px 0;border-top:1px solid var(--b1,#DCD9D0)">Sociaal verlof: <b>' + r.sociaal_verlof_dagen + ' dag' + (r.sociaal_verlof_dagen === 1 ? '' : 'en') + '</b></div>';
-        if (extra) html += card(extra);
-
-        html += '<div style="text-align:center;font-size:14px;font-weight:600;color:var(--ink,#26334B);margin:18px 6px 8px">' + slot + '</div>';
-        return html;
+    _jaarDatum(d) {
+        if (!d) return '';
+        const M = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+        const p = String(d).split('-');
+        return parseInt(p[2], 10) + ' ' + (M[parseInt(p[1], 10) - 1] || '');
     },
 };
 
