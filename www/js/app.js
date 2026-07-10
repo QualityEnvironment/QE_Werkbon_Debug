@@ -9187,7 +9187,7 @@ const app = {
         this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
             <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app.searchProjectPicker(this.value)" style="margin-bottom:10px">
             <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">${cnt} project(en) — tik er één of typ om te zoeken.</div>
-            <div id="projPickResults" style="max-height:48vh;overflow:auto"></div>
+            <div id="projPickResults"></div>
             <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
             <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
         // Belt-and-suspenders: vul de resultaten NA het tonen van de modal.
@@ -14246,6 +14246,7 @@ const app = {
                  (c.label ? '<div class="qr-label">' + esc(c.label) + '</div>' : '') +
                  (c.sub ? '<div class="qr-sub">' + esc(c.sub) + '</div>' : '')));
             if (!reduce) { card.style.animation = 'none'; void card.offsetWidth; card.style.animation = 'qrIn .5s cubic-bezier(.22,1,.36,1)'; }
+            if (c.onShow && !c._shown) { c._shown = true; try { c.onShow(); } catch (_e) {} }
             const fills = bars.querySelectorAll('.qr-bar > i');
             fills.forEach((fill, i) => {
                 fill.style.transition = 'none';
@@ -14356,33 +14357,34 @@ const app = {
         if (r.weekendGewerkt > 0) add(ORANGE, '🏗️', r.weekendGewerkt + '', 'weekenddag' + (r.weekendGewerkt === 1 ? '' : 'en') + ' erbij gedaan', 'Als het moest, stond je er.');
         if (r.km > 0) { const ritten = Math.round(r.km / 300); add(TEAL, '🚗', nf(r.km) + ' km', 'onderweg dit jaar', ritten > 0 ? ('Goed voor ' + ritten + '× Brussel–Parijs') : ''); }
         add(NAVY, '📅', r.gewerkteDagen + ' / ' + r.werkbareDagen, 'werkbare dagen present', urenRank ? ('Uren: plaats ' + urenRank.rank + ' van ' + urenRank.total + ' in de ploeg' + (urenRank.rank <= 3 ? ' — jij trok de kar 🔥' : '')) : (dagRank ? ('Aanwezigheid: plaats ' + dagRank.rank + ' van ' + dagRank.total) : ''));
-        // Ziekteverzuim — kleurgecodeerde toon-kaart (positief hard, negatief harder).
-        const ZC = { hero: GOLD, proud: GREEN, ok: NAVY, stern: '#E0791A', harsh: '#D1453B' }[tier];
-        let zEm, zBig, zLab, zSub;
-        if (tier === 'hero') { zEm = '🏆'; zBig = '0'; zLab = 'ziektedagen — het hele jaar paraat'; zSub = 'Een absolute rots. Chapeau. Zo hoort het.'; }
-        else if (tier === 'proud') { zEm = '💪'; zBig = r.ziektedagen + ''; zLab = 'ziektedag' + (r.ziektedagen === 1 ? '' : 'en') + ' (' + r.verzuimPct + '%)'; zSub = 'Bijna altijd present. Sterk — hou dat vast.'; }
-        else if (tier === 'ok') { zEm = '🤔'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen (' + r.verzuimPct + '%)'; zSub = 'Het mag strakker volgend jaar, hé.'; }
-        else if (tier === 'stern') { zEm = '⚠️'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen (' + r.verzuimPct + '%)'; zSub = 'Dat zijn er te veel. Dit moet naar beneden.'; }
-        else { zEm = '🚨'; zBig = r.ziektedagen + ''; zLab = 'ziektedagen — ' + r.verzuimPct + '% van het jaar'; zSub = 'In ' + r.ziekteperiodes + ' periodes, langste ' + r.langsteZiekteperiode + ' dagen. Zó hou je een ploeg niet recht. Volgend jaar rekenen we écht op je.'; }
-        cards.push({ accent: ZC, emoji: zEm, big: zBig, label: zLab, sub: zSub });
+        // Ziekte — positief maar NUCHTER (geen vingertik, maar ook niet te veel
+        // eieren onderleggen): toon eerlijk het cijfer, warme/neutrale kleur, korte
+        // droge boodschap. Geen rood/oranje alarm, geen zoetsappige comeback.
+        const WARM = { hero: GOLD, proud: GREEN, ok: TEAL, steady: NAVY, comeback: NAVY };
+        const ZC = WARM[tier] || NAVY;
+        const zd = r.ziektedagen;
+        let zEmoji, zSub;
+        if (tier === 'hero') { zEmoji = '🏆'; zSub = 'Een rots. Chapeau.'; }
+        else if (tier === 'proud') { zEmoji = '💪'; zSub = 'Bijna altijd present. Sterk.'; }
+        else if (tier === 'ok') { zEmoji = '👍'; zSub = 'Meestal present. Prima.'; }
+        else if (tier === 'steady') { zEmoji = '📅'; zSub = 'Op naar een gezonder volgend jaar.'; }
+        else { zEmoji = '📅'; zSub = 'Een zwaar jaar gehad — op naar een gezonder nieuw jaar.'; }
+        cards.push({ accent: ZC, emoji: zEmoji, big: zd + '', label: 'ziektedag' + (zd === 1 ? '' : 'en') + (tier === 'hero' ? ' — het hele jaar paraat' : ' dit jaar'), sub: zSub });
         if (r.sociaalVerlof > 0) add(PURPLE, '🤝', r.sociaalVerlof + '', 'dag' + (r.sociaalVerlof === 1 ? '' : 'en') + ' sociaal verlof', '');
-        const slot = (tier === 'hero' || tier === 'proud') ? 'Geniet van je welverdiende vakantie. 🌴' : (tier === 'ok' ? 'Fijne vakantie — en kom er fris aan.' : 'Rust nu goed uit. En kom terug met een propere lei — we hebben je nodig.');
-        add(ORANGE, '🌴', 'Fijne vakantie!', '', slot);
+        add(ORANGE, '🌴', 'Fijne vakantie!', '', 'Geniet van het bouwverlof. 🌴 Tot straks!');
+        cards[cards.length - 1].onShow = () => { try { this._playWeekendJingle(); } catch (_e) {} };
         this._playStories(cards, 'QE · JAAR 25-26');
     },
 
     _jaarTier(r) {
-        const zd = r.ziektedagen || 0, pct = r.verzuimPct || 0, wd = r.werkbareDagen || 0;
+        // Warmte-tier (ALTIJD positief) op basis van de ziektedagen — geen
+        // strafescalatie meer: iedereen mag fijn aan het bouwverlof starten.
+        const zd = r.ziektedagen || 0;
         if (zd === 0) return 'hero';
-        let t = 'proud';
-        if (zd >= 8) t = 'ok';
-        if (zd >= 20) t = 'stern';
-        if (zd >= 40) t = 'harsh';
-        if (wd >= 100) {
-            if (pct >= 45 && t !== 'harsh') t = 'harsh';
-            else if (pct >= 25 && (t === 'proud' || t === 'ok')) t = 'stern';
-        }
-        return t;
+        if (zd <= 7) return 'proud';
+        if (zd <= 19) return 'ok';
+        if (zd <= 39) return 'steady';
+        return 'comeback';
     },
 
     /** Custom story-kaart: mini-staafgrafiek van de uren per maand (Marble-licht). */
