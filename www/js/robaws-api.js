@@ -461,16 +461,24 @@ const RobawsAPI = {
     // POST /approval-requests/{approvalId}/accept|reject (body {reason}) —
     // dat zet de verlofstatus (bevestigd: reject -> REJECTED). NIET via PATCH
     // status (dat wordt genegeerd) en time-off zit niet in de status-PATCH.
-    /** Openstaande verlof-goedkeuringen (bureel), verrijkt met de aanvraag.
+    /** Openstaande verlof-goedkeuringen waar de INGELOGDE gebruiker (myUserId =
+     *  Robaws userId) zélf nog moet beslissen — zelfde flow en zelfde regel als
+     *  de facturen: alles komt eerst bij Rolf, die keurt goed/af en verwijst
+     *  door (add-approver); pas dan krijgt de volgende AWAITING_DECISION. De
+     *  gedeelde sleutel is Rolf (userId 2), dus een server-side "van mij"-filter
+     *  zou Rolfs lijst geven — daarom CLIENT-SIDE filteren op userStates.
+     *  Zonder myUserId: fail-closed (lege lijst).
      *  excludeEmployeeId: sluit de eigen aanvragen uit (vier-ogen — je keurt
      *  je eigen verlof niet goed; voorkomt ook een vastlopende 4xx). */
-    async getPendingLeaveApprovals(excludeEmployeeId) {
+    async getPendingLeaveApprovals(excludeEmployeeId, myUserId) {
+        const uid = (myUserId != null && myUserId !== '') ? String(myUserId) : null;
+        if (!uid) { console.warn('[Goedkeuring] geen userId meegegeven — geen verlof-goedkeuringen getoond'); return []; }
         const all = [];
         const seen = new Set();
         const SIZE = 100, MAX_PAGES = 20;
         let page = 0, totalPages = 1;
         while (page < totalPages && page < MAX_PAGES) {
-            const r = await this.get('approval-requests?open=true&page=' + page + '&size=' + SIZE, { bypassCache: true });
+            const r = await this.get('approval-requests?open=true&include=userStates&page=' + page + '&size=' + SIZE, { bypassCache: true });
             if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
             const body = r.data || {};
             const items = body.items || [];
@@ -480,7 +488,14 @@ const RobawsAPI = {
             page++;
             if (added === 0) break;   // enkel stoppen bij een genegeerde page-param; page<totalPages bepaalt het echte einde (server kan size lager cappen)
         }
-        const timeOff = all.filter(a => /^\/time-off-requests\/\d+/.test(a.resourceUnderApprovalRef || ''));
+        // Enkel verlofaanvragen waar JIJ nog moet beslissen (AWAITING_DECISION);
+        // andermans goedkeuringen vallen weg — vóór de verrijking, dat spaart
+        // meteen ook API-calls uit.
+        const timeOff = all.filter(a =>
+            /^\/time-off-requests\/\d+/.test(a.resourceUnderApprovalRef || '') &&
+            Array.isArray(a.userStates) &&
+            a.userStates.some(s => String(s.userId) === uid && String(s.status) === 'AWAITING_DECISION')
+        );
         const out = [];
         for (const a of timeOff) {
             const torId = String(a.resourceUnderApprovalRef).split('/').pop();
@@ -590,14 +605,21 @@ const RobawsAPI = {
         return res.data;
     },
 
-    /** Openstaande factuur-goedkeuringen (aankoopfacturen) — voor teller + lijst. */
-    async getPurchaseInvoiceApprovals() {
+    /** Openstaande factuur-goedkeuringen (aankoopfacturen) waar de INGELOGDE
+     *  gebruiker (myUserId = Robaws userId) zélf nog moet beslissen — voor teller
+     *  + lijst. BELANGRIJK: de gedeelde API-sleutel is Rolf (userId 2), dus een
+     *  server-side "van mij"-filter zou Rolfs lijst geven. Daarom filteren we
+     *  CLIENT-SIDE op userStates. Zonder myUserId: fail-closed (lege lijst) —
+     *  nooit per ongeluk alles tonen. */
+    async getPurchaseInvoiceApprovals(myUserId) {
+        const uid = (myUserId != null && myUserId !== '') ? String(myUserId) : null;
+        if (!uid) { console.warn('[Goedkeuring] geen userId meegegeven — geen factuur-goedkeuringen getoond'); return []; }
         const all = [];
         const seen = new Set();
         const SIZE = 100, MAX_PAGES = 20;
         let page = 0, totalPages = 1;
         while (page < totalPages && page < MAX_PAGES) {
-            const r = await this.get('approval-requests?open=true&include=supplier&page=' + page + '&size=' + SIZE, { bypassCache: true });
+            const r = await this.get('approval-requests?open=true&include=userStates,supplier&page=' + page + '&size=' + SIZE, { bypassCache: true });
             if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
             const body = r.data || {};
             const items = body.items || [];
@@ -607,7 +629,13 @@ const RobawsAPI = {
             page++;
             if (added === 0) break;
         }
-        return all.filter(a => /^\/purchase-invoices\/\d+/.test(a.resourceUnderApprovalRef || ''));
+        // Enkel aankoopfacturen waar JIJ nog moet beslissen (AWAITING_DECISION);
+        // andermans goedkeuringen (bv. Rolf/Els) vallen weg.
+        return all.filter(a =>
+            /^\/purchase-invoices\/\d+/.test(a.resourceUnderApprovalRef || '') &&
+            Array.isArray(a.userStates) &&
+            a.userStates.some(s => String(s.userId) === uid && String(s.status) === 'AWAITING_DECISION')
+        );
     },
 
     /** Detail van één approval-request incl. de goedkeurders
@@ -1711,6 +1739,53 @@ const RobawsAPI = {
             if (pin) emp.extraFields['Pincode'] = { type: 'TEXT', group: 'QE Werkbon app', stringValue: String(pin) };
         });
         return { id: newId };
+    },
+
+    // ================================================================
+    // (v308 / 1.x v303) ONBOARDING-CHECK — één read-only statusfoto van
+    // alles wat een werknemer nodig heeft om de app te gebruiken.
+    // Geverifieerd (10 juli 2026): de user↔fiche-koppeling ligt op de
+    // USER (user.employeeId); de fiche toont hem niet. POST/PATCH op
+    // /users geeft 403 met onze key — login-users blijven handwerk in
+    // Robaws-web; de app VINDT en verifieert de koppeling alleen.
+    // ================================================================
+    async adminGetOnboardingStatus(employeeId) {
+        const empRes = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (empRes.code !== 200 || !empRes.data) throw new Error('Fiche niet gevonden (' + empRes.code + ')');
+        const emp = empRes.data;
+        const email = String(emp.email || '').trim().toLowerCase();
+        const statusStr = String(emp.status || '').toLowerCase();
+        const pinVal = this._efValue(emp, 'Pincode');
+        const roleLabel = emp.planningGroupName || emp.planningGroup || '';
+        const roleOk = !!(emp.employeeRoleId || roleLabel);
+        // Gekoppelde login-user zoeken: users-scan (klein bestand, filters
+        // worden door Robaws genegeerd) — match op employeeId, dan e-mail.
+        let user = null;
+        try {
+            let page = 0;
+            do {
+                const r = await this.get('users?limit=100&offset=' + (page * 100), { bypassCache: true });
+                if (r.code !== 200 || !r.data) break;
+                const list = r.data.items || (Array.isArray(r.data) ? r.data : []);
+                if (!list.length) break;
+                const empIdStr = String(employeeId);
+                user = list.find(u => String(u.employeeId || (u.employee && u.employee.id) || '') === empIdStr)
+                    || (email ? list.find(u => String(u.email || '').toLowerCase() === email) : null) || null;
+                if (user) break;
+                page++;
+                if (page >= (r.data.totalPages || 1)) break;
+            } while (page < 5);
+        } catch (_e) {}
+        return {
+            naam: [emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.name || ('#' + employeeId),
+            checks: {
+                email:  { ok: !!email, value: email },
+                actief: { ok: !statusStr.includes('stopgezet'), value: emp.status || 'actief' },
+                rol:    { ok: roleOk, value: roleLabel || (emp.employeeRoleId ? ('rol-id ' + emp.employeeRoleId) : '') },
+                user:   { ok: !!user, value: user ? ((user.fullName || user.email || 'user') + ' (#' + user.id + ')') : '', userId: user ? user.id : null },
+                pin:    { ok: !!(pinVal && String(pinVal).trim()) },
+            },
+        };
     },
 
     // Fallback login als Robaws onbereikbaar is.

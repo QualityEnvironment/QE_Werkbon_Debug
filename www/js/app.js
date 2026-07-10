@@ -494,7 +494,7 @@ const app = {
         // te wissen. Daardoor lekte woData/favorites/pending payments
         // van de vorige user naar de volgende op hetzelfde toestel.
         try { await fetch('api/auth.php?action=logout'); } catch(e) {}
-        try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', ''); } catch(_e) {}
+        try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', '', ''); } catch(_e) {}
 
         // Wis enkel sleutels die user-gebonden zijn. Sleutels die voor
         // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
@@ -647,7 +647,7 @@ const app = {
             const _apu = RobawsAPI.getLoggedInUser();
             const _emp = (this.currentUser && this.currentUser.robawsEmployeeId) || '';
             const _ap = RobawsAPI._authPair ? RobawsAPI._authPair() : {};
-            if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser(String(_emp), String((_apu && _apu.role) || ''), String((_ap && _ap.key) || ''), String((_ap && _ap.secret) || ''), String(RobawsAPI.TENANT || ''));
+            if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser(String(_emp), String((_apu && _apu.role) || ''), String((_ap && _ap.key) || ''), String((_ap && _ap.secret) || ''), String(RobawsAPI.TENANT || ''), String(this._myRobawsUserId() || ''));
         } catch (_e) {}
     },
 
@@ -7986,7 +7986,7 @@ const app = {
         if (!this._adminIsBureel()) { this.toast('Geen toegang', true); return; }
         this.showModal(
             '<div style="font-size:16px;font-weight:600;margin-bottom:4px">Nieuwe werknemer</div>' +
-            '<div style="font-size:12px;color:var(--qe-orange);margin-bottom:12px;line-height:1.4">Let op: dit maakt enkel de werknemerfiche. De login-gebruiker maak je daarna in Robaws-web (Instellingen → Gebruikers) en koppel je aan deze fiche.</div>' +
+            '<div style="font-size:12px;color:var(--qe-orange);margin-bottom:12px;line-height:1.4">Dit maakt de werknemerfiche; daarna opent automatisch de controle-checklist. De login-gebruiker maak je in Robaws-web (Instellingen → Gebruikers, veld "Werknemer" = deze fiche) — de checklist ziet vanzelf wanneer dat gebeurd is.</div>' +
             '<div class="form-group"><label>Voornaam</label><input class="form-input" id="adminNewFirst"></div>' +
             '<div class="form-group"><label>Achternaam</label><input class="form-input" id="adminNewLast"></div>' +
             '<div class="form-group"><label>E-mail</label><input class="form-input" id="adminNewEmail" type="email" placeholder="naam@qe.be"></div>' +
@@ -8010,12 +8010,128 @@ const app = {
         if (pin && !/^\d{4,6}$/.test(pin)) { this.toast('PIN = 4 tot 6 cijfers', true); return; }
         this._adminBusy = true;
         try {
-            await RobawsAPI.adminCreateEmployee({ firstName, lastName, email, role, pin });
-            this.closeModal();
+            const created = await RobawsAPI.adminCreateEmployee({ firstName, lastName, email, role, pin });
             this.toast('Werknemerfiche aangemaakt', false);
             this.loadAdmin();
+            // (v308 / 1.x v303) meteen door naar de controle-checklist zodat
+            // bureel ziet wat er nog ontbreekt (login-koppeling in Robaws-web).
+            if (created && created.id) this.showAdminOnboardChecklist(created.id);
+            else this.closeModal();
         } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
         finally { this._adminBusy = false; }
+    },
+
+    // ================================================================
+    // (v308 / 1.x v303) ONBOARDING-WIZARD — "werkt deze werknemer?"
+    // Kies een werknemer (geen ID's nodig): de app controleert e-mail,
+    // status, rol, login-koppeling en PIN, en repareert met één tik wat
+    // hij zelf kan zetten. De login-user aanmaken/koppelen kan de app
+    // NIET (API geeft 403) — daarvoor toont de wizard de exacte
+    // Robaws-web-stap + een hercheck-knop.
+    // ================================================================
+    async openAdminOnboard(preselectId) {
+        if (!this._adminIsBureel()) { this.toast('Geen toegang', true); return; }
+        this.showModal('<div class="spinner"></div>');
+        let emps = [];
+        try { emps = await RobawsAPI.getActiveEmployees({ force: true }); } catch (_e) {}
+        if (!emps || !emps.length) {
+            this.showModal('<p class="text-grey text-sm text-center">Geen werknemers gevonden.</p>' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Sluiten</button>');
+            return;
+        }
+        const opts = emps.map(e => {
+            const id = String(e.employeeId != null ? e.employeeId : (e.id != null ? e.id : ''));
+            return '<option value="' + this.escapeHtml(id) + '"' + (id === String(preselectId || '') ? ' selected' : '') + '>' +
+                this.escapeHtml(e.name || ('#' + id)) + '</option>';
+        }).join('');
+        this.showModal(
+            '<div style="font-size:16px;font-weight:600;margin-bottom:4px">Werknemer controleren</div>' +
+            '<div style="font-size:12px;color:var(--qe-grey);margin-bottom:12px;line-height:1.4">Kies een werknemer — de app controleert alles wat nodig is om te kunnen werken (e-mail, rol, login-koppeling, PIN) en repareert wat kan.</div>' +
+            '<div class="form-group"><label>Werknemer</label><select class="form-input" id="adminOnboardSelect">' + opts + '</select></div>' +
+            '<div style="display:flex;gap:8px;margin-top:8px">' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>' +
+                '<button class="btn btn-primary btn-full" onclick="app.adminRunOnboardCheck()">Controleren</button></div>'
+        );
+    },
+    adminRunOnboardCheck() {
+        const sel = document.getElementById('adminOnboardSelect');
+        if (sel && sel.value) this.showAdminOnboardChecklist(sel.value);
+    },
+    async showAdminOnboardChecklist(empId) {
+        this.showModal('<div class="spinner"></div>');
+        let st;
+        try { st = await RobawsAPI.adminGetOnboardingStatus(empId); }
+        catch (e) {
+            this.showModal('<p style="font-size:13px;color:var(--qe-red);text-align:center">Controle mislukt: ' + this.escapeHtml(e.message || '?') + '</p>' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Sluiten</button>');
+            return;
+        }
+        const c = st.checks;
+        const idArg = this._escapeJsArg(String(empId));
+        const row = (ok, label, valueHtml, fixHtml, warn) => {
+            const icon = ok ? '&#10003;' : (warn ? '&#9888;' : '&#10007;');
+            const color = ok ? 'var(--qe-green)' : (warn ? '#b8860b' : 'var(--qe-red)');
+            return '<div style="padding:9px 0;border-bottom:1px solid rgba(0,0,0,0.06)">' +
+                '<div style="display:flex;gap:8px;align-items:baseline">' +
+                    '<span style="color:' + color + ';font-weight:700;flex-shrink:0">' + icon + '</span>' +
+                    '<span style="font-size:13.5px;font-weight:600;flex:1">' + label + '</span>' +
+                    (valueHtml ? '<span style="font-size:12px;color:var(--qe-grey);text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%">' + valueHtml + '</span>' : '') +
+                '</div>' + (fixHtml || '') + '</div>';
+        };
+        const fixWrap = (inner) => '<div style="display:flex;gap:6px;margin-top:7px">' + inner + '</div>';
+        const allOk = c.email.ok && c.actief.ok && c.rol.ok && c.user.ok;
+        let html = '<div style="font-size:16px;font-weight:600">' + this.escapeHtml(st.naam) + '</div>' +
+            '<div style="font-size:12.5px;font-weight:600;margin:2px 0 10px;color:' + (allOk ? 'var(--qe-green)' : 'var(--qe-orange)') + '">' +
+                (allOk ? (c.pin.ok ? 'Klaar om in te loggen &#10003;' : 'Klaar — PIN kiest de werknemer bij de eerste login') : 'Nog niet klaar — zie de punten hieronder') + '</div>';
+        html += row(c.email.ok, 'E-mail op de fiche', this.escapeHtml(c.email.value || '—'),
+            c.email.ok ? '' : fixWrap('<input class="form-input" id="obEmail" type="email" placeholder="naam@qe.be" style="flex:1">' +
+                '<button class="btn btn-primary btn-sm" onclick="app.adminOnboardFixEmail(\'' + idArg + '\')">Zet</button>'));
+        html += row(c.actief.ok, 'Status actief', this.escapeHtml(c.actief.value || ''),
+            c.actief.ok ? '' : fixWrap('<button class="btn btn-primary btn-sm" style="flex:1" onclick="app.adminOnboardFixStatus(\'' + idArg + '\')">Heractiveren</button>'));
+        html += row(c.rol.ok, 'Rol / planning-groep', this.escapeHtml(c.rol.value || '—'),
+            fixWrap('<select class="form-input" id="obRole" style="flex:1"><option value="monteur">Monteur</option><option value="technieker">Technieker</option><option value="bureel">Bureel</option></select>' +
+                '<button class="btn btn-outline btn-sm" onclick="app.adminOnboardFixRole(\'' + idArg + '\')">' + (c.rol.ok ? 'Wijzig' : 'Zet') + '</button>'));
+        html += row(c.user.ok, 'Login-gebruiker gekoppeld', this.escapeHtml(c.user.value || ''),
+            c.user.ok ? '' : '<div style="font-size:12px;color:var(--qe-grey);margin-top:6px;line-height:1.45">De app kan dit niet zelf (Robaws staat het niet toe via de API). Maak in <b>Robaws-web &#8594; Instellingen &#8594; Gebruikers</b> een gebruiker aan (of open de bestaande) en kies bij <b>Werknemer</b> deze fiche. Kom daarna terug en tik &quot;Opnieuw controleren&quot;.</div>');
+        html += row(c.pin.ok, 'PIN', c.pin.ok ? 'ingesteld' : 'nog geen — kiest werknemer bij 1e login',
+            c.pin.ok ? '' : fixWrap('<input class="form-input" id="obPin" inputmode="numeric" maxlength="6" placeholder="nu al zetten (optioneel)" style="flex:1">' +
+                '<button class="btn btn-outline btn-sm" onclick="app.adminOnboardFixPin(\'' + idArg + '\')">Zet</button>'), !c.pin.ok);
+        html += '<div style="display:flex;gap:8px;margin-top:14px">' +
+            '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Sluiten</button>' +
+            '<button class="btn btn-primary btn-full" onclick="app.showAdminOnboardChecklist(\'' + idArg + '\')">Opnieuw controleren</button></div>';
+        this.showModal(html);
+        const roleSel = document.getElementById('obRole');
+        if (roleSel) {
+            const v = String(c.rol.value || '').toLowerCase();
+            if (v.includes('monteur')) roleSel.value = 'monteur';
+            else if (v.includes('bureel') || v.includes('kantoor') || v.includes('service') || v.includes('projectleider')) roleSel.value = 'bureel';
+            else roleSel.value = 'technieker';
+        }
+    },
+    async _adminOnboardFix(empId, fn, okMsg) {
+        if (this._adminBusy) return;
+        this._adminBusy = true;
+        try { await fn(); this.toast(okMsg); }
+        catch (e) { this.toast('Mislukt: ' + (e.message || '?'), true); }
+        finally { this._adminBusy = false; }
+        this.showAdminOnboardChecklist(empId);
+    },
+    adminOnboardFixEmail(empId) {
+        const v = ((document.getElementById('obEmail') || {}).value || '').trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { this.toast('Geldig e-mailadres vereist', true); return; }
+        this._adminOnboardFix(empId, () => RobawsAPI._adminMutateEmployee(empId, (emp) => { emp.email = v; }), 'E-mail gezet');
+    },
+    adminOnboardFixStatus(empId) {
+        this._adminOnboardFix(empId, () => RobawsAPI.adminSetStatus(empId, 'actief'), 'Geheractiveerd');
+    },
+    adminOnboardFixRole(empId) {
+        const role = (document.getElementById('obRole') || {}).value || 'monteur';
+        this._adminOnboardFix(empId, () => RobawsAPI.adminSetRole(empId, role), 'Rol ingesteld');
+    },
+    adminOnboardFixPin(empId) {
+        const pin = ((document.getElementById('obPin') || {}).value || '').trim();
+        if (!/^\d{4,6}$/.test(pin)) { this.toast('PIN = 4 tot 6 cijfers', true); return; }
+        this._adminOnboardFix(empId, () => RobawsAPI._savePinToRobaws(empId, pin), 'PIN gezet');
     },
 
     async loadClockAdmin() {
@@ -8325,7 +8441,7 @@ const app = {
         if (!u || u.role !== 'bureel') { list.innerHTML = '<p class="text-grey text-sm text-center">Alleen bureel.</p>'; return; }
         list.innerHTML = '<div class="spinner"></div>';
         try {
-            const items = await RobawsAPI.getPendingLeaveApprovals(this.currentUser && this.currentUser.robawsEmployeeId);
+            const items = await RobawsAPI.getPendingLeaveApprovals(this.currentUser && this.currentUser.robawsEmployeeId, this._myRobawsUserId());
             this._verlofApprovalCache = {};
             if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande verlofaanvragen.</p>'; return; }
             list.innerHTML = items.map(it => {
@@ -8408,8 +8524,8 @@ const app = {
         try {
             const empId = this.currentUser && this.currentUser.robawsEmployeeId;
             const [verlof, fact, mat] = await Promise.all([
-                RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
-                RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+                RobawsAPI.getPendingLeaveApprovals(empId, this._myRobawsUserId()).catch(() => []),
+                RobawsAPI.getPurchaseInvoiceApprovals(this._myRobawsUserId()).catch(() => []),
                 RobawsAPI.getMaterieelAanvragen().catch(() => []),
             ]);
             const n = (verlof.length || 0) + (fact.length || 0) + (mat.length || 0);
@@ -8558,8 +8674,8 @@ const app = {
         try {
             const empId = this.currentUser && this.currentUser.robawsEmployeeId;
             const [v, f, mat] = await Promise.all([
-                RobawsAPI.getPendingLeaveApprovals(empId).catch(() => []),
-                RobawsAPI.getPurchaseInvoiceApprovals().catch(() => []),
+                RobawsAPI.getPendingLeaveApprovals(empId, this._myRobawsUserId()).catch(() => []),
+                RobawsAPI.getPurchaseInvoiceApprovals(this._myRobawsUserId()).catch(() => []),
                 RobawsAPI.getMaterieelAanvragen().catch(() => []),
             ]);
             const setB = (id, n) => { const b = document.getElementById(id); if (b) { if (n > 0) { b.textContent = String(n); b.style.display = ''; } else b.style.display = 'none'; } };
@@ -8957,7 +9073,7 @@ const app = {
         if (!list) return;
         list.innerHTML = '<div class="spinner"></div>';
         try {
-            const items = await RobawsAPI.getPurchaseInvoiceApprovals();
+            const items = await RobawsAPI.getPurchaseInvoiceApprovals(this._myRobawsUserId());
             this._factuurApprovalCache = {};
             if (!items.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen openstaande factuur-goedkeuringen.</p>'; return; }
             list.innerHTML = items.map(a => {

@@ -1195,7 +1195,10 @@
     <div class="section-header"><h2>Beheer — Werknemers</h2></div>
     <div class="card" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;justify-content:space-between">
         <div style="font-size:13px;color:var(--qe-grey)">Werknemers beheren via Robaws.</div>
-        <button class="btn btn-primary btn-sm" onclick="app.openAdminCreate()">+ Nieuw</button>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+            <button class="btn btn-outline btn-sm" onclick="app.openAdminOnboard()">✓ Controleren</button>
+            <button class="btn btn-primary btn-sm" onclick="app.openAdminCreate()">+ Nieuw</button>
+        </div>
     </div>
     <div id="adminEmpList"><div class="spinner"></div></div>
 </div>
