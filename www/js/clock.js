@@ -104,7 +104,9 @@ window.QEClock = {
                 method: 'HEAD',
                 signal: controller.signal,
                 cache: 'no-store',
-                headers: RobawsAPI.getHeaders(),
+                // (v307 / 1.x v302) HEAD mag via de replica-pool (alleen de
+                // Date-header is nodig) — spaart de live-dagteller.
+                headers: Object.assign({}, RobawsAPI.getHeaders(), { 'Database-Mode': 'replica' }),
             });
             clearTimeout(timeout);
             const localAfter = Date.now();
@@ -1123,7 +1125,9 @@ window.QEClock = {
         let exPrevHours = null;     // som uren van blokken vóór entryStartMin
         let exUntimed = null;       // [{id, hours, isOver}]
         try {
-            const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`);
+            // (v305 / 1.x v300) bypassCache → LIVE-pool, niet de replica: dit is
+            // de idempotency-read; een verouderde kopie zou dubbel kunnen boeken.
+            const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`, { bypassCache: true });
             const exItems = (exRes.data && (exRes.data.items || exRes.data)) || [];
             const mijn = exItems.filter(te => {
                 const aId = te.articleId || (te.article && te.article.id);
@@ -2050,7 +2054,9 @@ window.QEClock = {
         // hieronder én de L&L-detectie daarna.
         let _teItems = null;
         try {
-            const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`);
+            // (v305 / 1.x v300) bypassCache → LIVE-pool: deze read stuurt de
+            // her-post-beslissing bij sync (idempotency) — moet gezaghebbend zijn.
+            const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`, { bypassCache: true });
             if (teRes.code === 200 && teRes.data && teRes.data.items) _teItems = teRes.data.items;
         } catch (e) {
             console.warn('[Clock] time-entries fetch voor sync mislukt:', e.message);

@@ -174,10 +174,80 @@ const RobawsAPI = {
         }
     },
 
-    /** Rauwe fetch zonder cache (interne helper). */
-    async _rawGet(key) {
+    // ================================================================
+    // DUBBELE API-POOL (v305 / 1.x v300) — Robaws telt de daglimiet PER
+    // MODE (support-artikel "API rate limiting"), live geverifieerd op
+    // onze tenant: live én replica hebben elk 20.000/dag (aparte tellers,
+    // samen 40k); de ~15-20/sec burst-teller is wél gedeeld.
+    //   - live (standaard): lezen + schrijven
+    //   - replica: alleen GET, eventual-consistent kopie
+    //     (header "Database-Mode: replica")
+    // Routering: gewone lees-calls → replica (spaart de live-pool);
+    // schrijf-calls + bypassCache-reads → live. bypassCache betekent in
+    // deze codebase "ik heb gezaghebbend verse data nodig" (vers-vóór-
+    // full-replace-PUT, klok-idempotency, refresh-na-write) — precies wat
+    // een eventual-consistent replica NIET mag leveren.
+    // 429 op replica → call meteen herhalen via live en de replica-pool
+    // tot de reset (of 30 min vangnet) links laten liggen.
+    // ================================================================
+    _REPLICA_LS_KEY: 'qe_replica_exhausted_until',
+    _replicaExhaustedUntil: null,   // ms-epoch; null = nog niet uit localStorage geladen
+    _replicaBlockedUntil() {
+        if (this._replicaExhaustedUntil == null) {
+            let v = 0;
+            try { v = parseInt(localStorage.getItem(this._REPLICA_LS_KEY) || '0', 10) || 0; } catch (_e) {}
+            this._replicaExhaustedUntil = v;
+        }
+        return this._replicaExhaustedUntil;
+    },
+    _markReplicaExhausted(res) {
+        let ms = 30 * 60 * 1000;   // vangnet als de rate-limit-headers niet leesbaar zijn
+        try {
+            const h = res && res.headers;
+            const remaining = h ? parseInt(h.get('X-RateLimit-Daily-Remaining'), 10) : NaN;
+            const reset = h ? parseInt(h.get('X-RateLimit-Daily-Reset'), 10) : NaN;
+            if (remaining > 0) ms = 60 * 1000;   // burst-429 (gedeelde sec-teller), geen dag-uitputting
+            else if (reset > 0) ms = Math.min(reset * 1000, 24 * 60 * 60 * 1000);
+        } catch (_e) {}
+        this._replicaExhaustedUntil = Date.now() + ms;
+        try { localStorage.setItem(this._REPLICA_LS_KEY, String(this._replicaExhaustedUntil)); } catch (_e) {}
+        console.warn('[RobawsAPI] Replica-pool gaf 429 → lees-calls ' + Math.round(ms / 60000) + ' min via live');
+    },
+
+    // (v306 / 1.x v301) Laatst geziene rate-limit-headers per pool — liften
+    // GRATIS mee op elke respons (kost geen extra calls). Voor het
+    // "API-tegoed vandaag" op het Profiel (bureel).
+    _rateStats: { live: null, replica: null },
+    _captureRateHeaders(res, mode) {
+        try {
+            const h = res && res.headers;
+            if (!h) return;
+            const rem = parseInt(h.get('X-RateLimit-Daily-Remaining'), 10);
+            const lim = parseInt(h.get('X-RateLimit-Daily-Limit'), 10);
+            const rst = parseInt(h.get('X-RateLimit-Daily-Reset'), 10);
+            if (isNaN(rem) || isNaN(lim)) return;
+            this._rateStats[mode] = { remaining: rem, limit: lim, resetSec: isNaN(rst) ? null : rst, at: Date.now() };
+        } catch (_e) {}
+    },
+    /** { live, replica } — elk {remaining, limit, resetSec, at} of null (nog geen meting). */
+    getRateStats() {
+        return { live: this._rateStats.live, replica: this._rateStats.replica };
+    },
+
+    /** Rauwe fetch zonder cache (interne helper). live=true = live-pool afdwingen. */
+    async _rawGet(key, live) {
         const url = this.BASE_URL + '/' + key;
-        const res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
+        const useReplica = !live && Date.now() >= this._replicaBlockedUntil();
+        const headers = this.getHeaders();
+        if (useReplica) headers['Database-Mode'] = 'replica';
+        let res = await this._fetchWithTimeout(url, { headers });
+        this._captureRateHeaders(res, useReplica ? 'replica' : 'live');
+        if (useReplica && res.status === 429) {
+            // Replica-pool op (of burst): markeren + dezelfde call via live.
+            this._markReplicaExhausted(res);
+            res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
+            this._captureRateHeaders(res, 'live');
+        }
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
         if (!txt) return { code: res.status, data: null };
@@ -205,8 +275,10 @@ const RobawsAPI = {
             const shared = await this._getInflight[key];
             return this._cloneResult(shared);
         }
-        // 3. Echte fetch (in-flight registreren voor dedup)
-        const p = this._rawGet(key);
+        // 3. Echte fetch (in-flight registreren voor dedup). bypassCache-reads
+        //    gaan via de LIVE-pool (gezaghebbend vers — vers-vóór-PUT e.d.);
+        //    gewone reads via de replica-pool (aparte dagteller).
+        const p = this._rawGet(key, bypass || !!(opts && opts.live));
         this._getInflight[key] = p;
         let result;
         try {
@@ -231,6 +303,7 @@ const RobawsAPI = {
             headers: this.getHeaders(),
             body: JSON.stringify(body),
         });
+        this._captureRateHeaders(res, 'live');
         // 204 No Content of lege body veilig afhandelen
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
@@ -250,6 +323,7 @@ const RobawsAPI = {
             headers: this.getHeaders(),
             body: JSON.stringify(body),
         });
+        this._captureRateHeaders(res, 'live');
         // PUT returns 204 No Content on success
         if (res.status === 204) return { code: 204, data: null };
         // BUG-fix: bij Cloudflare/HTML 502/504 crashte `await res.json()`
@@ -637,6 +711,14 @@ const RobawsAPI = {
         return out;
     },
 
+    /** Zoek één project op zijn logicId (bv. "P260022"); null als geen exacte hit. */
+    async getProjectByLogicId(logicId) {
+        const norm = String(logicId || '').toUpperCase().replace(/[\s-]/g, '');
+        if (!norm) return null;
+        const list = await this.searchProjects(norm, 10);
+        return list.find(p => String(p.logicId || '').toUpperCase().replace(/[\s-]/g, '') === norm) || null;
+    },
+
     /** Kleine keuzelijsten voor het bewerk-paneel. */
     async getJournals() {
         const r = await this.get('journals?page=0&size=100', { bypassCache: false });
@@ -647,6 +729,116 @@ const RobawsAPI = {
         const r = await this.get('payment-conditions?page=0&size=100', { bypassCache: false });
         if (r.code !== 200) return [];
         return ((r.data && r.data.items) || []).map(p => ({ id: String(p.id), name: p.name || ('Voorwaarde ' + p.id) }));
+    },
+
+    // ============================================================
+    // v305: FACTUUR-DETAIL PARITEIT met Robaws — verkooporder-koppeling op
+    // lijnen, opmerkingen (chat) en taken op de aankoopfactuur.
+    // ============================================================
+
+    /** Verkooporders zoeken voor de order-picker (searchText + page-wrapper). */
+    async searchSalesOrders(query, limit) {
+        const q = query ? ('&searchText=' + encodeURIComponent(query)) : '';
+        const r = await this.get('sales-orders?page=0&size=' + (limit || 25) + q, { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        const data = r.data || {};
+        const items = data.items || (data.data && data.data.items) || (Array.isArray(data) ? data : []);
+        const out = items.map(o => ({
+            id: String(o.id),
+            logicId: o.logicId || '',
+            name: o.title || o.clientReference || '',
+            status: o.status || '',
+            date: o.date || '',
+            client: (o.client && o.client.name) || '',
+        }));
+        if (query) {
+            const ql = query.toLowerCase();
+            const f = out.filter(o => (o.logicId + ' ' + o.name + ' ' + o.client).toLowerCase().indexOf(ql) !== -1);
+            if (f.length) return f;
+        }
+        return out;
+    },
+
+    /** Zoek één verkooporder op zijn logicId (bv. "R250004"); null als geen exacte hit. */
+    async getSalesOrderByLogicId(logicId) {
+        const norm = String(logicId || '').toUpperCase().replace(/[\s-]/g, '');
+        if (!norm) return null;
+        const list = await this.searchSalesOrders(norm, 10);
+        return list.find(o => String(o.logicId || '').toUpperCase().replace(/[\s-]/g, '') === norm) || null;
+    },
+
+    /** Koppel een verkooporder (of null = wissen) aan één factuurlijn. */
+    async setLineItemSalesOrder(invoiceId, lineId, salesOrderId) {
+        const res = await this.patchMerge('purchase-invoices/' + invoiceId + '/line-items/' + lineId,
+            { salesOrderId: (salesOrderId != null && salesOrderId !== '') ? String(salesOrderId) : null });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Opmerkingen (chat) op een aankoopfactuur — kale array, zelfde comment-bron
+     *  als verlof; sorteer oud→nieuw. */
+    async getInvoiceComments(invoiceId) {
+        const r = await this.get('purchase-invoices/' + invoiceId + '/comments?include=author', { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        const arr = Array.isArray(r.data) ? r.data : ((r.data && r.data.items) || []);
+        return arr.slice().sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    },
+
+    /** Voeg een opmerking toe aan een aankoopfactuur (authorId = Robaws userId,
+     *  anders wordt hij aan de gedeelde sleutel-eigenaar toegeschreven). */
+    async postInvoiceComment(invoiceId, content, authorId) {
+        const body = { content: String(content) };
+        if (authorId != null) body.authorId = String(authorId);
+        const res = await this.post('purchase-invoices/' + invoiceId + '/comments', body);
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return res.data;
+    },
+
+    /** Taken gekoppeld aan een resource (bv. "/purchase-invoices/123"). */
+    async getTasksForResource(resourceRef) {
+        const r = await this.get('tasks?page=0&size=100&relatedResource=' + encodeURIComponent(resourceRef), { bypassCache: true });
+        if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
+        const data = r.data || {};
+        const arr = data.items || (Array.isArray(data) ? data : []);
+        return arr.map(t => ({
+            id: String(t.id),
+            title: t.title || '',
+            description: t.description || '',
+            status: t.status || '',
+            assignedUserId: t.assignedUserId != null ? String(t.assignedUserId) : null,
+            reportingUserId: t.reportingUserId != null ? String(t.reportingUserId) : null,
+            deadline: t.deadline || null,
+        }));
+    },
+
+    /** Maak een taak op een resource (status default "Te doen"). */
+    async createTask(opts) {
+        const o = opts || {};
+        const body = { title: String(o.title || '') };
+        if (o.description) body.description = String(o.description);
+        if (o.assignedUserId != null && o.assignedUserId !== '') body.assignedUserId = String(o.assignedUserId);
+        if (o.reportingUserId != null && o.reportingUserId !== '') body.reportingUserId = String(o.reportingUserId);
+        if (o.relatedResource) body.relatedResource = String(o.relatedResource);
+        if (o.deadline) body.deadline = String(o.deadline);
+        const res = await this.post('tasks', body);
+        if (res.code !== 200 && res.code !== 201) throw new Error('Robaws gaf status ' + res.code);
+        return res.data;
+    },
+
+    /** Zet de status van een taak ("Te doen" / "Gedaan"). */
+    async setTaskStatus(taskId, status) {
+        const res = await this.patchMerge('tasks/' + taskId, { status: String(status) });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Verwijder een taak. */
+    async deleteTask(taskId) {
+        try { this._invalidateCache('tasks/' + taskId); } catch (_e) {}
+        const url = this.BASE_URL + '/tasks/' + taskId;
+        const res = await this._fetchWithTimeout(url, { method: 'DELETE', headers: this.getHeaders() });
+        if (res.status !== 200 && res.status !== 204) throw new Error('Robaws gaf status ' + res.status);
+        return true;
     },
 
     // ============================================================
@@ -2300,6 +2492,35 @@ const RobawsAPI = {
     // =============================================
     // PLANNING
     // =============================================
+    /** (v307 / 1.x v302) Lichte poll-teller: aantal open planning-items
+     *  (zonder werkbon) voor een datum, ZONDER de dure verrijking van
+     *  getPlanning (detail-GET per item + klantdata). De 5-min-poll heeft
+     *  alleen dit aantal nodig — zelfde datum-filter + zelfde werkbon-set,
+     *  dus de telling is identiek aan getPlanning's items.filter(!hasWerkbon). */
+    async getOpenPlanningCount(employeeId, date, userId = null) {
+        const yesterday = this._localDateStr(null, -1);
+        const cutoff = (date && date < yesterday) ? date : yesterday;
+        const all = []; const seen = new Set();
+        let offset = 0; const PAGE = 100;
+        for (let p = 0; p < 30; p++) {
+            const r = await this.get(`planning-items?employeeId=${employeeId}&limit=${PAGE}&offset=${offset}&sort=startDate:desc`);
+            if (r.code !== 200) throw new Error('Kon planning niet ophalen');
+            const items = (r.data && r.data.items) || [];
+            if (!items.length) break;
+            let added = 0;
+            for (const it of items) { const k = String(it.id); if (seen.has(k)) continue; seen.add(k); all.push(it); added++; }
+            const lastDate = ((items[items.length - 1].startDate || '') + '').split('T')[0];
+            if (lastDate < cutoff) break;
+            if (added === 0) break;
+            if (items.length < PAGE) break;
+            offset += PAGE;
+        }
+        const dayItems = all.filter(it => ((it.startDate || '') + '').split('T')[0] === date);
+        if (!dayItems.length) return 0;
+        const met = await this._getPlanningIdsWithWorkOrders(userId);
+        return dayItems.filter(it => !met.has(String(it.id))).length;
+    },
+
     async getPlanning(employeeId, date, userId = null) {
         // v138: GEEN whitelist meer — elke datum wordt geaccepteerd en strikt
         // gefilterd. Voorheen werd elke datum buiten {gisteren, vandaag, morgen}

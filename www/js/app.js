@@ -765,6 +765,21 @@ const app = {
         const updateStatus = document.getElementById('updateStatus');
         if (updateStatus) updateStatus.style.display = 'none';
 
+        // (v306 / 1.x v301) API-tegoed vandaag (bureel) — uit de laatst geziene
+        // rate-limit-headers (gratis meegelift, kost geen extra calls).
+        const quotaEl = document.getElementById('apiQuotaInfo');
+        if (quotaEl) {
+            const _qu = RobawsAPI.getLoggedInUser();
+            if (_qu && _qu.role === 'bureel' && RobawsAPI.getRateStats) {
+                const s = RobawsAPI.getRateStats();
+                const fmtP = (p) => p ? (p.remaining.toLocaleString('nl-BE') + ' / ' + p.limit.toLocaleString('nl-BE')) : '—';
+                quotaEl.textContent = 'API-tegoed vandaag — lezen (replica): ' + fmtP(s.replica) + ' · live: ' + fmtP(s.live);
+                quotaEl.style.display = 'block';
+            } else {
+                quotaEl.style.display = 'none';
+            }
+        }
+
         // v117: rol-switcher card vullen + tonen (alleen voor bureel/technieker)
         this.renderRoleSwitch();
 
@@ -9032,6 +9047,7 @@ const app = {
                 </div>
             </div>
             <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="app.openFactuurPdf('${this._escapeJsArg(id)}')">Factuur openen (PDF)</button>
+            <div id="factuurRefSuggest"></div>
             <div class="card" style="margin-bottom:12px;padding:14px 16px">
                 <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:2px">Goedkeuringsflow</div>
                 ${approvers}
@@ -9043,7 +9059,97 @@ const app = {
             </div>
             <div style="font-size:11px;color:var(--qe-grey);text-align:center;margin:10px 0 14px;line-height:1.4">Goedkeuren/afkeuren wordt geregistreerd op het gedeelde kantoor-account.</div>
             ${this._renderFacturatiePanel(inv, sup)}
-            ${this._renderFactuurLines(inv)}`;
+            ${this._renderFactuurLines(inv)}
+            ${this._renderFactuurComments()}
+            ${this._renderFactuurTaken()}`;
+        // v305: auto-suggestie — scan de PDF-tekst op project- én verkooporder-referenties.
+        this._suggestLinksFromPdf(invoiceId, inv);
+        this.loadFactuurComments(invoiceId);
+        this.loadFactuurTaken(invoiceId);
+    },
+
+    // ===== v304: PDF-referentie → project automatisch voorstellen (één tik). =====
+    async _extractPdfText(blob) {
+        await this._ensurePdfLib();
+        await this._ensurePdfWorker();
+        const buf = await blob.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+        let text = '';
+        for (let p = 1; p <= pdf.numPages; p++) {
+            const page = await pdf.getPage(p);
+            const tc = await page.getTextContent();
+            text += ' ' + tc.items.map(it => it.str).join(' ');
+        }
+        return text;
+    },
+
+    async _suggestLinksFromPdf(invoiceId, inv) {
+        try {
+            if (!invoiceId || !inv) return;
+            const lines = (inv.lineItems || []).filter(l => l.type === 'LINE');
+            if (!lines.length) return;
+            const needProject = !lines.every(l => l.projectId);
+            const needOrder = !lines.every(l => l.salesOrderId);
+            if (!needProject && !needOrder) return;
+            const docId = await RobawsAPI.getPurchaseInvoiceDocumentId(invoiceId);
+            if (!docId) return;
+            const doc = await RobawsAPI.getDocumentUrl(docId);
+            if (!doc || !doc.blob) return;
+            let text = '';
+            try { text = await this._extractPdfText(doc.blob); } catch (_e) {}
+            if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
+            const uniq = (re) => Array.from(new Set((text.match(re) || []).map(m => m.toUpperCase().replace(/[\s-]/g, ''))));
+            const suggestions = [];
+            if (needProject) {
+                for (const c of uniq(/\bP\s?-?\s?\d{6}\b/gi)) {
+                    const proj = await RobawsAPI.getProjectByLogicId(c);
+                    if (proj) { suggestions.push({ kind: 'project', id: proj.id, logicId: proj.logicId, name: proj.name }); break; }
+                }
+            }
+            if (needOrder) {
+                for (const c of uniq(/\bR\s?-?\s?\d{6}\b/gi)) {
+                    const ord = await RobawsAPI.getSalesOrderByLogicId(c);
+                    if (ord) { suggestions.push({ kind: 'order', id: ord.id, logicId: ord.logicId, name: ord.name }); break; }
+                }
+            }
+            if (suggestions.length) this._showRefSuggestion(invoiceId, suggestions);
+        } catch (_e) { /* suggestie is optioneel — stil falen */ }
+    },
+
+    _showRefSuggestion(invoiceId, suggestions) {
+        if (this._factuurInvoiceId !== String(invoiceId)) return;
+        const host = document.getElementById('factuurRefSuggest');
+        if (!host) return;
+        this._refSuggest = suggestions;
+        const rows = suggestions.map((s, i) => {
+            const noun = s.kind === 'order' ? 'verkooporder' : 'project';
+            const naam = (s.name || '').trim();
+            return `<div style="font-size:12.5px;color:var(--ink,#1A237E);line-height:1.4${i ? ';margin-top:12px' : ''}">📎 Referentie <b>${this.escapeHtml(s.logicId)}</b> gevonden in de PDF${naam ? (' → ' + noun + ' <b>' + this.escapeHtml(naam) + '</b>') : ''}.</div>
+            <button class="btn btn-primary btn-sm btn-full" style="margin-top:8px" onclick="app.applyRefSuggestion(${i})">Koppel alle lijnen aan ${this.escapeHtml(s.logicId)}</button>`;
+        }).join('');
+        host.innerHTML = `<div class="card" style="margin-bottom:12px;padding:14px 16px;border:1.5px solid var(--qe-green,#3E7A54)">${rows}</div>`;
+    },
+
+    async applyRefSuggestion(idx) {
+        const s = (this._refSuggest || [])[idx || 0];
+        const invId = this._factuurInvoiceId;
+        const inv = this._factuurInvoice;
+        if (!s || !invId || !inv) return;
+        if (this._assignBusy) return;
+        this._assignBusy = true;
+        try {
+            const lines = (inv.lineItems || []).filter(l => l.type === 'LINE');
+            for (const l of lines) {
+                if (s.kind === 'order') await RobawsAPI.setLineItemSalesOrder(invId, l.id, s.id);
+                else await RobawsAPI.setLineItemProject(invId, l.id, s.id);
+            }
+            this.toast('Alle lijnen gekoppeld aan ' + s.logicId);
+            await this.loadFactuurDetail();
+        } catch (e) {
+            this.toast('Koppelen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._assignBusy = false;
+        }
     },
 
     // v288: inklapbaar bewerkbaar facturatie-gegevens-paneel.
@@ -9133,120 +9239,349 @@ const app = {
         }
     },
 
-    // v288: alle factuurlijnen + project-toewijzing (per lijn / alles ineens).
+    // v288/v305: alle factuurlijnen + project- én verkooporder-toewijzing
+    // (per lijn / alles ineens), net als in de Robaws-goedkeuring.
     _renderFactuurLines(inv) {
         if (!inv) {
             return `<div class="card" style="margin-bottom:12px;padding:14px 16px"><div style="font-size:12.5px;color:var(--qe-grey)">Lijnen niet beschikbaar.</div></div>`;
         }
         const lines = Array.isArray(inv.lineItems) ? inv.lineItems : [];
+        const linkRow = (leeg, val, has, onclick) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:5px">
+            <span style="font-size:12px;color:${has ? 'var(--ink,#1A237E)' : 'var(--qe-grey)'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${has ? this.escapeHtml(val) : leeg}</span>
+            <button class="btn btn-outline btn-sm" style="padding:4px 12px;font-size:12px;flex-shrink:0" onclick="${onclick}">${has ? 'Wijzig' : 'Toewijzen'}</button>
+        </div>`;
         const rows = lines.map((l) => {
             const isLine = l.type === 'LINE';
             const proj = (l.project && ((l.project.logicId || '') + ' ' + (l.project.planningName || l.project.name || '')).trim())
                 || (l.projectId ? ('Project ' + l.projectId) : '');
+            const ord = (l.salesOrder && ((l.salesOrder.logicId || '') + ' ' + (l.salesOrder.title || '')).trim())
+                || (l.salesOrderId ? ('Order ' + l.salesOrderId) : '');
             const amt = (isLine && l.price != null) ? ('€ ' + (Number(l.price) * Number(l.quantity || 1)).toFixed(2)) : '';
             const qty = isLine && l.quantity != null ? (Number(l.quantity) + '× ') : '';
             const desc = l.description || (l.type === 'TEXT' ? '(tekst)' : '(lijn)');
+            const jid = this._escapeJsArg(String(l.id));
             return `<div style="padding:10px 0;border-bottom:1px solid var(--l2,#eee)">
                 <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
                     <span style="font-size:13px;min-width:0">${this.escapeHtml(desc)}</span>
                     <span style="font-size:12.5px;color:var(--qe-grey);flex-shrink:0">${qty}${amt}</span>
                 </div>
-                ${isLine ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:5px">
-                    <span style="font-size:12px;color:${proj ? 'var(--ink,#1A237E)' : 'var(--qe-grey)'};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${proj ? this.escapeHtml(proj) : 'Geen project'}</span>
-                    <button class="btn btn-outline btn-sm" style="padding:4px 12px;font-size:12px;flex-shrink:0" onclick="app.assignLineProject('${this._escapeJsArg(String(l.id))}')">Toewijzen</button>
-                </div>` : ''}
+                ${isLine ? linkRow('Geen project', proj, !!proj, `app.assignLineProject('${jid}')`) : ''}
+                ${isLine ? linkRow('Geen verkooporder', ord, !!ord, `app.assignLineOrder('${jid}')`) : ''}
             </div>`;
         }).join('');
+        const hasLines = lines.some(l => l.type === 'LINE');
         return `<div class="card" style="margin-bottom:12px;padding:14px 16px">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey)">Lijnen (${lines.length})</div>
-                ${lines.some(l => l.type === 'LINE') ? `<button class="btn btn-outline btn-sm" style="padding:4px 12px;font-size:12px" onclick="app.assignAllLinesProject()">Alles toewijzen</button>` : ''}
-            </div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey);margin-bottom:4px">Lijnen (${lines.length})</div>
             ${rows || '<div style="font-size:12.5px;color:var(--qe-grey);padding:6px 0">Geen lijnen.</div>'}
+            ${hasLines ? `<div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn btn-outline btn-sm" style="flex:1;font-size:12px" onclick="app.assignAllLinesProject()">Alle → project</button>
+                <button class="btn btn-outline btn-sm" style="flex:1;font-size:12px" onclick="app.assignAllLinesOrder()">Alle → order</button>
+            </div>` : ''}
         </div>`;
     },
 
-    assignLineProject(lineId) { this._projectPickTarget = 'line:' + lineId; this.openProjectPicker(); },
-    assignAllLinesProject() { this._projectPickTarget = 'all'; this.openProjectPicker(); },
+    // v305: gegeneraliseerde koppel-picker — project OF verkooporder.
+    assignLineProject(lineId) { this._pickTarget = 'line:' + lineId; this._pickKind = 'project'; this.openLinkPicker(); },
+    assignAllLinesProject() { this._pickTarget = 'all'; this._pickKind = 'project'; this.openLinkPicker(); },
+    assignLineOrder(lineId) { this._pickTarget = 'line:' + lineId; this._pickKind = 'order'; this.openLinkPicker(); },
+    assignAllLinesOrder() { this._pickTarget = 'all'; this._pickKind = 'order'; this.openLinkPicker(); },
 
-    async openProjectPicker() {
-        if (this._projPickBusy) return;
-        this._projPickBusy = true;
-        this.toast('Projecten laden…');
+    async openLinkPicker() {
+        if (this._pickBusy) return;
+        this._pickBusy = true;
+        const order = this._pickKind === 'order';
+        this.toast(order ? 'Verkooporders laden…' : 'Projecten laden…');
         let list = [];
         try {
-            list = await RobawsAPI.searchProjects('', 60);
+            list = order ? await RobawsAPI.searchSalesOrders('', 60) : await RobawsAPI.searchProjects('', 60);
         } catch (e) {
-            this._projPickBusy = false;
-            this.toast('Projecten laden mislukt: ' + ((e && e.message) || '?'), true);
+            this._pickBusy = false;
+            this.toast((order ? 'Verkooporders' : 'Projecten') + ' laden mislukt: ' + ((e && e.message) || '?'), true);
             return;
         }
-        this._projPickBusy = false;
-        this._projPickAll = Array.isArray(list) ? list : [];
-        const cnt = this._projPickAll.length;
-        this.showModal(`<div><h3 style="margin:0 0 10px">Project toewijzen</h3>
-            <input id="projPickSearch" class="form-input" placeholder="Zoek project…" oninput="app.searchProjectPicker(this.value)" style="margin-bottom:10px">
-            <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">${cnt} project(en) — tik er één of typ om te zoeken.</div>
-            <div id="projPickResults"></div>
-            <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickProject('','')">Geen project (wissen)</button>
+        this._pickBusy = false;
+        this._pickAll = Array.isArray(list) ? list : [];
+        const cnt = this._pickAll.length;
+        const noun = order ? 'verkooporder' : 'project';
+        // Géén geneste vh-scrollbox (klapt in de file://-WebView tot 0px) — de
+        // .modal-sheet scrollt zelf.
+        this.showModal(`<div><h3 style="margin:0 0 10px">${order ? 'Verkooporder' : 'Project'} toewijzen</h3>
+            <input id="linkPickSearch" class="form-input" placeholder="Zoek ${noun}…" oninput="app.searchLinkPicker(this.value)" style="margin-bottom:10px">
+            <div style="font-size:11.5px;color:var(--qe-grey);margin-bottom:8px">${cnt} ${noun}(en) — tik er één of typ om te zoeken.</div>
+            <div id="linkPickResults"></div>
+            <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.pickLink('','')">Geen ${noun} (wissen)</button>
             <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
-        // Belt-and-suspenders: vul de resultaten NA het tonen van de modal.
-        const b = document.getElementById('projPickResults');
-        if (b) b.innerHTML = this._projPickRows(this._projPickAll);
+        const b = document.getElementById('linkPickResults');
+        if (b) b.innerHTML = this._linkPickRows(this._pickAll);
         else this.toast('Resultvak niet gevonden in de modal', true);
     },
 
-    _projPickRows(list) {
-        if (!list || !list.length) return '<div style="font-size:12.5px;color:var(--qe-grey);padding:12px">Geen projecten gevonden.</div>';
-        return list.map(p =>
-            `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left" onclick="app.pickProject('${this._escapeJsArg(p.id)}','${this._escapeJsArg((p.logicId + ' ' + p.name).trim())}')">${this.escapeHtml((p.logicId + ' — ' + p.name).trim())}</button>`
-        ).join('');
+    _linkPickRows(list) {
+        const order = this._pickKind === 'order';
+        if (!list || !list.length) return `<div style="font-size:12.5px;color:var(--qe-grey);padding:12px">Geen ${order ? 'verkooporders' : 'projecten'} gevonden.</div>`;
+        return list.map(p => {
+            const label = (p.logicId + ' ' + p.name).trim();
+            const main = (p.logicId + ' — ' + p.name).trim();
+            const sub = order ? [p.status, p.date, p.client].filter(Boolean).join(' · ') : '';
+            return `<button class="btn btn-outline btn-full" style="margin-bottom:6px;text-align:left${sub ? ';line-height:1.35' : ''}" onclick="app.pickLink('${this._escapeJsArg(p.id)}','${this._escapeJsArg(label)}')">${this.escapeHtml(main)}${sub ? `<br><span style="font-size:11px;color:var(--qe-grey)">${this.escapeHtml(sub)}</span>` : ''}</button>`;
+        }).join('');
     },
 
     // Typen: eerst INSTANT lokaal filteren op de reeds geladen lijst (kan niet
-    // stil falen); bij een langere query ook server-side zoeken zodat ook
-    // projecten buiten de eerste 60 gevonden worden.
-    searchProjectPicker(q) {
-        const box = document.getElementById('projPickResults');
+    // stil falen); bij een langere query ook server-side zoeken.
+    searchLinkPicker(q) {
+        const box = document.getElementById('linkPickResults');
         const ql = (q || '').toLowerCase();
-        const local = (this._projPickAll || []).filter(p => (p.logicId + ' ' + p.name).toLowerCase().indexOf(ql) !== -1);
-        if (box) box.innerHTML = this._projPickRows(local);
-        clearTimeout(this._projPickTimer);
+        const order = this._pickKind === 'order';
+        const local = (this._pickAll || []).filter(p => (p.logicId + ' ' + p.name + ' ' + (p.client || '')).toLowerCase().indexOf(ql) !== -1);
+        if (box) box.innerHTML = this._linkPickRows(local);
+        clearTimeout(this._pickTimer);
         if (!q || q.length < 2) return;
-        const token = (this._projPickToken = (this._projPickToken || 0) + 1);
-        this._projPickTimer = setTimeout(async () => {
+        const token = (this._pickToken = (this._pickToken || 0) + 1);
+        this._pickTimer = setTimeout(async () => {
             try {
-                const srv = await RobawsAPI.searchProjects(q, 40);
-                if (token !== this._projPickToken) return;
-                const b = document.getElementById('projPickResults');
-                if (b && srv && srv.length) b.innerHTML = this._projPickRows(srv);
+                const srv = order ? await RobawsAPI.searchSalesOrders(q, 40) : await RobawsAPI.searchProjects(q, 40);
+                if (token !== this._pickToken) return;
+                const b = document.getElementById('linkPickResults');
+                if (b && srv && srv.length) b.innerHTML = this._linkPickRows(srv);
             } catch (_e) { /* de lokale filter staat er al */ }
         }, 300);
     },
 
-    async pickProject(projectId, label) {
+    async pickLink(id, label) {
         this.closeModal();
         const invId = this._factuurInvoiceId;
         const inv = this._factuurInvoice;
         if (!invId || !inv) { this.toast('Factuur niet geladen', true); return; }
         if (this._assignBusy) return;
         this._assignBusy = true;
+        const order = this._pickKind === 'order';
+        const noun = order ? 'Verkooporder' : 'Project';
+        const setOne = (lineId) => order
+            ? RobawsAPI.setLineItemSalesOrder(invId, lineId, id || null)
+            : RobawsAPI.setLineItemProject(invId, lineId, id || null);
         try {
-            const target = this._projectPickTarget;
+            const target = this._pickTarget;
             if (target === 'all') {
                 const lines = (inv.lineItems || []).filter(l => l.type === 'LINE');
-                for (const l of lines) await RobawsAPI.setLineItemProject(invId, l.id, projectId || null);
-                this.toast(projectId ? ('Alle lijnen → ' + (label || 'project')) : 'Project gewist op alle lijnen');
+                for (const l of lines) await setOne(l.id);
+                this.toast(id ? ('Alle lijnen → ' + (label || noun)) : (noun + ' gewist op alle lijnen'));
             } else if (target && target.indexOf('line:') === 0) {
-                const lineId = target.slice(5);
-                await RobawsAPI.setLineItemProject(invId, lineId, projectId || null);
-                this.toast(projectId ? ('Lijn → ' + (label || 'project')) : 'Project gewist');
+                await setOne(target.slice(5));
+                this.toast(id ? ('Lijn → ' + (label || noun)) : (noun + ' gewist'));
             }
             await this.loadFactuurDetail();
         } catch (e) {
             this.toast('Toewijzen mislukt: ' + (e.message || '?'), true);
         } finally {
             this._assignBusy = false;
+        }
+    },
+
+    // ===== v305: OPMERKINGEN (chat) op de aankoopfactuur — zelfde comment-bron
+    // en -weergave als de verlof-chat. =====
+    _renderFactuurComments() {
+        return `<div class="card" style="margin-bottom:12px;padding:4px 16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;cursor:pointer" onclick="app.toggleFactuurComments()">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey)">Opmerkingen <span id="fcCount" style="color:var(--qe-grey)"></span></div>
+                <span id="fcChev" style="color:var(--qe-grey);font-size:15px">▾</span>
+            </div>
+            <div id="fcBody" style="display:none;padding:2px 0 14px">
+                <div id="factuurChatList" style="margin-bottom:10px"><div class="spinner"></div></div>
+                <div style="display:flex;gap:8px;align-items:flex-end">
+                    <textarea id="factuurChatInput" class="form-input" rows="1" placeholder="Schrijf een opmerking…" style="flex:1;resize:none"></textarea>
+                    <button id="btnFactuurChatSend" class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="app.sendFactuurComment()">Stuur</button>
+                </div>
+            </div>
+        </div>`;
+    },
+
+    toggleFactuurComments() {
+        const b = document.getElementById('fcBody');
+        const c = document.getElementById('fcChev');
+        if (!b) return;
+        const open = b.style.display === 'none';
+        b.style.display = open ? 'block' : 'none';
+        if (c) c.textContent = open ? '▴' : '▾';
+    },
+
+    async loadFactuurComments(invoiceId) {
+        const invId = invoiceId || this._factuurInvoiceId;
+        this._factuurCommentsInvId = invId;
+        const list = document.getElementById('factuurChatList');
+        if (!invId) return;
+        if (list) list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const comments = await RobawsAPI.getInvoiceComments(invId);
+            if (this._factuurCommentsInvId !== invId) return;
+            const cntEl = document.getElementById('fcCount');
+            if (cntEl) cntEl.textContent = comments.length ? ('(' + comments.length + ')') : '';
+            if (!list) return;
+            if (!comments.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen opmerkingen.</p>'; return; }
+            const myUserId = String(this._myRobawsUserId() || '');
+            list.innerHTML = comments.map(c => {
+                const aId = (c.authorId != null) ? c.authorId : (c.author && c.author.id);
+                const mine = myUserId && String(aId) === myUserId;
+                const who = (c.author && (c.author.name || c.author.fullName)) || RobawsAPI.nameForUserId(c.authorId != null ? c.authorId : '?');
+                return `<div style="display:flex;justify-content:${mine ? 'flex-end' : 'flex-start'};margin-bottom:8px">
+                    <div style="max-width:82%;padding:10px 13px;border-radius:12px;background:${mine ? 'var(--wash,#eee)' : 'var(--card,#fff)'};border:1px solid var(--cb,#e5e5e5)">
+                        <div style="font-size:11px;color:var(--qe-grey);margin-bottom:3px">${this.escapeHtml(who)} · ${this._verlofChatTime(c.createdAt)}</div>
+                        <div style="font-size:13.5px;white-space:pre-wrap">${this.escapeHtml(c.content || '')}</div>
+                    </div>
+                </div>`;
+            }).join('');
+            list.scrollTop = list.scrollHeight;
+        } catch (e) {
+            if (list) list.innerHTML = `<p class="text-grey text-sm text-center">Opmerkingen laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    async sendFactuurComment() {
+        const invId = this._factuurInvoiceId;
+        const input = document.getElementById('factuurChatInput');
+        const btn = document.getElementById('btnFactuurChatSend');
+        if (!invId || !input) return;
+        const txt = (input.value || '').trim();
+        if (!txt) return;
+        if (this._factuurChatBusy) return;
+        this._factuurChatBusy = true;
+        if (btn) btn.disabled = true;
+        try {
+            await RobawsAPI.postInvoiceComment(invId, txt, this._myRobawsUserId());
+            input.value = '';
+            await this.loadFactuurComments(invId);
+        } catch (e) {
+            this.toast('Versturen mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._factuurChatBusy = false;
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    // ===== v305: TAKEN op de aankoopfactuur — tonen, afvinken, toevoegen,
+    // verwijderen (Robaws /tasks, relatedResource = /purchase-invoices/{id}). =====
+    _renderFactuurTaken() {
+        return `<div class="card" style="margin-bottom:12px;padding:4px 16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;cursor:pointer" onclick="app.toggleFactuurTaken()">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--qe-grey)">Taken <span id="ftCount" style="color:var(--qe-grey)"></span></div>
+                <span id="ftChev" style="color:var(--qe-grey);font-size:15px">▾</span>
+            </div>
+            <div id="ftBody" style="display:none;padding:2px 0 14px">
+                <div id="factuurTakenList"><div class="spinner"></div></div>
+                <button class="btn btn-outline btn-sm btn-full" style="margin-top:10px" onclick="app.openNewFactuurTaak()">+ Taak toevoegen</button>
+            </div>
+        </div>`;
+    },
+
+    toggleFactuurTaken() {
+        const b = document.getElementById('ftBody');
+        const c = document.getElementById('ftChev');
+        if (!b) return;
+        const open = b.style.display === 'none';
+        b.style.display = open ? 'block' : 'none';
+        if (c) c.textContent = open ? '▴' : '▾';
+    },
+
+    async loadFactuurTaken(invoiceId) {
+        const invId = invoiceId || this._factuurInvoiceId;
+        this._factuurTakenInvId = invId;
+        const list = document.getElementById('factuurTakenList');
+        if (!invId) return;
+        if (list) list.innerHTML = '<div class="spinner"></div>';
+        try {
+            const tasks = await RobawsAPI.getTasksForResource('/purchase-invoices/' + invId);
+            if (this._factuurTakenInvId !== invId) return;
+            this._factuurTaken = tasks;
+            const open = tasks.filter(t => t.status !== 'Gedaan').length;
+            const cntEl = document.getElementById('ftCount');
+            if (cntEl) cntEl.textContent = tasks.length ? ('(' + open + '/' + tasks.length + ')') : '';
+            if (!list) return;
+            if (!tasks.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Nog geen taken.</p>'; return; }
+            list.innerHTML = tasks.map(t => {
+                const done = t.status === 'Gedaan';
+                const who = t.assignedUserId ? RobawsAPI.nameForUserId(t.assignedUserId) : '—';
+                const jid = this._escapeJsArg(t.id);
+                return `<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--l2,#eee)">
+                    <span style="flex-shrink:0;margin-top:1px;font-size:17px;line-height:1;cursor:pointer;color:${done ? 'var(--qe-green,#3E7A54)' : 'var(--qe-grey)'}" onclick="app.toggleFactuurTaakStatus('${jid}')" title="${done ? 'Heropenen' : 'Afvinken'}">${done ? '☑' : '☐'}</span>
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:13.5px;${done ? 'text-decoration:line-through;color:var(--qe-grey)' : 'color:var(--ink,#1A237E)'}">${this.escapeHtml(t.title)}</div>
+                        ${t.description ? `<div style="font-size:12px;color:var(--qe-grey);white-space:pre-wrap;margin-top:2px">${this.escapeHtml(t.description)}</div>` : ''}
+                        <div style="font-size:11px;color:var(--qe-grey);margin-top:3px">${this.escapeHtml(who)}${t.deadline ? (' · tegen ' + this.escapeHtml(String(t.deadline).slice(0, 10))) : ''} · ${this.escapeHtml(t.status)}</div>
+                    </div>
+                    <span style="flex-shrink:0;cursor:pointer;color:var(--qe-red,#B4372F);font-size:13px" onclick="app.deleteFactuurTaak('${jid}')" title="Verwijderen">✕</span>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            if (list) list.innerHTML = `<p class="text-grey text-sm text-center">Taken laden mislukt: ${this.escapeHtml(e.message || '')}</p>`;
+        }
+    },
+
+    async toggleFactuurTaakStatus(taskId) {
+        const t = (this._factuurTaken || []).find(x => x.id === String(taskId));
+        if (!t) return;
+        const next = t.status === 'Gedaan' ? 'Te doen' : 'Gedaan';
+        try {
+            await RobawsAPI.setTaskStatus(taskId, next);
+            await this.loadFactuurTaken();
+        } catch (e) { this.toast('Status wijzigen mislukt: ' + (e.message || '?'), true); }
+    },
+
+    async deleteFactuurTaak(taskId) {
+        const confirmFn = (window.QEClock && QEClock._showConfirmModal) ? QEClock._showConfirmModal.bind(QEClock) : (t, m) => Promise.resolve(window.confirm(m));
+        const ok = await confirmFn('Taak verwijderen?', 'Deze taak wordt definitief verwijderd.', 'Verwijderen', 'Annuleren');
+        if (!ok) return;
+        try {
+            await RobawsAPI.deleteTask(taskId);
+            this.toast('Taak verwijderd');
+            await this.loadFactuurTaken();
+        } catch (e) { this.toast('Verwijderen mislukt: ' + (e.message || '?'), true); }
+    },
+
+    openNewFactuurTaak() {
+        const invId = this._factuurInvoiceId;
+        if (!invId) { this.toast('Factuur niet geladen', true); return; }
+        const bureel = (RobawsAPI.getBureelApprovers ? RobawsAPI.getBureelApprovers() : []);
+        const def = (RobawsAPI.TASK_USERS && RobawsAPI.TASK_USERS.FACTUREN) || '';
+        const opts = bureel.map(u => `<option value="${this._escapeJsArg(u.userId)}"${String(u.userId) === String(def) ? ' selected' : ''}>${this.escapeHtml(u.name)}</option>`).join('');
+        this.showModal(`<div><h3 style="margin:0 0 12px">Nieuwe taak</h3>
+            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:3px">Titel</label>
+            <input id="ntTitle" class="form-input" placeholder="Bv. Factuur nakijken" style="margin-bottom:10px">
+            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:3px">Omschrijving (optioneel)</label>
+            <textarea id="ntDesc" class="form-input" rows="2" style="margin-bottom:10px"></textarea>
+            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:3px">Toewijzen aan</label>
+            <select id="ntUser" class="form-input" style="margin-bottom:10px"><option value="">—</option>${opts}</select>
+            <label style="font-size:12px;color:var(--qe-grey);display:block;margin-bottom:3px">Deadline (optioneel)</label>
+            <input id="ntDeadline" type="date" class="form-input" style="margin-bottom:14px">
+            <button class="btn btn-primary btn-full" onclick="app.submitNewFactuurTaak()">Taak aanmaken</button>
+            <button class="btn btn-outline btn-full" style="margin-top:6px" onclick="app.closeModal()">Annuleren</button></div>`);
+    },
+
+    async submitNewFactuurTaak() {
+        const invId = this._factuurInvoiceId;
+        if (!invId) return;
+        const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+        const title = val('ntTitle');
+        if (!title) { this.toast('Geef een titel', true); return; }
+        if (this._newTaakBusy) return;
+        this._newTaakBusy = true;
+        try {
+            await RobawsAPI.createTask({
+                title,
+                description: val('ntDesc'),
+                assignedUserId: val('ntUser'),
+                reportingUserId: this._myRobawsUserId(),
+                relatedResource: '/purchase-invoices/' + invId,
+                deadline: val('ntDeadline'),
+            });
+            this.closeModal();
+            this.toast('Taak aangemaakt');
+            await this.loadFactuurTaken(invId);
+            const b = document.getElementById('ftBody'); const c = document.getElementById('ftChev');
+            if (b && b.style.display === 'none') { b.style.display = 'block'; if (c) c.textContent = '▴'; }
+        } catch (e) {
+            this.toast('Taak aanmaken mislukt: ' + (e.message || '?'), true);
+        } finally {
+            this._newTaakBusy = false;
         }
     },
 
@@ -13661,11 +13996,16 @@ const app = {
         // (Fire-and-forget; processOfflineQueue stopt zelf direct bij count=0.)
         this.processOfflineQueue();
         if (!navigator.onLine) return;
+        // (v307 / 1.x v302) scherm uit / app in achtergrond → poll-tik overslaan
+        // (de wachtrij-poging hierboven blijft wél lopen; bij terugkeren pakt de
+        // volgende tik het gewoon weer op — bespaart calls zonder UX-verlies).
+        if (document.hidden) return;
         try {
             const date = this._localDateStr();
-            const result = await RobawsAPI.getPlanning(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
-            const items = (result.items || []).filter(it => !it.hasWerkbon);
-            const count = items.length;
+            // (v307 / 1.x v302) lichte teller i.p.v. de volledige getPlanning met
+            // verrijking — de poll heeft alleen het AANTAL nodig; scheelt per tik
+            // een detail-GET per item + klantdata (~60-80% van de poll-kosten).
+            const count = await RobawsAPI.getOpenPlanningCount(this.currentUser.robawsEmployeeId, date, this.currentUser.robawsUserId);
 
             if (this._lastPlanningCount !== null && count > this._lastPlanningCount) {
                 const diff = count - this._lastPlanningCount;
@@ -14357,19 +14697,14 @@ const app = {
         if (r.weekendGewerkt > 0) add(ORANGE, '🏗️', r.weekendGewerkt + '', 'weekenddag' + (r.weekendGewerkt === 1 ? '' : 'en') + ' erbij gedaan', 'Als het moest, stond je er.');
         if (r.km > 0) { const ritten = Math.round(r.km / 300); add(TEAL, '🚗', nf(r.km) + ' km', 'onderweg dit jaar', ritten > 0 ? ('Goed voor ' + ritten + '× Brussel–Parijs') : ''); }
         add(NAVY, '📅', r.gewerkteDagen + ' / ' + r.werkbareDagen, 'werkbare dagen present', urenRank ? ('Uren: plaats ' + urenRank.rank + ' van ' + urenRank.total + ' in de ploeg' + (urenRank.rank <= 3 ? ' — jij trok de kar 🔥' : '')) : (dagRank ? ('Aanwezigheid: plaats ' + dagRank.rank + ' van ' + dagRank.total) : ''));
-        // Ziekte — positief maar NUCHTER (geen vingertik, maar ook niet te veel
-        // eieren onderleggen): toon eerlijk het cijfer, warme/neutrale kleur, korte
-        // droge boodschap. Geen rood/oranje alarm, geen zoetsappige comeback.
-        const WARM = { hero: GOLD, proud: GREEN, ok: TEAL, steady: NAVY, comeback: NAVY };
-        const ZC = WARM[tier] || NAVY;
+        // Ziekte — de goede HARD complimenteren, de rest strikt NEUTRAAL: enkel het
+        // cijfer, geen oordeel/nudge/troost (niets provocerends). Nooit rood/oranje.
         const zd = r.ziektedagen;
-        let zEmoji, zSub;
-        if (tier === 'hero') { zEmoji = '🏆'; zSub = 'Een rots. Chapeau.'; }
-        else if (tier === 'proud') { zEmoji = '💪'; zSub = 'Bijna altijd present. Sterk.'; }
-        else if (tier === 'ok') { zEmoji = '👍'; zSub = 'Meestal present. Prima.'; }
-        else if (tier === 'steady') { zEmoji = '📅'; zSub = 'Op naar een gezonder volgend jaar.'; }
-        else { zEmoji = '📅'; zSub = 'Een zwaar jaar gehad — op naar een gezonder nieuw jaar.'; }
-        cards.push({ accent: ZC, emoji: zEmoji, big: zd + '', label: 'ziektedag' + (zd === 1 ? '' : 'en') + (tier === 'hero' ? ' — het hele jaar paraat' : ' dit jaar'), sub: zSub });
+        let zCard;
+        if (tier === 'hero') zCard = { accent: GOLD, emoji: '🏆', big: '0', label: 'ziektedagen — het hele jaar paraat', sub: 'Een absolute rots. Chapeau — dít is klasse!' };
+        else if (tier === 'proud') zCard = { accent: GREEN, emoji: '💪', big: zd + '', label: 'ziektedag' + (zd === 1 ? '' : 'en') + ' — bijna altijd present', sub: 'Sterk werk. Dik in orde!' };
+        else zCard = { accent: NAVY, emoji: '📅', big: zd + '', label: 'ziektedag' + (zd === 1 ? '' : 'en') + ' dit jaar', sub: '' };
+        cards.push(zCard);
         if (r.sociaalVerlof > 0) add(PURPLE, '🤝', r.sociaalVerlof + '', 'dag' + (r.sociaalVerlof === 1 ? '' : 'en') + ' sociaal verlof', '');
         add(ORANGE, '🌴', 'Fijne vakantie!', '', 'Geniet van het bouwverlof. 🌴 Tot straks!');
         cards[cards.length - 1].onShow = () => { try { this._playWeekendJingle(); } catch (_e) {} };
@@ -14381,7 +14716,7 @@ const app = {
         // strafescalatie meer: iedereen mag fijn aan het bouwverlof starten.
         const zd = r.ziektedagen || 0;
         if (zd === 0) return 'hero';
-        if (zd <= 7) return 'proud';
+        if (zd <= 9) return 'proud';
         if (zd <= 19) return 'ok';
         if (zd <= 39) return 'steady';
         return 'comeback';
