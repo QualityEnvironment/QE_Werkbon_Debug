@@ -1456,6 +1456,28 @@ const RobawsAPI = {
                 }
             }
         }
+        if (!employee && this.hasPersonalKey && this.hasPersonalKey()) {
+            // v317: fiche onvindbaar MET een persoonlijke kluis-key terwijl de
+            // Worker hem wél vindt = de key mist het werknemers-leesrecht
+            // (403 geeft lege resultaten, geen thrown error — dus geen
+            // fallback hierboven). De login mag daar nooit op stranden:
+            // eigen key laten vallen, melden, en 1× opnieuw zoeken met de
+            // gedeelde key (cache bewaart alleen 200-antwoorden, dus de
+            // herkansing is gegarandeerd vers).
+            console.warn('[RobawsAPI] Fiche onvindbaar met persoonlijke key — key mist vermoedelijk werknemers-leesrecht; terugval op de gedeelde key');
+            this.clearActiveCredentials(true);
+            try { if (window.app && app.toast) app.toast('Je eigen API-key mist leesrechten (werknemers) — controleer het key-profiel in Robaws. Je bent ingelogd op de gedeelde key.', true); } catch (_e) {}
+            try { employee = await fetchEmployee(); } catch (_e) {}
+            if (!employee) {
+                const mapped2 = this.EMPLOYEES[emailLower];
+                if (mapped2 && mapped2.employeeId) {
+                    try {
+                        const dr = await this.get(`employees/${mapped2.employeeId}`, { bypassCache: true });
+                        if (dr.code === 200 && dr.data) employee = dr.data;
+                    } catch (_e) {}
+                }
+            }
+        }
         if (!employee) {
             // Geen mapping én geen API-result → echt onbekend
             return {
