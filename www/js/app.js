@@ -8523,11 +8523,13 @@ const app = {
     // Rolf, dan zou de klik een stille no-op zijn — leg dat uit i.p.v. een
     // vals "Goedgekeurd" te tonen.
     _canDecideApprovals(explain) {
-        // v316: met een eigen API-key uit de Worker-kluis handelt de API als
-        // de ingelogde gebruiker ZELF — beslissen mag dan gewoon (de
+        // v316/v320: met een eigen PERSOONS-key uit de Worker-kluis handelt de
+        // API als de ingelogde gebruiker ZELF — beslissen mag dan gewoon (de
         // privacy-filter v306/307 toont sowieso alleen goedkeuringen die op
-        // jou wachten). Zonder eigen key geldt de oude Rolf-regel.
-        try { if (RobawsAPI.hasPersonalKey && RobawsAPI.hasPersonalKey()) return true; } catch (_e) {}
+        // jou wachten). Een ROL-key (API Monteur/Technieker) telt bewust niet:
+        // daarmee zou de beslissing op het rol-account komen. Zonder key
+        // geldt de oude Rolf-regel.
+        try { if (RobawsAPI.hasOwnKey && RobawsAPI.hasOwnKey()) return true; } catch (_e) {}
         const myUid = String(this._myRobawsUserId() || '');
         if (myUid && myUid === String(RobawsAPI.KEY_OWNER_USER_ID)) return true;
         if (explain) {

@@ -26,14 +26,16 @@ const RobawsAPI = {
     WORKER_AUTH_URL: 'https://qe-mollie-webhook.levi-957.workers.dev',
     _activeKey: null,
     _activeSecret: null,
+    _activeSoort: null,   // 'persoon' | 'rol' (v320) — alleen persoons-keys mogen goedkeuren
     _credRestoreDone: false,
-    setActiveCredentials(key, secret, email) {
+    setActiveCredentials(key, secret, email, soort) {
         this._activeKey = key || null;
         this._activeSecret = secret || null;
+        this._activeSoort = soort || 'persoon';
         this._credRestoreDone = true;
         try {
             if (key && secret) {
-                localStorage.setItem('qe_api_cred', JSON.stringify({ email: String(email || '').toLowerCase().trim(), key, secret }));
+                localStorage.setItem('qe_api_cred', JSON.stringify({ email: String(email || '').toLowerCase().trim(), key, secret, soort: this._activeSoort }));
             }
         } catch (_e) {}
     },
@@ -44,14 +46,22 @@ const RobawsAPI = {
     clearActiveCredentials(wipeStorage) {
         this._activeKey = null;
         this._activeSecret = null;
+        this._activeSoort = null;
         this._credRestoreDone = true;
         if (wipeStorage) { try { localStorage.removeItem('qe_api_cred'); } catch (_e) {} }
     },
-    /** v316: is er een persoonlijke key (Worker-kluis) actief? De API handelt
-     *  dan als de ingelogde gebruiker zelf — o.a. goedkeuringen mogen dan. */
+    /** v316: is er een kluis-key actief (persoons- óf rol-key)? */
     hasPersonalKey() {
         this._authPair();  // triggert de lazy restore na een app-herstart
         return !!this._activeKey;
+    },
+
+    /** v320: is er een PERSOONS-key actief? Alleen dan handelt de API als de
+     *  ingelogde gebruiker zelf — vereist voor goedkeuren. Een rol-key
+     *  (API Monteur / API Technieker) telt hier bewust NIET mee. */
+    hasOwnKey() {
+        this._authPair();
+        return !!this._activeKey && this._activeSoort !== 'rol';
     },
 
     /** v318: KLUIS-ZELFTEST — proeft de belangrijkste modules met de ACTIEVE
@@ -106,6 +116,7 @@ const RobawsAPI = {
                     if (c && c.key && c.secret && (!em || em === String(c.email || '').toLowerCase().trim())) {
                         this._activeKey = c.key;
                         this._activeSecret = c.secret;
+                        this._activeSoort = c.soort || 'persoon';
                     }
                 }
             } catch (_e) {}
@@ -1395,8 +1406,8 @@ const RobawsAPI = {
                 if (wres.status === 429) return { success: false, error: 'Te veel pogingen — probeer over een kwartier opnieuw.' };
                 if (wres.status === 403) return { success: false, error: 'Dit account is stopgezet. Neem contact op met kantoor.' };
                 if (wres.ok && wj.key && wj.secret) {
-                    this.setActiveCredentials(wj.key, wj.secret, emailLower);
-                    console.log('[RobawsAPI] Eigen API-key actief (Worker-kluis)');
+                    this.setActiveCredentials(wj.key, wj.secret, emailLower, wj.soort);
+                    console.log('[RobawsAPI] Eigen API-key actief (Worker-kluis' + (wj.soort === 'rol' ? ' · rol-key' : '') + ')');
                 } else if (wres.ok) {
                     // Kluis kent deze werknemer (nog) niet → gedeelde key
                     this.clearActiveCredentials(true);
