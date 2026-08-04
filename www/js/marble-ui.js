@@ -56,7 +56,9 @@
         screenGoedkeuren:  { sub: 'Verlof · Facturen · Materieel', title: 'Goedkeuren' },
         screenFactuurDetail:{ sub: 'Aankoopfactuur goedkeuren', title: 'Factuur' },
         screenMaterieelDetail:{ sub: 'Reserveren & beschikbaarheid', title: 'Materieel' },
-        screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' }
+        screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' },
+        screenHandleiding: { sub: 'Alles over de app · typ om te zoeken', title: 'Handleiding' }
+        /* screenHandleidingH: hoofdstuk rendert zijn eigen Marble-kop */
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
     };
@@ -173,6 +175,7 @@
             '    <div id="mbTutBody"><div class="mb-tuttitle" id="mbTutTitle"></div><div class="mb-tuttext" id="mbTutText"></div></div>' +
             '    <div class="mb-tutdots" id="mbTutDots"></div>' +
             '    <button class="mb-tuttour" id="mbTutTourBtn" onclick="QEMarble.startTour()">Volledige rondleiding door de app</button>' +
+            '    <button class="mb-tuttour" id="mbTutHlBtn" onclick="QEMarble.tutClose(); if (window.app && app.openHandleiding) app.openHandleiding();">Handleiding openen (doorzoekbaar)</button>' +
             '    <div class="mb-tutbtns">' +
             '      <button class="mb-tutprev" id="mbTutPrev" onclick="QEMarble.tutPrev()">Vorige</button>' +
             '      <button class="mb-tutnext" id="mbTutNext" onclick="QEMarble.tutNext()">Volgende</button>' +
@@ -193,7 +196,8 @@
             ['Je dagplanning', 'Hier staan de werkorders van vandaag, in volgorde van je route. Met de chips bovenaan wissel je van dag. Tik op een werkorder om hem te openen.', '#dateStrip'],
             ['Klok-status', 'De kaart bovenaan toont of je in- of uitgeklokt bent. Tik erop om naar het klokscherm te gaan.', '#clockStatusBar'],
             ['Bellen & navigeren', 'De knoppen op elke kaart bellen de klant of openen Google Maps — zonder de werkorder te openen.', '#workorderList'],
-            ['Badges', '"Regie" betekent tijd & materiaal aanrekenen. "In bewerking" wil zeggen dat je al uren of materiaal registreerde.', '#workorderList']
+            ['Badges', '"Regie" betekent tijd & materiaal aanrekenen. "In bewerking" wil zeggen dat je al uren of materiaal registreerde.', '#workorderList'],
+            ['Wacht', 'De balk met het schildje toont wie deze week de wacht heeft. Tik erop voor de komende weken. Heb jij de wacht, dan kleurt hij oranje.', '#wachtBanner']
         ] },
         screenDetail: { name: 'WERKORDER', steps: [
             ['Vier tabbladen', 'Info toont de klant en de taak, Uren registreert je tijd, Materiaal je artikels, en Foto’s je bewijsfoto’s.', '#detailTabs'],
@@ -206,40 +210,82 @@
         screenWerkbon: { name: 'WERKBON', steps: [
             ['Controle', 'Controleer de uren (afgerond voor facturatie), materialen en het totaal incl. BTW.'],
             ['Geen factuur', 'Voor garantie of terugkomwerk vink je "Geen factuur maken" aan — de werkbon wordt dan zonder factuur verstuurd.', '#wbNoInvoice', 'label'],
-            ['Betaalwijze', 'QR is het snelst: de klant scant en de betaling wordt direct bevestigd. Terminal stuurt het bedrag naar Mollie Tap. Cash en factuur kunnen ook.', '#wbPaymentMethodSection'],
+            ['Betaalwijze', 'QR is het snelst: de klant scant en de betaling wordt direct bevestigd. Bancontact stuurt het bedrag rechtstreeks naar de betaalterminal. Overschrijving en cash kunnen ook.', '#wbPaymentMethodSection'],
             ['Ondertekenen', 'De knop onderaan opent de handtekening; daarna wordt alles naar Robaws gestuurd.']
         ] },
         screenClock: { name: 'KLOK', steps: [
             ['NFC in- en uitklokken', 'Houd je telefoon tegen een NFC-tag: bureau, camionet of laden & lossen. De kaart toont je status en kleurt mee.', '#clockHeroCard'],
-            ['Afronding', 'Kwartieren met 4 min tolerantie: 06:48 → 06:45, maar 06:50 → 07:00. Uitklokken rondt naar beneden met dezelfde tolerantie.'],
-            ['Je startuur', 'Vroeger inklokken dan je startuur telt pas vanaf je startuur — behalve in de camionet op vraag van de projectleider.'],
+            ['Afronding', 'Kwartieren met 4 min tolerantie: 06:48 → 06:45, maar 06:50 → 07:00. De uitleg staat onder "Hoe wordt mijn tijd afgerond?" — tik om open te klappen.'],
+            ['Op tijd = vóór je startuur', 'Vroeger inklokken telt pas vanaf je startuur. Elke minuut ná je startuur ben je "te laat" — ook al word je tot 4 min nog vanaf het startuur betaald.'],
+            ['Kilometers bij uitklokken', 'Bij het uitklokken vraagt de app eerst je kilometers. Pas na "Uitklokken bevestigen" ben je echt uitgeklokt — sluit je het formulier, dan blijf je ingeklokt.'],
+            ['Mijn uren & Maandrecap', 'Via "Mijn uren bekijken" open je je maandoverzicht. De Maandrecap-knop toont jouw maand als stories — die verschijnt ook vanzelf na je laatste uitklok van de maand.'],
             ['Weeklog', 'Onderaan zie je je afgeronde registraties. Weekend telt altijd als overuren.', '#clockCompletedSection']
         ] },
         screenDagoverzicht: { name: 'MIJN UREN', steps: [
-            ['Maandoverzicht', 'De cijfers bovenaan tellen je maand op; met de pijltjes blader je naar vorige maanden.', '#mbUrenStats'],
+            ['Maandoverzicht', 'De cijfers bovenaan tellen je maand op; met de pijltjes blader je naar vorige maanden. Je komt hier via de knop op het Klok-scherm.', '#mbUrenStats'],
             ['Dagdetail', 'Elke rij is een dag met het type uren. Ziekte of verlof staat er ook tussen.'],
-            ['Aanpassing vragen', 'Klopt iets niet? Tik op de registratie — je aanvraag gaat naar Vince.']
+            ['Aanpassing vragen', 'Klopt iets niet? Tik op de registratie en kies een reden ("Vergeten in te klokken", "Verkeerd tijdstip", …) — je aanvraag gaat als taak naar Vince.']
         ] },
         screenUitgevoerd: { name: 'UITGEVOERD', steps: [
             ['Afgewerkte werkbonnen', 'De laatste 7 dagen, met uren, artikels en betaalstatus.', '#uitgevoerdList'],
+            ['Laatste betaling', 'Bovenaan staat je laatste betaling met de status — handig om te checken of de QR of terminal goed doorkwam.'],
             ['Correcties', 'Tik op een werkbon om uren of materiaal te corrigeren. Het origineel blijft staan; het verschil komt in een correctie-werkbon.']
+        ] },
+        screenAanvragen: { name: 'AANVRAGEN', steps: [
+            ['Drie soorten aanvragen', 'Verlof, Materiaal en Materieel — wissel met de tabs bovenaan.', '#aanvraagSubtabs'],
+            ['Verlof aanvragen', 'Bovenaan je saldo (gebruikt en resterend), daaronder de aanvraag: kies van–tot en dien in. Ziek melden gaat níét via de app — bel of stuur een bericht.', '#verlofBudgetBox'],
+            ['Volg je aanvraag', 'Tik op een aanvraag voor het detail met de communicatie — daar zie je de goedkeuring of weigering en kan je reageren.', '#verlofList'],
+            ['Materieel lenen', 'Onder Materieel reserveer je een camionet of machine: kies datums, dien in, en na goedkeuring zijn die dagen voor jou vast. "Vorige aanvragingen" toont de status van al je aanvragen.'],
+            ['Goedkeuren (bureel)', 'Bureel ziet bovenaan een Goedkeuren-kaart met een teller: verlof, facturen en materieel die op een beslissing wachten.', '#aanvraagGoedkeurenCard']
+        ] },
+        screenVerlofDetail: { name: 'VERLOFAANVRAAG', steps: [
+            ['Status & periode', 'Bovenaan je aanvraag met de beslissing: aangevraagd, goedgekeurd of geweigerd.'],
+            ['Communicatie', 'De draad toont alle opmerkingen — ook die van bureel. Typ onderaan om te reageren; je bericht staat op jouw naam.', '#verlofChatList']
+        ] },
+        screenMaterieelDetail: { name: 'MATERIEEL', steps: [
+            ['Beschikbaarheid', 'De badge zegt of dit nu vrij, gereserveerd of in gebruik is; daaronder staan de komende reservaties.'],
+            ['Reservatie-agenda', 'Oranje dagen zijn bezet (goedgekeurd of in gebruik), lichtgele zijn aangevraagd. Blader met ‹ › door de maanden.', '#matCalGrid'],
+            ['Reserveren', 'Kies van–tot en een reden. Botst je periode met een goedgekeurde reservatie, dan blokkeert de app dat meteen.', '#btnMatReserveer'],
+            ['Teruggebracht', 'Klaar met het materieel? Tik "Teruggebracht" bij je reservatie — dan komt het weer vrij voor de rest. Annuleren kan zolang je niet begonnen bent.']
+        ] },
+        screenMaterieelAanvragen: { name: 'VORIGE AANVRAGINGEN', steps: [
+            ['Jouw aanvragen', 'Al je materieel-aanvragen, nieuwste eerst, met status: Aangevraagd, Goedgekeurd, In gebruik, Geweigerd of Teruggebracht. Tik erop om naar het materieel te gaan.', '#materieelAanvragenList']
+        ] },
+        screenRecap: { name: 'TERUGBLIK', steps: [
+            ['Jouw maand in stories', 'Elke maand een korte terugblik op je uren: totalen, stiptheid, records. Tik een maand om de stories (opnieuw) te bekijken.', '#recapListContent'],
+            ['Vanzelf', 'De recap verschijnt automatisch na je laatste uitklok van de maand — hier kan je alles rustig terugkijken.']
+        ] },
+        screenGoedkeuren: { name: 'GOEDKEUREN', steps: [
+            ['Drie stapels', 'Verlof, Facturen en Materieel — de tellers tonen hoeveel er op jou wachten.', '#goedkeurSubtabs'],
+            ['Verlof', 'Goedkeuren of weigeren met één tik; de werknemer ziet de beslissing meteen in zijn aanvraag terug.'],
+            ['Facturen', 'Tik een aankoopfactuur open voor het volledige detail en keur goed of af — rechtstreeks op de goedkeuringsaanvraag in Robaws.'],
+            ['Materieel', 'Bij het goedkeuren controleert de app opnieuw op dubbele reservaties en verwittigt bij overlap.']
+        ] },
+        screenFactuurDetail: { name: 'FACTUUR', steps: [
+            ['Aankoopfactuur', 'Het volledige detail uit Robaws: leverancier, bedragen en de gekoppelde informatie.'],
+            ['Beslissen', 'Goedkeuren of afkeuren gebeurt rechtstreeks op de goedkeuringsaanvraag — collega’s en Robaws-web zien het meteen.']
         ] },
         screenProfile: { name: 'PROFIEL', steps: [
             ['Instellingen', 'Standaard terminal, je actieve rol en je PIN — tik op de groep om ze open te klappen.', '#pgHeadInstel'],
-            ['Toegankelijkheid', 'Tekst en knoppen groter, hoog contrast, minder beweging en kleurenblind-modus — allemaal hier.', '#pgHeadToegank'],
+            ['Toegankelijkheid', 'Tekst en knoppen groter, vetgedrukt, hoog contrast, minder beweging en kleurenblind-modus — allemaal hier, en meteen actief.', '#pgHeadToegank'],
             ['Werknemers', 'Beheer, afwezigheid melden en (voor Levi & Vince) de uren-analyse.', '#pgHeadWerkn'],
-            ['App bijwerken', 'Controleer op updates. Uitloggen staat helemaal onderaan.', '#pgHeadApp']
+            ['App bijwerken', 'Controleer op updates; bureel ziet hier ook het API-tegoed van vandaag. Uitloggen staat helemaal onderaan.', '#pgHeadApp']
         ] },
         screenAdmin: { name: 'BEHEER', steps: [
             ['Werknemers', 'Per werknemer zie je rol en status. PIN reset stuurt een nieuwe PIN, Rol wisselt de app-flow, Stopzet deactiveert de login.'],
-            ['Robaws', 'Alles wordt rechtstreeks in Robaws bewaard — nieuwe werknemers voeg je toe in Robaws-web.']
+            ['✓ Controleren', 'De wizard checkt e-mail, status, rol, login-koppeling en PIN van een werknemer — en repareert met één tik wat kan. "+ Nieuw" maakt een fiche en opent meteen die checklist.'],
+            ['Robaws', 'Alles wordt live in Robaws bewaard. Alleen de login-gebruiker zelf maak je in Robaws-web aan (Instellingen → Gebruikers, veld "Werknemer" = de fiche).']
+        ] },
+        screenHandleiding: { name: 'HANDLEIDING', steps: [
+            ['Zoeken', 'Typ twee letters of meer — je zoekt meteen door alle hoofdstukken, stappen, vragen en de woordenlijst. Tik een resultaat om er rechtstreeks naartoe te springen.', '#hlZoekInput'],
+            ['Hoofdstukken', 'Of blader gewoon: elk hoofdstuk legt één ding uit, stap voor stap, met vragen en antwoorden onderaan. Achteraan vind je de woordenlijst en het spiekbriefje.']
         ] },
         screenUrenAnalyse: { name: 'UREN-ANALYSE', steps: [
             ['Maandmatrix', 'Per werknemer: werkuren, overuren, kilometers en afwezigheden — rechtstreeks uit de klok-registraties.', '#uaContent'],
-            ['Excel-export', 'De knop onderaan genereert het maandbestand voor de boekhouding. Alleen Levi & Vince zien dit scherm.', '#uaActions']
+            ['Excel-export', 'Onderaan twee knoppen: Excel op dit toestel, of "Naar Robaws (PC)" — dan staat het bestand meteen als document op je werknemersfiche, klaar om op de computer te openen. Alleen Levi & Vince zien dit scherm.', '#uaActions']
         ] }
     };
-    var TOUR_BASE = ['screenPlanning', 'screenClock', 'screenDagoverzicht', 'screenUitgevoerd', 'screenProfile'];
+    var TOUR_BASE = ['screenPlanning', 'screenClock', 'screenDagoverzicht', 'screenUitgevoerd', 'screenAanvragen', 'screenProfile'];
 
     var tut = { open: false, screen: null, step: 0, full: false };
 
@@ -249,6 +295,11 @@
     }
     function tourList() {
         var list = TOUR_BASE.slice();
+        /* bureel krijgt de goedkeur-hub in de rondleiding */
+        try {
+            var u = (window.RobawsAPI && RobawsAPI.getLoggedInUser) ? RobawsAPI.getLoggedInUser() : null;
+            if (u && u.role === 'bureel') list.push('screenGoedkeuren');
+        } catch (e) { /* rondleiding mag nooit crashen op een rol-check */ }
         var admin = document.getElementById('adminCard');
         var ana = document.getElementById('urenAnalyseCard');
         if (admin && admin.style.display !== 'none') list.push('screenAdmin');
@@ -277,6 +328,8 @@
         }
         document.getElementById('mbTutDots').innerHTML = dots;
         document.getElementById('mbTutTourBtn').style.display = tut.full ? 'none' : 'block';
+        var hlBtn = document.getElementById('mbTutHlBtn');
+        if (hlBtn) hlBtn.style.display = tut.full ? 'none' : 'block';
         var atLast = tut.step >= cfg.steps.length - 1;
         document.getElementById('mbTutPrev').style.display = (tut.step > 0 || (tut.full && pos > 0)) ? 'inline-block' : 'none';
         document.getElementById('mbTutNext').textContent = !atLast ? 'Volgende'

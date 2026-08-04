@@ -513,21 +513,45 @@ const RobawsAPI = {
         return out;
     },
 
+    /** Eigenaar van de gedeelde API-sleutel (rolf@qe.be — het kantoor-account).
+     *  Robaws registreert élke accept/reject op DIT account; beslissen "namens"
+     *  iemand anders kan niet (live getest 10/7/2026: userId in body, query én
+     *  header worden genegeerd — 204 no-op; PATCH userStates → 403). */
+    KEY_OWNER_USER_ID: '2',
+
     /** Generiek: keur een approval-request goed (accept) of weiger (reject).
-     *  LET OP: de beslissing wordt geregistreerd op de gebruiker van de gedeelde
-     *  API-sleutel (kantoor), NIET op de ingelogde app-gebruiker — de accept/
-     *  reject-endpoints hebben geen per-gebruiker-veld. */
-    async decideApproval(approvalId, approve, reason) {
+     *  asUserId = de ingelogde app-gebruiker. Omdat de API altijd als de
+     *  sleutel-eigenaar (Rolf) beslist, kan de app alleen beslissen wanneer het
+     *  Rólfs beurt is; voor iedere andere goedkeurder gooien we een duidelijke
+     *  fout VÓÓR de POST — die zou een stille no-op zijn en de app toonde dan
+     *  "Goedgekeurd" terwijl er niets veranderde. */
+    async decideApproval(approvalId, approve, reason, asUserId) {
+        const uid = (asUserId != null && asUserId !== '') ? String(asUserId) : null;
+        if (uid && uid !== String(this.KEY_OWNER_USER_ID)) {
+            throw new Error('deze goedkeuring wacht op jou persoonlijk; de app beslist met het kantoor-account en kan niet namens jou beslissen — keur goed/af in Robaws zelf');
+        }
         const action = approve ? 'accept' : 'reject';
         const res = await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
+        // Naverificatie: een accept door wie al besliste is een stille 204-no-op —
+        // check dat de sleutel-eigenaar nu écht een beslissing heeft staan.
+        try {
+            const chk = await this.get('approval-requests/' + approvalId + '?include=userStates', { bypassCache: true });
+            const st = ((chk.data && chk.data.userStates) || []).find(s => String(s.userId) === String(this.KEY_OWNER_USER_ID));
+            if (st && String(st.status) === 'AWAITING_DECISION') {
+                throw new Error('Robaws registreerde de beslissing niet');
+            }
+        } catch (e) {
+            if (e && /registreerde/.test(e.message || '')) throw e;
+            /* de verificatie-read zelf faalde — de beslissing gaf wél 2xx, doorgaan */
+        }
         return true;
     },
-    /** Verlof-goedkeuring — alias op decideApproval (zelfde endpoint). */
-    async decideLeaveApproval(approvalId, approve, reason) {
-        return this.decideApproval(approvalId, approve, reason);
+    /** Verlof-goedkeuring — alias op decideApproval (zelfde endpoint + regel). */
+    async decideLeaveApproval(approvalId, approve, reason, asUserId) {
+        return this.decideApproval(approvalId, approve, reason, asUserId);
     },
 
     // v278 (Aanvragen-tab): verlofsaldo + chat + factuur-goedkeuringen.
@@ -1685,6 +1709,101 @@ const RobawsAPI = {
         return map;
     },
 
+    // ============================================================
+    // WACHT (v314) — leeslaag op de bestaande Robaws-wachtplanning.
+    // Bureel plant de wacht als planning-items met planningTypeId 40
+    // ("Wacht"): één item per DAG, summary "NAAM: WACHT",
+    // employeeIds = ["<empId>"] (live geverifieerd 3 aug 2026; de
+    // fromDate/toDate-filter op /planning-items werkt server-side).
+    // De app leest alleen — plannen blijft in Robaws-web.
+    // ============================================================
+
+    WACHT_TYPE_ID: '40',
+    _wachtCache: null,  // { at, weken }
+
+    /** Wachtweken vanaf maandag van deze week, `wekenVooruit` weken ver.
+     *  Resultaat: [{ maandag:'YYYY-MM-DD', zondag:'YYYY-MM-DD',
+     *                employeeIds:['12'], namen:['Olivier'] }] — alleen weken
+     *  waarvoor écht wacht gepland staat. Cache 30 min (replica-reads). */
+    async getWachtPlanning(wekenVooruit = 8) {
+        const now = Date.now();
+        if (this._wachtCache && (now - this._wachtCache.at) < 30 * 60 * 1000) {
+            return this._wachtCache.weken;
+        }
+
+        const pad = (n) => String(n).padStart(2, '0');
+        const dstr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        const vandaag = new Date();
+        const maandag = new Date(vandaag);
+        maandag.setDate(vandaag.getDate() - ((vandaag.getDay() + 6) % 7));
+        const tot = new Date(maandag);
+        tot.setDate(maandag.getDate() + wekenVooruit * 7 - 1);
+
+        // Venster ophalen (server-side datumfilter) + client-side op type 40
+        // filteren — de planningTypeId-parameter wordt server-side genegeerd.
+        const PAGE = 100;
+        let items = [];
+        for (let offset = 0; offset < 600; offset += PAGE) {
+            const res = await this.get(`planning-items?limit=${PAGE}&offset=${offset}&fromDate=${dstr(maandag)}&toDate=${dstr(tot)}`);
+            if (res.code !== 200 || !res.data || !Array.isArray(res.data.items)) break;
+            items = items.concat(res.data.items);
+            if (res.data.items.length < PAGE) break;
+        }
+        const wachtItems = items.filter(it => String(it.planningTypeId) === this.WACHT_TYPE_ID);
+
+        // Per week (maandag-sleutel) de werknemer(s) verzamelen. Eén dag-item
+        // per dag → per week tellen we per employeeId hoeveel dagen.
+        const weken = {};
+        for (const it of wachtItems) {
+            const s = String(it.startDate || '').substring(0, 10);
+            if (!s) continue;
+            const d = new Date(s + 'T12:00:00');
+            const ma = new Date(d);
+            ma.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+            const key = dstr(ma);
+            if (!weken[key]) weken[key] = { maandag: key, _emp: {}, _summary: {} };
+            const ids = Array.isArray(it.employeeIds) ? it.employeeIds : (it.employeeId != null ? [it.employeeId] : []);
+            for (const id of ids) {
+                const sid = String(id);
+                weken[key]._emp[sid] = (weken[key]._emp[sid] || 0) + 1;
+                if (it.summary) weken[key]._summary[sid] = String(it.summary);
+            }
+        }
+
+        // Namen opzoeken: live werknemerslijst, terugval op de summary
+        // ("OLIVIER: WACHT" → "Olivier").
+        let naamById = {};
+        try {
+            const list = await this.getActiveEmployees();
+            for (const e of list) {
+                const id = String(e.robawsEmployeeId ?? e.id ?? '');
+                if (id && e.name) naamById[id] = e.name;
+            }
+        } catch (_e) { /* terugval op summary */ }
+        const uitSummary = (s) => {
+            const ruw = String(s || '').split(':')[0].trim();
+            if (!ruw) return null;
+            return ruw.charAt(0).toUpperCase() + ruw.slice(1).toLowerCase();
+        };
+
+        const lijst = Object.values(weken)
+            .sort((a, b) => a.maandag < b.maandag ? -1 : 1)
+            .map(w => {
+                const ids = Object.keys(w._emp).sort((a, b) => w._emp[b] - w._emp[a]);
+                const zo = new Date(w.maandag + 'T12:00:00');
+                zo.setDate(zo.getDate() + 6);
+                return {
+                    maandag: w.maandag,
+                    zondag: dstr(zo),
+                    employeeIds: ids,
+                    namen: ids.map(id => naamById[id] || uitSummary(w._summary[id]) || ('Werknemer ' + id)),
+                };
+            });
+
+        this._wachtCache = { at: now, weken: lijst };
+        return lijst;
+    },
+
     /** Vers ophalen → muteer → full-replace PUT. */
     async _adminMutateEmployee(employeeId, mutate) {
         const res = await this.get(`employees/${employeeId}`, { bypassCache: true });
@@ -1928,8 +2047,18 @@ const RobawsAPI = {
             throw e;
         }
         const items = res.data.items || res.data || [];
-        // Zoek alle documents met "foto/photo/profile/avatar" in de naam
-        const photos = items.filter(d => /foto|photo|profile|avatar/i.test(d.name || d.fileName || ''));
+        // Zoek alle documents met "foto/photo/profile/avatar" in de naam.
+        // (v312 / 1.x v306) Sinds v311 draagt de fiche óók andere documenten
+        // (uren-exports). Extra eis: het document moet een AFBEELDING zijn
+        // (contentType image/* óf een afbeeldings-extensie) — een pdf/xlsx die
+        // toevallig "foto" in de naam heeft kan dus nooit als avatar gekozen
+        // worden. Live geverifieerd veld-schema: {name, contentType}.
+        const photos = items.filter(d => {
+            const nm = String(d.name || d.fileName || '');
+            if (!/foto|photo|profile|avatar/i.test(nm)) return false;
+            const ct = String(d.contentType || d.mimeType || '').toLowerCase();
+            return ct.indexOf('image/') === 0 || /\.(jpe?g|png|webp|gif|heic)$/i.test(nm);
+        });
         if (!photos.length) return null;  // explicit: geen foto in Robaws
 
         // Sorteer op createdAt desc (nieuwste eerst). Bij gelijke createdAt:

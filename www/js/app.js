@@ -578,15 +578,12 @@ const app = {
             && (this._isDebugBuild() || this.ENABLE_MOLLIE_IN_RELEASE === true);
     },
     _applyCardPaymentMode() {
-        const on = this._mollieActive();   // v255: momenteel altijd false
-        const set = (id, show, flex) => {
-            const el = document.getElementById(id);
-            if (el) el.style.display = show ? (flex ? 'flex' : '') : 'none';
-        };
-        set('payMollieBtn', on, false);     // Mollie Tap actief (alleen na heractivering)
-        set('payMollieLocked', !on, true);  // Mollie Tap vergrendeld (huidige stand)
-        set('payVivaBtn', false, false);    // v255: Viva verwijderd uit de methodes
-        set('payVivaLocked', false, true);  // v255: ook de vergrendeld-kaart weg
+        // (v310 / 1.x v304) De Mollie Tap-methode ("Bancontact / kaart") is op
+        // vraag van Levi VERWIJDERD uit de werkbon-UI (de knoppen bestaan niet
+        // meer in index.html); de methode "Terminal" heet voortaan Bancontact.
+        // Deze functie blijft als no-op zodat bestaande aanroepen niet breken;
+        // de diepe Tap-code (payWithMollieTap e.d.) blijft slapend aanwezig,
+        // afgeschermd door ENABLE_MOLLIE_TAP:false (zelfde patroon als Viva).
     },
 
     // Login-succes → vloeibare overgang: het QE-logo smelt weg tot een draaiend
@@ -918,6 +915,36 @@ const app = {
         }
     },
 
+    /** (v311 / 1.x v305) "Naar Robaws (PC)": upload de .xlsx als document op de
+     *  werknemersfiche van de ingelogde gebruiker (zelfde bewezen route als de
+     *  profielfoto's: POST /employees/{id}/documents). Op de PC: Robaws-web →
+     *  Werknemers → jouw fiche → Documenten. Vervangt de mail-knop — de
+     *  Resend-setup is nooit afgerond; _mailUrenViaWorker blijft slapend. */
+    async uploadUrenXlsxNaarRobaws() {
+        if (!this._uaState) { this.toast('Genereer eerst een overzicht'); return; }
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) { this.toast('Geen werknemer-koppeling gevonden', true); return; }
+        const btn = document.getElementById('uaRobawsBtn');
+        if (btn) btn.disabled = true;
+        try {
+            this.toast('Naar Robaws sturen…');
+            const sheets = QEUren.buildSheets(this._uaState);
+            const bytes = QEXlsx.build(sheets);
+            const blob = new Blob([bytes], { type: QEXlsx.MIME });
+            const fileName = QEUren.fileNameFor(this._uaState.ym);
+            const res = await RobawsAPI.uploadFile(`employees/${empId}/documents`, blob, fileName);
+            if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
+                throw new Error('Robaws gaf status ' + res.code);
+            }
+            this.toast('✓ ' + fileName + ' staat in Robaws — op de PC: je werknemersfiche → Documenten');
+        } catch (e) {
+            console.error('[UrenAnalyse] Robaws-upload faalde:', e);
+            this.toast('Naar Robaws sturen mislukt: ' + (e && e.message || ''), true);
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
     _escapeHtml(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -998,12 +1025,16 @@ const app = {
         const file = input.files && input.files[0];
         if (!file) return;
         try {
-            const dataUrl = await new Promise((resolve, reject) => {
+            const rawDataUrl = await new Promise((resolve, reject) => {
                 const r = new FileReader();
                 r.onload = () => resolve(r.result);
                 r.onerror = () => reject(r.error);
                 r.readAsDataURL(file);
             });
+            // (v312 / 1.x v306) Verklein vóór upload — rauwe camerafoto's van
+            // 2-3 MB maakten de upload traag (werf-4G) en de fiche zwaar;
+            // 640px volstaat ruim voor een avatar. Bij fout: origineel.
+            const dataUrl = await this._downscaleAvatar(rawDataUrl);
             // Direct lokaal tonen
             const img = document.getElementById('profilePhotoImg');
             const fb = document.getElementById('profilePhotoFallback');
@@ -1034,6 +1065,36 @@ const app = {
         } finally {
             input.value = '';
         }
+    },
+
+    /** (v312 / 1.x v306) Verklein een foto-dataURL naar max 640px JPEG (0.82).
+     *  Geeft bij elke fout of twijfel gewoon het origineel terug — de avatar-
+     *  upload mag hier nooit op blokkeren. */
+    _downscaleAvatar(dataUrl) {
+        return new Promise((resolve) => {
+            try {
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        const MAX = 640;
+                        let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+                        if (!w || !h) return resolve(dataUrl);
+                        if (w > MAX || h > MAX) {
+                            const f = MAX / Math.max(w, h);
+                            w = Math.round(w * f); h = Math.round(h * f);
+                        }
+                        const c = document.createElement('canvas');
+                        c.width = w; c.height = h;
+                        c.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const out = c.toDataURL('image/jpeg', 0.82);
+                        // Alleen gebruiken als het resultaat geldig én kleiner is
+                        resolve(out && out.length > 100 && out.length < dataUrl.length ? out : dataUrl);
+                    } catch (_e) { resolve(dataUrl); }
+                };
+                img.onerror = () => resolve(dataUrl);
+                img.src = dataUrl;
+            } catch (_e) { resolve(dataUrl); }
+        });
     },
 
     async profileChangePin() {
@@ -1866,6 +1927,8 @@ const app = {
     async loadPlanning() {
         // Clock status bar updaten (direct met lokale data)
         this.updateClockUI();
+        // v314: wacht-balk (fire-and-forget; mag het laden nooit vertragen)
+        this._loadWachtBanner();
         // Startuur ophalen van Robaws als dat nog niet gebeurd is voor deze user
         if (window.QEClock) {
             const user = RobawsAPI.getLoggedInUser();
@@ -6348,14 +6411,9 @@ const app = {
             } catch(e) { /* localStorage quota — niet kritiek */ }
 
             // === STAP 4: Betaalmethode-specifieke afhandeling ===
-            if (paymentMethod === 'Mollie Tap') {
-                // v139: direct Mollie payment aanmaken + Tap app launchen
-                this.payWithMollieTap(invoiceResult).catch(e => {
-                    console.warn('[Mollie] flow faalde:', e);
-                    this.toast('Mollie betaling kon niet starten: ' + (e && e.message || e));
-                    this.showPaymentScreen(invoiceResult);  // fallback naar manueel
-                });
-            } else if (paymentMethod === 'Viva wallet') {
+            // (v310 / 1.x v304) 'Mollie Tap'-branch verwijderd — de methode
+            // bestaat niet meer in de UI; de Tap-code zelf blijft slapend.
+            if (paymentMethod === 'Viva wallet') {
                 // Viva Wallet → toon betaalscherm met terminal/QR
                 this.showPaymentScreen(invoiceResult);
             } else if (paymentMethod === 'QR code') {
@@ -7089,11 +7147,11 @@ const app = {
             }
         } catch (e) {
             console.error('[Terminal] start mislukt:', e);
-            this.toast('Terminal-betaling niet beschikbaar: ' + ((e && e.message) || e), true);
+            this.toast('Bancontact-betaling niet beschikbaar: ' + ((e && e.message) || e), true);
             if (container) {
                 container.innerHTML =
                     '<div style="text-align:center;padding:40px 20px">' +
-                        '<p style="color:#c62828;font-weight:600">Terminal-betaling kon niet starten.</p>' +
+                        '<p style="color:#c62828;font-weight:600">Bancontact-betaling kon niet starten.</p>' +
                         '<p style="color:#666;font-size:14px">' + this.escapeHtml(String((e && e.message) || e)) + '</p>' +
                         '<button class="btn btn-primary btn-full" style="margin-top:18px;padding:13px" ' +
                             'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Opnieuw proberen</button>' +
@@ -7263,7 +7321,7 @@ const app = {
             if (container) {
                 container.innerHTML =
                     '<div style="text-align:center;padding:40px 20px">' +
-                        '<p style="color:#c62828;font-weight:600">Terminal-betaling kon niet starten.</p>' +
+                        '<p style="color:#c62828;font-weight:600">Bancontact-betaling kon niet starten.</p>' +
                         '<p style="color:#666;font-size:14px">' + this.escapeHtml(String((e && e.message) || e)) + '</p>' +
                         '<button class="btn btn-primary btn-full" style="margin-top:18px;padding:13px" ' +
                             'onclick="app.showTerminalBetaalScherm(app._terminalCtx)">Opnieuw proberen</button>' +
@@ -7436,14 +7494,11 @@ const app = {
                 '<div style="font-size:14px;color:#666;margin-bottom:6px">Factuur <strong>' + (ctx.invoiceLogicId || inv.logicId || '') + '</strong></div>' +
                 '<div style="font-size:18px;color:var(--ink);font-weight:700;margin-bottom:18px">€ ' + amount + '</div>' +
                 '<div style="font-size:13px;color:#666;margin-bottom:14px">Kies een methode hieronder:</div>' +
-                // v252: Mollie Tap alleen tonen waar hij actief is — dit scherm
-                // omzeilde de release-vergrendeling (_applyCardPaymentMode) en
-                // kon in de release-APK alsnog een Tap-betaling starten.
-                (this._mollieActive()
-                    ? mkBtnHtml('Mollie Tap', this.icon('card', { size: 20 }), 'Bancontact / kaart (Mollie Tap)')
-                    : '') +
+                // (v310 / 1.x v304) Mollie Tap-keuze definitief verwijderd; de
+                // methode 'Terminal' (interne id + Robaws-waarde blijven zo)
+                // heet in de UI voortaan Bancontact.
                 mkBtnHtml('QR code',       this.icon('card', { size: 20 }), 'QR code (scan & betaal)') +
-                mkBtnHtml('Terminal',      this.icon('card', { size: 20 }), 'Terminal (bedrag verschijnt op de terminal)') +
+                mkBtnHtml('Terminal',      this.icon('card', { size: 20 }), 'Bancontact (bedrag verschijnt op de terminal)') +
                 // v255: Viva Wallet verwijderd uit de keuzes (code blijft slapend
                 // voor oude betaalcontexten met paymentMethod 'Viva wallet').
                 mkBtnHtml('Cash',          this.icon('cash', { size: 20 }), 'Cash') +
@@ -7472,10 +7527,10 @@ const app = {
      *    werk localStorage context bij, en open eventueel het nieuwe betaalscherm.
      */
     async changeLastPaymentMethod(newMethod) {
-        // v252: beleidsgate — 'Release-app: Mollie Tap vergrendeld'. Ook als
-        // de knop tóch aangeroepen wordt (oude HTML/console) blokkeren we hier.
-        if (newMethod === 'Mollie Tap' && !this._mollieActive()) {
-            this.toast('Mollie Tap is niet beschikbaar in deze app-versie', true);
+        // (v310 / 1.x v304) 'Mollie Tap' is geen kiesbare methode meer; een
+        // oude aanroep (verouderde HTML/console) wordt hard geblokkeerd.
+        if (newMethod === 'Mollie Tap') {
+            this.toast('Mollie Tap bestaat niet meer als betaalmethode', true);
             return;
         }
         const statusEl = document.getElementById('changePmStatus');
@@ -7495,12 +7550,7 @@ const app = {
 
         if (sameMethod) {
             // Zelfde methode → gewoon het oude betaalscherm openen (als er één is)
-            if (newMethod === 'Mollie Tap' && ctx.invoiceResult) {
-                // v141: retry de Mollie Tap betaling
-                this.payWithMollieTap(ctx.invoiceResult).catch(e => {
-                    this.toast('Mollie retry faalde: ' + (e && e.message || e));
-                });
-            } else if (newMethod === 'QR code' && ctx.invoiceResult) {
+            if (newMethod === 'QR code' && ctx.invoiceResult) {
                 // v229: betaallink-QR met live bevestiging
                 this.showQrBetaalScherm(ctx.invoiceResult);
             } else if (newMethod === 'Terminal' && ctx.invoiceResult) {
@@ -7552,12 +7602,7 @@ const app = {
             this.toast('Betaalmethode → ' + newMethod);
 
             // Open nieuw betaalscherm waar relevant — anders terug naar Uitgevoerd
-            if (newMethod === 'Mollie Tap' && ctx.invoiceResult) {
-                // v141: start direct de Mollie Tap betaling
-                this.payWithMollieTap(ctx.invoiceResult).catch(e => {
-                    this.toast('Mollie betaling kon niet starten: ' + (e && e.message || e));
-                });
-            } else if (newMethod === 'QR code' && ctx.invoiceResult) {
+            if (newMethod === 'QR code' && ctx.invoiceResult) {
                 // v229: betaallink-QR met live bevestiging
                 this.showQrBetaalScherm(ctx.invoiceResult);
             } else if (newMethod === 'Terminal' && ctx.invoiceResult) {
@@ -8464,7 +8509,26 @@ const app = {
         }
     },
 
+    // v308: de gedeelde sleutel beslist ALTIJD als Rolf (kantoor-account);
+    // beslissen namens een andere goedkeurder kan niet (live getest — userId in
+    // body/query/header genegeerd, PATCH userStates 403). Na de privacy-filter
+    // (v306/307) zie je enkel goedkeuringen die op JOU wachten: is dat niet
+    // Rolf, dan zou de klik een stille no-op zijn — leg dat uit i.p.v. een
+    // vals "Goedgekeurd" te tonen.
+    _canDecideApprovals(explain) {
+        const myUid = String(this._myRobawsUserId() || '');
+        if (myUid && myUid === String(RobawsAPI.KEY_OWNER_USER_ID)) return true;
+        if (explain) {
+            this.showModal(`<div><h3 style="margin:0 0 10px">Beslissen kan hier nog niet</h3>
+                <p style="font-size:13.5px;line-height:1.55;margin:0 0 10px">Deze goedkeuring wacht op <b>jou persoonlijk</b>, maar de app werkt met het gedeelde kantoor-account (Rolf). Robaws laat beslissen namens iemand anders niet toe — je klik zou als kantoor geregistreerd worden en <b>niets veranderen</b>.</p>
+                <p style="font-size:13.5px;line-height:1.55;margin:0 0 4px">Keur voorlopig goed of af in <b>Robaws zelf</b> (met je eigen login); de aanvraag verdwijnt daarna vanzelf uit dit lijstje.</p>
+                <button class="btn btn-outline btn-full" style="margin-top:12px" onclick="app.closeModal()">OK</button></div>`);
+        }
+        return false;
+    },
+
     async decideVerlof(approvalId, approve) {
+        if (!this._canDecideApprovals(true)) return;
         const it = (this._verlofApprovalCache || {})[approvalId];
         const naam = (it && it.request && it.request.employee && it.request.employee.name) || '';
         const confirmFn = (window.QEClock && QEClock._showConfirmModal)
@@ -8480,7 +8544,7 @@ const app = {
         if (this._verlofDecideBusy) return;
         this._verlofDecideBusy = true;
         try {
-            await RobawsAPI.decideLeaveApproval(approvalId, approve, '');
+            await RobawsAPI.decideLeaveApproval(approvalId, approve, '', this._myRobawsUserId());
             this.toast(approve ? 'Verlof goedgekeurd' : 'Verlof geweigerd');
             await this.loadVerlofApprovals();
             this._refreshGoedkeurTabCounts();
@@ -9867,6 +9931,7 @@ const app = {
         if (this._factuurDecideBusy) return;   // guard vóór de confirm — geen dubbele dialogen
         this._factuurDecideBusy = true;
         try {
+            if (!this._canDecideApprovals(true)) return;
             const confirmFn = (window.QEClock && QEClock._showConfirmModal)
                 ? QEClock._showConfirmModal.bind(QEClock)
                 : (t, m) => Promise.resolve(window.confirm(m));
@@ -9876,7 +9941,7 @@ const app = {
                 approve ? 'Goedkeuren' : 'Afkeuren', 'Annuleren'
             );
             if (!ok) return;
-            await RobawsAPI.decideApproval(approvalId, approve, '');
+            await RobawsAPI.decideApproval(approvalId, approve, '', this._myRobawsUserId());
             this.toast(approve ? 'Factuur goedgekeurd' : 'Factuur afgekeurd');
             // pushHistory=false: het besliste detail hoort niet meer in de back-stack.
             this.navigate('screenGoedkeuren', false);
@@ -14528,6 +14593,178 @@ const app = {
         }
         const chev = chevId ? document.getElementById(chevId) : null;
         if (chev) chev.textContent = open ? '▾' : '▴';
+    },
+
+    // ============================================================
+    // WACHT (v314) — leesbalk op de Planning + weekoverzicht.
+    // Data uit RobawsAPI.getWachtPlanning() (planning-type 40, gepland
+    // in Robaws-web door bureel; de app toont alleen). Faalt stil:
+    // geen wacht gepland of geen netwerk → geen balk.
+    // ============================================================
+
+    async _loadWachtBanner() {
+        const el = document.getElementById('wachtBanner');
+        if (!el) return;
+        try {
+            const weken = await RobawsAPI.getWachtPlanning(8);
+            const vandaag = this._localDateStr(new Date());
+            const nu = weken.find(w => w.maandag <= vandaag && vandaag <= w.zondag);
+            if (!nu || !nu.namen.length) { el.style.display = 'none'; return; }
+            const mijnId = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+            const mijn = mijnId && nu.employeeIds.indexOf(mijnId) >= 0;
+            const schild = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/></svg>';
+            el.innerHTML = schild +
+                '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+                (mijn ? '<b>Jij hebt deze week de wacht</b>'
+                      : 'Wacht deze week: <b>' + this.escapeHtml(nu.namen.join(' + ')) + '</b>') +
+                '</span><span style="flex-shrink:0;font-size:14px;opacity:.65">›</span>';
+            el.style.color = mijn ? 'var(--amber2, #E88A2A)' : 'var(--ink, #26334B)';
+            el.style.borderColor = mijn ? 'var(--aborder, #F99D3E)' : 'var(--cb, #e5e2da)';
+            el.style.background = mijn ? 'var(--awash, #FBF3E4)' : 'var(--card, #FDFCFA)';
+            el.style.display = 'flex';
+        } catch (_e) {
+            el.style.display = 'none';  // stil: wacht is een extraatje
+        }
+    },
+
+    async openWachtOverzicht() {
+        // Fullscreen-overlays renderen betrouwbaar in de WebView (zelfde les
+        // als de Terugblik, v289) — de sheet is een fixed overlay onderaan.
+        const oud = document.getElementById('wachtSheet');
+        if (oud) oud.remove();
+        let weken = [];
+        try { weken = await RobawsAPI.getWachtPlanning(8); } catch (_e) {}
+        const vandaag = this._localDateStr(new Date());
+        const mijnId = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+        const MND = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+        const lbl = (iso) => { const d = new Date(iso + 'T12:00:00'); return d.getDate() + ' ' + MND[d.getMonth()]; };
+        const rijen = weken.length ? weken.map(w => {
+            const dezeWeek = w.maandag <= vandaag && vandaag <= w.zondag;
+            const mijn = mijnId && w.employeeIds.indexOf(mijnId) >= 0;
+            return '<div style="display:flex;align-items:baseline;gap:12px;padding:13px 16px;border-radius:12px;margin-bottom:7px;' +
+                'background:' + (dezeWeek ? 'var(--awash,#FBF3E4)' : 'var(--card,#FDFCFA)') + ';' +
+                'border:1px solid ' + (dezeWeek ? 'var(--aborder,#F99D3E)' : 'var(--cb,#e5e2da)') + '">' +
+                '<span style="flex-shrink:0;font-size:12.5px;color:var(--qe-grey);font-variant-numeric:tabular-nums;min-width:96px">ma ' + lbl(w.maandag) + ' – zo ' + lbl(w.zondag) + '</span>' +
+                '<span style="flex:1;min-width:0;font-size:14.5px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(w.namen.join(' + ')) + (mijn ? ' <span style="font-size:11px;font-weight:700;color:var(--amber2,#E88A2A)">(jij)</span>' : '') + '</span>' +
+                (dezeWeek ? '<span style="flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--amber2,#E88A2A)">DEZE WEEK</span>' : '') +
+                '</div>';
+        }).join('') : '<div style="padding:22px 8px;text-align:center;color:var(--qe-grey);font-size:13.5px">Geen wachtplanning gevonden voor de komende weken.</div>';
+
+        const ov = document.createElement('div');
+        ov.id = 'wachtSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);display:flex;flex-direction:column;justify-content:flex-end';
+        ov.innerHTML =
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));max-height:78vh;display:flex;flex-direction:column">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Wachtdienst</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Wie heeft de wacht?</div></div>' +
+            '    <button onclick="document.getElementById(\'wachtSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <div style="overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0">' + rijen + '</div>' +
+            '  <div style="font-size:11.5px;color:var(--qe-grey);margin-top:10px;line-height:1.5">De wacht wordt door het bureau gepland. Klopt iets niet? Bel het bureau.</div>' +
+            '</div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+    },
+
+    // ============================================================
+    // HANDLEIDING (v313) — de papieren monteur/technieker-boekjes als
+    // doorzoekbaar naslagwerk in de app. Inhoud + motor in
+    // js/handleiding.js (window.QEHandleiding); hier alleen de dunne
+    // schermcontrollers. Rol bepaalt de versie; bureel ziet standaard
+    // de technieker-versie en kan wisselen.
+    // ============================================================
+
+    _hlRolOverride: null,
+
+    _hlRol() {
+        if (this._hlRolOverride) return this._hlRolOverride;
+        return this.isMonteur() ? 'monteur' : 'technieker';
+    },
+
+    openHandleiding() {
+        this.navigate('screenHandleiding', true);
+        const inp = document.getElementById('hlZoekInput');
+        if (inp) inp.value = '';
+        this._hlToonInhoud();
+        // bureel mag tussen beide versies wisselen
+        const sw = document.getElementById('hlRolSwitch');
+        if (sw) {
+            let isBureel = false;
+            try { isBureel = (RobawsAPI.getLoggedInUser() || {}).role === 'bureel'; } catch (_e) {}
+            sw.style.display = isBureel ? 'flex' : 'none';
+            if (isBureel) this._hlRenderRolSwitch();
+        }
+    },
+
+    _hlRenderRolSwitch() {
+        const sw = document.getElementById('hlRolSwitch');
+        if (!sw) return;
+        const actief = this._hlRol();
+        const chip = (rol, label) => `<button onclick="app.hlRol('${rol}')" style="flex:1;padding:9px;border-radius:10px;border:1px solid ${actief === rol ? 'var(--qe-orange)' : 'var(--b1,#DCD9D0)'};background:${actief === rol ? 'rgba(249,157,62,0.12)' : 'var(--card,#FDFCFA)'};font:600 12.5px var(--font);color:${actief === rol ? 'var(--amber2,#E88A2A)' : 'var(--qe-grey)'};cursor:pointer">${label}</button>`;
+        sw.innerHTML = chip('technieker', 'Technieker-versie') + chip('monteur', 'Monteur-versie');
+    },
+
+    hlRol(rol) {
+        this._hlRolOverride = rol;
+        this._hlRenderRolSwitch();
+        const inp = document.getElementById('hlZoekInput');
+        if (inp && inp.value.trim().length >= 2) this.hlZoek(inp.value);
+        else this._hlToonInhoud();
+    },
+
+    _hlToonInhoud() {
+        const res = document.getElementById('hlZoekResultaten');
+        const toc = document.getElementById('hlInhoud');
+        if (res) res.style.display = 'none';
+        if (toc) { toc.style.display = 'block'; toc.innerHTML = QEHandleiding.inhoudHtml(this._hlRol()); }
+        const wis = document.getElementById('hlZoekWis');
+        if (wis) wis.style.display = 'none';
+    },
+
+    hlZoek(waarde) {
+        clearTimeout(this._hlZoekTimer);
+        const wis = document.getElementById('hlZoekWis');
+        if (wis) wis.style.display = waarde ? 'inline-flex' : 'none';
+        if (!waarde || waarde.trim().length < 2) { this._hlToonInhoud(); return; }
+        this._hlZoekTimer = setTimeout(() => {
+            const q = waarde.trim();
+            this._hlLaatsteZoek = q;
+            const res = document.getElementById('hlZoekResultaten');
+            const toc = document.getElementById('hlInhoud');
+            if (toc) toc.style.display = 'none';
+            if (res) {
+                res.style.display = 'block';
+                res.innerHTML = QEHandleiding.resultatenHtml(QEHandleiding.zoek(q, this._hlRol()), q);
+            }
+        }, 160);
+    },
+
+    hlZoekWis() {
+        const inp = document.getElementById('hlZoekInput');
+        if (inp) { inp.value = ''; inp.focus(); }
+        this._hlLaatsteZoek = null;
+        this._hlToonInhoud();
+    },
+
+    /** Open een hoofdstuk. blokIdx >= 0 (vanuit zoeken): scroll + markeer de zoekterm. */
+    hlOpen(slug, blokIdx) {
+        const hit = QEHandleiding.vind(slug, this._hlRol());
+        if (!hit) return;
+        const host = document.getElementById('hlHoofdstuk');
+        if (!host) return;
+        host.innerHTML = QEHandleiding.hoofdstukHtml(hit.h, hit.nummer, this._hlRol());
+        this.navigate('screenHandleidingH', true);
+        const vanuitZoeken = typeof blokIdx === 'number' && blokIdx >= 0 && this._hlLaatsteZoek;
+        if (vanuitZoeken) {
+            QEHandleiding.markeer(host, this._hlLaatsteZoek);
+            setTimeout(() => {
+                const blok = host.querySelector('[data-hlblok="' + blokIdx + '"]');
+                if (blok) { try { blok.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (_e) { blok.scrollIntoView(); } }
+            }, 250);
+        } else {
+            try { document.getElementById('screenHandleidingH').scrollTop = 0; window.scrollTo(0, 0); } catch (_e) {}
+        }
     },
 
     // ============================================================
