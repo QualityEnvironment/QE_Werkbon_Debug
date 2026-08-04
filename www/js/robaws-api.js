@@ -81,6 +81,13 @@ const RobawsAPI = {
             }
             await new Promise(r => setTimeout(r, 400));  // rustig aan (burst)
         }
+        // v319: rate-headers van de actieve key erbij — zo zie je meteen of
+        // de daglimiet van deze key (bijna) op is (429 = lege resultaten).
+        try {
+            const rs = this.getRateStats();
+            const f = (s) => s ? (s.remaining + ' van ' + s.limit + ' over') : 'geen meting';
+            out.push('tegoed live: ' + f(rs.live) + ' · replica: ' + f(rs.replica));
+        } catch (_e) {}
         console.log('[Kluis-zelftest] resultaat:\n  ' + out.join('\n  '));
         return out;
     },
@@ -1502,7 +1509,16 @@ const RobawsAPI = {
             // eigen key laten vallen, melden, en 1× opnieuw zoeken met de
             // gedeelde key (cache bewaart alleen 200-antwoorden, dus de
             // herkansing is gegarandeerd vers).
-            console.warn('[RobawsAPI] Fiche onvindbaar met persoonlijke key — key mist vermoedelijk werknemers-leesrecht; terugval op de gedeelde key');
+            // v319: éérst het echte statusnummer vastleggen (403 = rechten,
+            // 429 = limiet van de key op) — daarna pas de key laten vallen.
+            try {
+                const probeId = (this.EMPLOYEES[emailLower] && this.EMPLOYEES[emailLower].employeeId) || '1';
+                const probe = await this.get(`employees/${probeId}`, { bypassCache: true });
+                console.warn('[RobawsAPI] Diagnose eigen key: employees/' + probeId + ' → status ' + probe.code);
+            } catch (pe) {
+                console.warn('[RobawsAPI] Diagnose eigen key: employees/{id} → FOUT: ' + ((pe && pe.message) || '?'));
+            }
+            console.warn('[RobawsAPI] Fiche onvindbaar met persoonlijke key — terugval op de gedeelde key');
             this.clearActiveCredentials(true);
             try { if (window.app && app.toast) app.toast('Je eigen API-key mist leesrechten (werknemers) — controleer het key-profiel in Robaws. Je bent ingelogd op de gedeelde key.', true); } catch (_e) {}
             try { employee = await fetchEmployee(); } catch (_e) {}
