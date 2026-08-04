@@ -495,6 +495,8 @@ const app = {
         // van de vorige user naar de volgende op hetzelfde toestel.
         try { await fetch('api/auth.php?action=logout'); } catch(e) {}
         try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', '', ''); } catch(_e) {}
+        // v315: persoonlijke API-key wissen (volgende gebruiker krijgt zijn eigen key bij login)
+        try { RobawsAPI.clearActiveCredentials(true); } catch(_e) {}
 
         // Wis enkel sleutels die user-gebonden zijn. Sleutels die voor
         // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
@@ -8141,6 +8143,11 @@ const app = {
         html += row(c.pin.ok, 'PIN', c.pin.ok ? 'ingesteld' : 'nog geen — kiest werknemer bij 1e login',
             c.pin.ok ? '' : fixWrap('<input class="form-input" id="obPin" inputmode="numeric" maxlength="6" placeholder="nu al zetten (optioneel)" style="flex:1">' +
                 '<button class="btn btn-outline btn-sm" onclick="app.adminOnboardFixPin(\'' + idArg + '\')">Zet</button>'), !c.pin.ok);
+        // v315: eigen API-key in de Worker-kluis (alleen tonen als de Worker de check kent)
+        if (c.apiKey && c.apiKey.known) {
+            html += row(c.apiKey.ok, 'Eigen API-key (Worker-kluis)', c.apiKey.ok ? 'aanwezig' : 'nog geen — gebruikt gedeelde key',
+                c.apiKey.ok ? '' : '<div style="font-size:12px;color:var(--qe-grey);margin-top:6px;line-height:1.45">Maak in <b>Robaws-web</b> een API-key aan voor de gebruiker van deze fiche en plak hem in <b>Cloudflare &#8594; KV</b>: sleutel <b>apikey:' + this.escapeHtml(String(empId)) + '</b>, waarde <b>{&quot;key&quot;:&quot;&hellip;&quot;,&quot;secret&quot;:&quot;&hellip;&quot;}</b>. Actief vanaf de volgende login.</div>', !c.apiKey.ok);
+        }
         html += '<div style="display:flex;gap:8px;margin-top:14px">' +
             '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Sluiten</button>' +
             '<button class="btn btn-primary btn-full" onclick="app.showAdminOnboardChecklist(\'' + idArg + '\')">Opnieuw controleren</button></div>';

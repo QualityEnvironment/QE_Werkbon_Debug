@@ -15,20 +15,56 @@ const RobawsAPI = {
     API_KEY: 'KBM8UEKYPLHIXDHIQ1IL',
     API_SECRET: 'xmFYgMmDi4xFLiPZy8qCslSKbCmSDIgIErmTWJZ5',
 
-    // Eén gedeelde API-key voor de hele app (per-werknemer keys teruggedraaid).
-    USER_API_KEYS: {},
+    // v315: per-werknemer API-keys uit de WORKER-KLUIS (Cloudflare KV) — er
+    // staan geen persoonlijke keys in code of bundel. Bij het inloggen
+    // controleert de Worker e-mail + PIN en geeft hij de eigen key terug;
+    // die bewaren we in localStorage zodat de app offline blijft starten.
+    // De gedeelde API_KEY hierboven blijft de TERUGVAL zolang een werknemer
+    // nog geen eigen key in de kluis heeft (uitrol per werknemer); daarna
+    // kan hij uit de bundel.
+    USER_API_KEYS: {},          // legacy (leeg laten — keys komen uit de Worker, nooit uit code)
+    WORKER_AUTH_URL: 'https://qe-mollie-webhook.levi-957.workers.dev',
     _activeKey: null,
     _activeSecret: null,
-    setActiveCredentialsFor(email) {
-        const c = this.USER_API_KEYS[String(email || '').toLowerCase().trim()] || null;
-        this._activeKey = (c && c.key) || null;
-        this._activeSecret = (c && c.secret) || null;
+    _credRestoreDone: false,
+    setActiveCredentials(key, secret, email) {
+        this._activeKey = key || null;
+        this._activeSecret = secret || null;
+        this._credRestoreDone = true;
+        try {
+            if (key && secret) {
+                localStorage.setItem('qe_api_cred', JSON.stringify({ email: String(email || '').toLowerCase().trim(), key, secret }));
+            }
+        } catch (_e) {}
     },
-    clearActiveCredentials() {
+    setActiveCredentialsFor(email) {  // legacy-naam; werkt alleen nog op de (lege) map
+        const c = this.USER_API_KEYS[String(email || '').toLowerCase().trim()] || null;
+        if (c) this.setActiveCredentials(c.key, c.secret, email);
+    },
+    clearActiveCredentials(wipeStorage) {
         this._activeKey = null;
         this._activeSecret = null;
+        this._credRestoreDone = true;
+        if (wipeStorage) { try { localStorage.removeItem('qe_api_cred'); } catch (_e) {} }
     },
     _authPair() {
+        if (!this._credRestoreDone) {
+            // Lazy restore na een app-herstart: eigen key terugzetten als hij
+            // bij de ingelogde gebruiker hoort (offline-start blijft werken).
+            this._credRestoreDone = true;
+            try {
+                const raw = localStorage.getItem('qe_api_cred');
+                if (raw) {
+                    const c = JSON.parse(raw);
+                    const u = JSON.parse(localStorage.getItem('qe_user') || 'null');
+                    const em = u ? String(u.email || '').toLowerCase().trim() : '';
+                    if (c && c.key && c.secret && (!em || em === String(c.email || '').toLowerCase().trim())) {
+                        this._activeKey = c.key;
+                        this._activeSecret = c.secret;
+                    }
+                }
+            } catch (_e) {}
+        }
         return {
             key: this._activeKey || this.API_KEY,
             secret: this._activeSecret || this.API_SECRET,
@@ -1270,6 +1306,36 @@ const RobawsAPI = {
         const emailLower = email.toLowerCase().trim();
         console.log('[RobawsAPI] Login poging voor:', emailLower);
 
+        // v315: eigen API-key ophalen uit de Worker-kluis. De Worker checkt
+        // e-mail + PIN met het API-account; antwoorden dragen v:'auth1' —
+        // een oude Worker (zonder kluis) of netwerkfout wordt genegeerd en
+        // de bestaande flow loopt gewoon door (gedeelde of bewaarde key).
+        try {
+            const wres = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: emailLower, pin: String(pin) }),
+            }, 8000);
+            let wj = null;
+            try { wj = await wres.json(); } catch (_e) {}
+            if (wj && wj.v === 'auth1') {
+                if (wres.status === 401) return { success: false, error: 'PIN onjuist' };
+                if (wres.status === 429) return { success: false, error: 'Te veel pogingen — probeer over een kwartier opnieuw.' };
+                if (wres.status === 403) return { success: false, error: 'Dit account is stopgezet. Neem contact op met kantoor.' };
+                if (wres.ok && wj.key && wj.secret) {
+                    this.setActiveCredentials(wj.key, wj.secret, emailLower);
+                    console.log('[RobawsAPI] Eigen API-key actief (Worker-kluis)');
+                } else if (wres.ok) {
+                    // Kluis kent deze werknemer (nog) niet → gedeelde key
+                    this.clearActiveCredentials(true);
+                }
+                // 404 (niet gevonden): de gewone flow hieronder doet zijn
+                // eigen zoektocht + nette foutafhandeling.
+            }
+        } catch (_e) {
+            console.warn('[RobawsAPI] Worker-kluis niet bereikbaar — verder met bestaande credentials');
+        }
+
         // Stap 1: Zoek de werknemer op email in Robaws.
         // v132: retry 1x bij transient failure + 3e fallback zonder status-filter
         // zodat ook niet-"actieve" werknemers gevonden worden.
@@ -1895,6 +1961,15 @@ const RobawsAPI = {
                 if (page >= (r.data.totalPages || 1)) break;
             } while (page < 5);
         } catch (_e) {}
+        // v315: eigen API-key in de Worker-kluis? (soft-check — een oude of
+        // onbereikbare Worker geeft geen v:'auth1' → known:false, rij verborgen)
+        let apiKeyOk = null;
+        try {
+            const r = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/auth/haskey?employeeId=' + encodeURIComponent(employeeId), {}, 6000);
+            const j = await r.json();
+            if (j && j.v === 'auth1') apiKeyOk = !!j.aanwezig;
+        } catch (_e) {}
+
         return {
             naam: [emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.name || ('#' + employeeId),
             checks: {
@@ -1903,6 +1978,7 @@ const RobawsAPI = {
                 rol:    { ok: roleOk, value: roleLabel || (emp.employeeRoleId ? ('rol-id ' + emp.employeeRoleId) : '') },
                 user:   { ok: !!user, value: user ? ((user.fullName || user.email || 'user') + ' (#' + user.id + ')') : '', userId: user ? user.id : null },
                 pin:    { ok: !!(pinVal && String(pinVal).trim()) },
+                apiKey: { ok: apiKeyOk === true, known: apiKeyOk !== null },
             },
         };
     },
