@@ -8523,12 +8523,18 @@ const app = {
     // Rolf, dan zou de klik een stille no-op zijn — leg dat uit i.p.v. een
     // vals "Goedgekeurd" te tonen.
     _canDecideApprovals(explain) {
+        // v316: met een eigen API-key uit de Worker-kluis handelt de API als
+        // de ingelogde gebruiker ZELF — beslissen mag dan gewoon (de
+        // privacy-filter v306/307 toont sowieso alleen goedkeuringen die op
+        // jou wachten). Zonder eigen key geldt de oude Rolf-regel.
+        try { if (RobawsAPI.hasPersonalKey && RobawsAPI.hasPersonalKey()) return true; } catch (_e) {}
         const myUid = String(this._myRobawsUserId() || '');
         if (myUid && myUid === String(RobawsAPI.KEY_OWNER_USER_ID)) return true;
         if (explain) {
             this.showModal(`<div><h3 style="margin:0 0 10px">Beslissen kan hier nog niet</h3>
-                <p style="font-size:13.5px;line-height:1.55;margin:0 0 10px">Deze goedkeuring wacht op <b>jou persoonlijk</b>, maar de app werkt met het gedeelde kantoor-account (Rolf). Robaws laat beslissen namens iemand anders niet toe — je klik zou als kantoor geregistreerd worden en <b>niets veranderen</b>.</p>
-                <p style="font-size:13.5px;line-height:1.55;margin:0 0 4px">Keur voorlopig goed of af in <b>Robaws zelf</b> (met je eigen login); de aanvraag verdwijnt daarna vanzelf uit dit lijstje.</p>
+                <p style="font-size:13.5px;line-height:1.55;margin:0 0 10px">Deze goedkeuring wacht op <b>jou persoonlijk</b>, maar je werkt nog met het gedeelde kantoor-account — er is <b>nog geen eigen API-key</b> actief voor jouw login. Beslissen zou als kantoor geregistreerd worden en <b>niets veranderen</b>.</p>
+                <p style="font-size:13.5px;line-height:1.55;margin:0 0 10px">Staat jouw key al in de <b>Worker-kluis</b>? Log dan even <b>uit en opnieuw in</b> — daarna kan je hier wél beslissen, op je eigen naam.</p>
+                <p style="font-size:13.5px;line-height:1.55;margin:0 0 4px">Tot dan: keur goed of af in <b>Robaws zelf</b>; de aanvraag verdwijnt daarna vanzelf uit dit lijstje.</p>
                 <button class="btn btn-outline btn-full" style="margin-top:12px" onclick="app.closeModal()">OK</button></div>`);
         }
         return false;

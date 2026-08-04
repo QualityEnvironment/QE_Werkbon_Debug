@@ -47,6 +47,13 @@ const RobawsAPI = {
         this._credRestoreDone = true;
         if (wipeStorage) { try { localStorage.removeItem('qe_api_cred'); } catch (_e) {} }
     },
+    /** v316: is er een persoonlijke key (Worker-kluis) actief? De API handelt
+     *  dan als de ingelogde gebruiker zelf — o.a. goedkeuringen mogen dan. */
+    hasPersonalKey() {
+        this._authPair();  // triggert de lazy restore na een app-herstart
+        return !!this._activeKey;
+    },
+
     _authPair() {
         if (!this._credRestoreDone) {
             // Lazy restore na een app-herstart: eigen key terugzetten als hij
@@ -236,18 +243,25 @@ const RobawsAPI = {
         }
         return this._replicaExhaustedUntil;
     },
-    _markReplicaExhausted(res) {
+    _markReplicaExhausted(res, status) {
         let ms = 30 * 60 * 1000;   // vangnet als de rate-limit-headers niet leesbaar zijn
-        try {
-            const h = res && res.headers;
-            const remaining = h ? parseInt(h.get('X-RateLimit-Daily-Remaining'), 10) : NaN;
-            const reset = h ? parseInt(h.get('X-RateLimit-Daily-Reset'), 10) : NaN;
-            if (remaining > 0) ms = 60 * 1000;   // burst-429 (gedeelde sec-teller), geen dag-uitputting
-            else if (reset > 0) ms = Math.min(reset * 1000, 24 * 60 * 60 * 1000);
-        } catch (_e) {}
+        if (status === 401 || status === 403) {
+            // v316: deze KEY mag (nog) niet op de replica-pool — dat is een
+            // per-key-recht bij Robaws (gezien bij persoonlijke kluis-keys).
+            // Lang blokkeren: dit lost een dagreset niet op.
+            ms = 12 * 60 * 60 * 1000;
+        } else {
+            try {
+                const h = res && res.headers;
+                const remaining = h ? parseInt(h.get('X-RateLimit-Daily-Remaining'), 10) : NaN;
+                const reset = h ? parseInt(h.get('X-RateLimit-Daily-Reset'), 10) : NaN;
+                if (remaining > 0) ms = 60 * 1000;   // burst-429 (gedeelde sec-teller), geen dag-uitputting
+                else if (reset > 0) ms = Math.min(reset * 1000, 24 * 60 * 60 * 1000);
+            } catch (_e) {}
+        }
         this._replicaExhaustedUntil = Date.now() + ms;
         try { localStorage.setItem(this._REPLICA_LS_KEY, String(this._replicaExhaustedUntil)); } catch (_e) {}
-        console.warn('[RobawsAPI] Replica-pool gaf 429 → lees-calls ' + Math.round(ms / 60000) + ' min via live');
+        console.warn('[RobawsAPI] Replica-pool gaf ' + (status || 429) + ' → lees-calls ' + Math.round(ms / 60000) + ' min via live');
     },
 
     // (v306 / 1.x v301) Laatst geziene rate-limit-headers per pool — liften
@@ -278,9 +292,22 @@ const RobawsAPI = {
         if (useReplica) headers['Database-Mode'] = 'replica';
         let res = await this._fetchWithTimeout(url, { headers });
         this._captureRateHeaders(res, useReplica ? 'replica' : 'live');
-        if (useReplica && res.status === 429) {
-            // Replica-pool op (of burst): markeren + dezelfde call via live.
-            this._markReplicaExhausted(res);
+        if (useReplica && (res.status === 429 || res.status === 401 || res.status === 403)) {
+            // 429 = replica-pool op (of burst) · 401/403 = deze key mag (nog)
+            // niet op de replica (per-key-recht; persoonlijke kluis-keys!).
+            // In beide gevallen: markeren + dezelfde call via live.
+            this._markReplicaExhausted(res, res.status);
+            res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
+            this._captureRateHeaders(res, 'live');
+        }
+        if (res.status === 401 && this._activeKey && !this._personalKeyWarned) {
+            // v316: eigen kluis-key wordt ook op LIVE geweigerd → foute
+            // key/secret in de KV-entry. Eén keer melden, terugvallen op de
+            // gedeelde key en de call herhalen zodat de app blijft werken.
+            this._personalKeyWarned = true;
+            console.error('[RobawsAPI] Eigen API-key geweigerd (401) — terugval op de gedeelde key; controleer de kluis-entry');
+            try { if (window.app && app.toast) app.toast('Je eigen API-key wordt geweigerd — controleer de kluis-entry. De app gebruikt tijdelijk de gedeelde key.', true); } catch (_e) {}
+            this.clearActiveCredentials(true);
             res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
             this._captureRateHeaders(res, 'live');
         }
