@@ -54,6 +54,37 @@ const RobawsAPI = {
         return !!this._activeKey;
     },
 
+    /** v318: KLUIS-ZELFTEST — proeft de belangrijkste modules met de ACTIEVE
+     *  key (vers, via live) en logt per module het statusnummer. Draait
+     *  automatisch kort na een login met eigen key; handmatig aanroepen kan
+     *  altijd via de console: RobawsAPI.kluisZelftest()
+     *  Zo zien we in één oogopslag welke rechten een key-profiel mist. */
+    async kluisZelftest() {
+        const user = this.getLoggedInUser && this.getLoggedInUser();
+        const empId = (user && user.robawsEmployeeId) || '1';
+        const probes = [
+            ['fiche (werknemers lezen)', `employees/${empId}`],
+            ['documenten op de fiche',   `employees/${empId}/documents?limit=1`],
+            ['planning',                 `planning-items?employeeId=${empId}&limit=1&sort=startDate:desc`],
+            ['artikels',                 'articles?limit=1'],
+            ['goedkeuringen',            'approval-requests?limit=1'],
+            ['verkoopfacturen',          'sales-invoices?limit=1'],
+        ];
+        const out = [];
+        console.log('[Kluis-zelftest] start — ' + (this.hasPersonalKey() ? 'EIGEN key actief' : 'gedeelde key'));
+        for (const [naam, ep] of probes) {
+            try {
+                const r = await this.get(ep, { bypassCache: true });  // altijd live + vers
+                out.push(naam + ' → ' + r.code + (r.code === 200 ? ' ✓' : ' ✗'));
+            } catch (e) {
+                out.push(naam + ' → FOUT: ' + ((e && e.message) || '?'));
+            }
+            await new Promise(r => setTimeout(r, 400));  // rustig aan (burst)
+        }
+        console.log('[Kluis-zelftest] resultaat:\n  ' + out.join('\n  '));
+        return out;
+    },
+
     _authPair() {
         if (!this._credRestoreDone) {
             // Lazy restore na een app-herstart: eigen key terugzetten als hij
@@ -308,6 +339,13 @@ const RobawsAPI = {
             console.error('[RobawsAPI] Eigen API-key geweigerd (401) — terugval op de gedeelde key; controleer de kluis-entry');
             try { if (window.app && app.toast) app.toast('Je eigen API-key wordt geweigerd — controleer de kluis-entry. De app gebruikt tijdelijk de gedeelde key.', true); } catch (_e) {}
             this.clearActiveCredentials(true);
+            res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
+            this._captureRateHeaders(res, 'live');
+        }
+        if (res.status === 429) {
+            // v318: burst-429 op live (seconde-teller per key) — de app-start
+            // vuurt veel reads tegelijk af. Even ademen en 1× herhalen.
+            await new Promise(r => setTimeout(r, 1200));
             res = await this._fetchWithTimeout(url, { headers: this.getHeaders() });
             this._captureRateHeaders(res, 'live');
         }
@@ -1636,6 +1674,12 @@ const RobawsAPI = {
         // zodat de login-flow niet wacht op de download). Tijdens app-gebruik
         // gebruikt get-avatar gewoon de lokale cache.
         this.refreshAvatarFromRobaws(emailLower, employee.id).catch(() => {});
+
+        // v318: met een eigen kluis-key na 5 s de zelftest draaien (console)
+        // — de opstart-vloed is dan voorbij en we zien per module de status.
+        if (this.hasPersonalKey && this.hasPersonalKey()) {
+            setTimeout(() => { this.kluisZelftest().catch(() => {}); }, 5000);
+        }
 
         return { success: true, user };
     },
