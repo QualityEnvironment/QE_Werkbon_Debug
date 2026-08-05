@@ -949,6 +949,17 @@ window.QEClock = {
             pauseMinutes = 60;
             pauseSource = 'fallback-60';
         }
+        // v326: beleidsregel (Levi, 5 aug 2026) — een TECHNIEKER die in
+        // monteur-rol werkt volgt het monteur-regime: pauze 45 min i.p.v.
+        // zijn fiche-pauze. Zelfde regel in app.js _fillKlokurenForMonteur
+        // zodat tijdsregistratie en werkbon-overname identiek boeken.
+        try {
+            if (window.app && app.currentUser && app.currentUser.role === 'technieker'
+                    && typeof app._activeRole === 'function' && app._activeRole() === 'monteur') {
+                pauseMinutes = 45;
+                pauseSource = 'monteur-rol (45)';
+            }
+        } catch (_) {}
         // v214: pauze maar ÉÉN keer per dag aftrekken. Bij een tweede sessie
         // (ochtend + namiddag op dezelfde werkbon) werd de volledige pauze
         // voorheen bij ELKE uitklok opnieuw afgetrokken.

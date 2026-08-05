@@ -1425,8 +1425,16 @@ const app = {
         const entryEnd   = fromMin(entryEndMin);
 
         // Pauze: persoonlijke pauze van de uitklokkende monteur
-        const pauze = (window.QEClock && QEClock._personalPauze != null)
+        let pauze = (window.QEClock && QEClock._personalPauze != null)
             ? QEClock._personalPauze : 60;
+        // v326: beleidsregel (Levi, 5 aug 2026) — een TECHNIEKER die in
+        // monteur-rol werkt volgt het monteur-regime: pauze 45 min. Zijn
+        // fiche-pauze (30) hoort bij technieker-dagen. Zelfde regel zit in
+        // clock.js _clockOut zodat klok en werkbon dezelfde pauze boeken.
+        if (this.currentUser && this.currentUser.role === 'technieker'
+                && this._activeRole() === 'monteur') {
+            pauze = 45;
+        }
 
         const grossMin = Math.max(0, entryEndMin - entryStartMin);
         const netMin = Math.max(0, grossMin - pauze);
@@ -1562,7 +1570,18 @@ const app = {
             }];
         }
 
+        // v325: de uitklokker zelf hoort ALTIJD in de lijst (bovenaan) —
+        // wo.employeeIds kan hem missen, terwijl zíjn kloksessie de bron
+        // van de uren is.
+        const myId = this.currentUser ? String(this.currentUser.robawsEmployeeId) : null;
+        if (myId && !employees.some(e => String(e.id) === myId)) {
+            employees.unshift({ id: myId, name: this.currentUser.name || 'Ik' });
+        }
+
         return new Promise(resolve => {
+            // v325: alleen de uitklokker zelf staat standaard aangevinkt —
+            // collega's moeten bewust BIJgevinkt worden (voorheen stond
+            // iedereen aan en kregen niet-aanwezige collega's per ongeluk uren).
             const checkboxes = employees.map(e => `
                 <label style="display:flex;align-items:center;gap:12px;padding:12px 14px;
                     border:1px solid #ddd;border-radius:10px;margin-bottom:8px;cursor:pointer;
@@ -1570,7 +1589,7 @@ const app = {
                     <input type="checkbox" class="emp-check"
                         data-id="${this.escapeHtml(String(e.id))}"
                         data-name="${this.escapeHtml(e.name)}"
-                        checked
+                        ${String(e.id) === myId ? 'checked' : ''}
                         style="width:22px;height:22px;cursor:pointer">
                     <span style="font-size:15px;font-weight:500">${this.escapeHtml(e.name)}</span>
                 </label>
@@ -1579,8 +1598,9 @@ const app = {
             document.getElementById('modalContent').innerHTML = `
                 <h3>${this.icon('user', { size: 18, style: 'vertical-align:-3px' })} Voor wie zijn de uren?</h3>
                 <p style="font-size:13px;color:var(--qe-grey);margin:8px 0 14px;line-height:1.4">
-                    Vink aan wie er vandaag op deze werkbon werkte.
-                    Iedereen krijgt dezelfde uren.
+                    Vink aan wie er vandaag op deze werkbon werkte —
+                    alleen jijzelf staat al aangevinkt.
+                    Iedereen die je aanvinkt krijgt dezelfde uren.
                 </p>
                 ${checkboxes}
                 <button onclick="window._klokEmpResp(true)" class="btn btn-primary btn-full"
@@ -1602,6 +1622,13 @@ const app = {
                 }
                 const checked = Array.from(document.querySelectorAll('.emp-check:checked'))
                     .map(cb => ({ id: cb.dataset.id, name: cb.dataset.name }));
+                // v325: Bevestigen zonder één vinkje = vergissing (sinds de
+                // collega's standaard uit staan is dat één tik dichtbij) —
+                // modal open laten i.p.v. stil de uitklok afbreken.
+                if (checked.length === 0) {
+                    this.toast('Vink minstens één werknemer aan (of kies Annuleren)');
+                    return;
+                }
                 this.closeModal();
                 delete window._klokEmpResp;
                 resolve(checked);
