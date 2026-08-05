@@ -185,6 +185,7 @@
             ['De klant wil niet tekenen.', 'Leg uit dat het gewoon bevestigt dat het werk is uitgevoerd. Blijft het een probleem? Bel kantoor vóór je verstuurt.'],
             ['Er klopt iets niet in het totaal.', 'Ga terug naar de tabbladen Uren of Materiaal en verbeter het daar. Het overzicht rekent zichzelf opnieuw uit.'],
             ['Welk BTW-tarief moet ik kiezen?', 'Meestal kiest de app het zelf op basis van de klantgegevens. Zie je het verkeerde tarief? Bel kantoor — niet gokken.'],
+            ['Mag ik korting geven?', 'Ja: tik onder het totaal op "+ Korting toevoegen" — percentage of een bedrag in euro, eventueel met een reden. Een bedrag in euro is wat de klant écht minder betaalt (€15 korting = €15 van het eindtotaal). De korting komt als aparte lijn op de factuur en het te betalen bedrag (QR/Bancontact/cash) past zich automatisch aan. Weghalen kan met het kruisje naast de korting-regel.'],
         ] },
     ] },
 

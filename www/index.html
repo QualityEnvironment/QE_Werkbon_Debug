@@ -554,6 +554,8 @@
             <span>Subtotaal excl. BTW</span>
             <span id="wbSubtotal">-</span>
         </div>
+        <!-- v321: korting (technieker) — gevuld door JS, vóór de BTW -->
+        <div id="wbKortingRow" style="display:none"></div>
         <!-- Klant BTW indicatie -->
         <div id="wbClientBtwInfo" style="padding:8px 16px;margin:4px 0;border-radius:8px;font-size:13px"></div>
         <!-- BTW rij (dynamisch: alleen juiste tarief of beide als onbekend) -->
@@ -561,6 +563,10 @@
             <!-- Gevuld door JS -->
         </div>
     </div>
+
+    <!-- v321: korting toevoegen (alleen technieker/bureel; JS verbergt voor monteurs) -->
+    <button class="btn btn-outline btn-sm" id="btnWbKorting" onclick="app.openKortingSheet()"
+        style="width:100%;margin:-6px 0 16px;display:none">+ Korting toevoegen</button>
 
     <!-- Opmerkingen -->
     <div class="card mb-16" id="wbNotesCard" style="display:none">

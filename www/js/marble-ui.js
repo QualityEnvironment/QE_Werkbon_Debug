@@ -209,6 +209,7 @@
         ] },
         screenWerkbon: { name: 'WERKBON', steps: [
             ['Controle', 'Controleer de uren (afgerond voor facturatie), materialen en het totaal incl. BTW.'],
+            ['Korting', 'Krijgt de klant korting? Tik onder het totaal op "+ Korting toevoegen" — percentage of een bedrag in euro (dat is wat de klant écht minder betaalt). De korting komt als aparte lijn op de factuur en het betaalbedrag past zich meteen aan.', '#btnWbKorting'],
             ['Geen factuur', 'Voor garantie of terugkomwerk vink je "Geen factuur maken" aan — de werkbon wordt dan zonder factuur verstuurd.', '#wbNoInvoice', 'label'],
             ['Betaalwijze', 'QR is het snelst: de klant scant en de betaling wordt direct bevestigd. Bancontact stuurt het bedrag rechtstreeks naar de betaalterminal. Overschrijving en cash kunnen ook.', '#wbPaymentMethodSection'],
             ['Ondertekenen', 'De knop onderaan opent de handtekening; daarna wordt alles naar Robaws gestuurd.']
@@ -224,7 +225,7 @@
         screenDagoverzicht: { name: 'MIJN UREN', steps: [
             ['Maandoverzicht', 'De cijfers bovenaan tellen je maand op; met de pijltjes blader je naar vorige maanden. Je komt hier via de knop op het Klok-scherm.', '#mbUrenStats'],
             ['Dagdetail', 'Elke rij is een dag met het type uren. Ziekte of verlof staat er ook tussen.'],
-            ['Aanpassing vragen', 'Klopt iets niet? Tik op de registratie en kies een reden ("Vergeten in te klokken", "Verkeerd tijdstip", …) — je aanvraag gaat als taak naar Vince.']
+            ['Aanpassing vragen', 'Klopt iets niet? Tik op de dag en kies een reden ("Vergeten in te klokken", "Verkeerd tijdstip", …) — je aanvraag gaat als taak naar Vince.']
         ] },
         screenUitgevoerd: { name: 'UITGEVOERD', steps: [
             ['Afgewerkte werkbonnen', 'De laatste 7 dagen, met uren, artikels en betaalstatus.', '#uitgevoerdList'],

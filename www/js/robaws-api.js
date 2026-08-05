@@ -417,12 +417,26 @@ const RobawsAPI = {
     async post(endpoint, body) {
         this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const res = await this._fetchWithTimeout(url, {   // v207: timeout
+        let res = await this._fetchWithTimeout(url, {   // v207: timeout
             method: 'POST',
             headers: this.getHeaders(),
             body: JSON.stringify(body),
         });
         this._captureRateHeaders(res, 'live');
+        if (res.status === 429) {
+            // v324: burst-429 (seconde-teller per key) — 1× ademen en herhalen.
+            // Een 429 is per definitie NIET verwerkt, dus geen dubbele-write-
+            // risico (timeouts/5xx herhalen we bewust NIET). De uitklok vuurt
+            // 6-12 writes in enkele seconden — dit was dé bron van "werkuren
+            // POST (429)"-fouten, zeker rond 16u op de gedeelde veldwerk-key.
+            await new Promise(r => setTimeout(r, 1200));
+            res = await this._fetchWithTimeout(url, {
+                method: 'POST',
+                headers: this.getHeaders(),
+                body: JSON.stringify(body),
+            });
+            this._captureRateHeaders(res, 'live');
+        }
         // 204 No Content of lege body veilig afhandelen
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
@@ -437,12 +451,22 @@ const RobawsAPI = {
     async put(endpoint, body) {
         this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const res = await this._fetchWithTimeout(url, {   // v207: timeout
+        let res = await this._fetchWithTimeout(url, {   // v207: timeout
             method: 'PUT',
             headers: this.getHeaders(),
             body: JSON.stringify(body),
         });
         this._captureRateHeaders(res, 'live');
+        if (res.status === 429) {
+            // v324: burst-429 — 1× herhalen (idempotent: 429 = niet verwerkt)
+            await new Promise(r => setTimeout(r, 1200));
+            res = await this._fetchWithTimeout(url, {
+                method: 'PUT',
+                headers: this.getHeaders(),
+                body: JSON.stringify(body),
+            });
+            this._captureRateHeaders(res, 'live');
+        }
         // PUT returns 204 No Content on success
         if (res.status === 204) return { code: 204, data: null };
         // BUG-fix: bij Cloudflare/HTML 502/504 crashte `await res.json()`
@@ -461,10 +485,18 @@ const RobawsAPI = {
     async del(endpoint) {
         this._invalidateCache(endpoint);
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
-        const res = await this._fetchWithTimeout(url, {
+        let res = await this._fetchWithTimeout(url, {
             method: 'DELETE',
             headers: this.getHeaders(),
         });
+        if (res.status === 429) {
+            // v324: burst-429 — 1× herhalen (idempotent: 429 = niet verwerkt)
+            await new Promise(r => setTimeout(r, 1200));
+            res = await this._fetchWithTimeout(url, {
+                method: 'DELETE',
+                headers: this.getHeaders(),
+            });
+        }
         if (res.status === 204) return { code: 204, data: null };
         const txt = await res.text();
         try {
@@ -1118,7 +1150,9 @@ const RobawsAPI = {
     // Alleen de geëxpandeerde relatie-OBJECTEN + read-only audit-velden droppen.
     // De scalaire spiegel-ids (articleId/supplierId/assignedEmployeeId/
     // stockLocationId/…) BLIJVEN staan, zodat de koppelingen behouden blijven.
-    _MATERIEEL_PUT_DROP: ['article', 'supplier', 'assignedProject', 'assignedEmployee', 'assignedClient', 'assignedEndClient', 'assignedSubcontractor', 'stockLocation', 'company', '_metadata', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'logicId'],
+    // v323: 'logicId' UIT de drop-lijst — sinds 4 aug wist Robaws het nummer
+    // als het veld in een full-replace-PUT ontbreekt (zie factuurnummers).
+    _MATERIEEL_PUT_DROP: ['article', 'supplier', 'assignedProject', 'assignedEmployee', 'assignedClient', 'assignedEndClient', 'assignedSubcontractor', 'stockLocation', 'company', '_metadata', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'],
 
     /** Vervang de Reserveringen-extraField op een VERS opgehaald materiaal en PUT (opgeschoonde full-replace). */
     async _putMaterieelReserveringen(mat, arr) {
@@ -2502,11 +2536,18 @@ const RobawsAPI = {
         const body = { ...existing.data, ...updates };
         // Verwijder metadata velden die niet in PUT mogen
         delete body._metadata;
-        delete body.logicId;
         delete body.createdAt;
         delete body.updatedAt;
+        // v323: logicId blijft in de body — ontbreken = nummer gewist (zelfde
+        // bug als de factuurnummers, 4 aug). Weigert Robaws hem: 1× zonder.
         console.log('[RobawsAPI] Tijdsregistratie updaten:', id, JSON.stringify(updates));
-        return await this.put(`time-registrations/${id}`, body);
+        let tr = await this.put(`time-registrations/${id}`, body);
+        if (tr.code === 400 || tr.code === 422) {
+            const zonder = { ...body };
+            delete zonder.logicId;
+            tr = await this.put(`time-registrations/${id}`, zonder);
+        }
+        return tr;
     },
 
     /**
@@ -4452,7 +4493,7 @@ const RobawsAPI = {
         clientId: passedClientId = null, companyId: passedCompanyId = null,
         salesOrderId = null, paymentMethod = null, notes = '',
         materials = [], hours = [], onderhoud = false, hoursPrerounded = false,
-        userId = null, installationIds = [] }) {
+        userId = null, installationIds = [], korting = null }) {
 
         const toStr = v => (v == null || v === '') ? null : String(v);
 
@@ -4463,6 +4504,11 @@ const RobawsAPI = {
         if (vatTariffId == null || String(vatTariffId) === '') {
             return { success: false, error: 'Geen BTW-tarief meegegeven — factuur niet aangemaakt. Stel het BTW-tarief van de klant in (info-tab → BTW wijzigen).' };
         }
+
+        // v324 (afspraak "B&B", 4 aug): korting = altijd ÉÉN duidelijke
+        // negatieve factuurlijn (zie blok 3d verderop). De v322-route via het
+        // native per-lijn discount-veld is bewust teruggedraaid: Levi wil de
+        // korting als leesbare lijn op de factuur, met eigen tekst erbij.
 
         // v112: Postcode van de werf — bewaard in functie-scope. Wordt gevuld
         // wanneer we het installatie-adres ophalen voor `siteAddress`, en later
@@ -4801,6 +4847,30 @@ const RobawsAPI = {
             }
         }
 
+        // 3d (v324, afspraak "B&B"): KORTING = altijd ÉÉN duidelijke negatieve
+        // lijn met de tekst van de technieker erbij, zelfde BTW-tarief.
+        // `korting.bedrag` is het excl-bedrag dat de app berekende: bij een
+        // percentage recht op het subtotaal; bij een vast bedrag zó gekozen
+        // dat het incl-totaal met exact het gevraagde bedrag daalt (de klant
+        // betaalt écht "€15 minder"). Preview = factuur = betaalbedrag.
+        if (korting && Number(korting.bedrag) > 0) {
+            const kortingLine = {
+                type: 'LINE',
+                quantity: 1,
+                description: (korting.label || 'Korting') + (korting.reden ? ' — ' + korting.reden : ''),
+                price: -Math.abs(Math.round(Number(korting.bedrag) * 100) / 100),
+                vatTariffId: toStr(vatTariffId),
+            };
+            if (woSalesOrderId) kortingLine.orderId = woSalesOrderId;
+            const kortingRes = await this.post(`sales-invoices/${invoiceId}/line-items`, kortingLine);
+            if (kortingRes.code === 201 || kortingRes.code === 200) {
+                addedLines++;
+                console.log('[Factuur] Kortinglijn:', kortingLine.description, kortingLine.price);
+            } else {
+                errors.push({ line: kortingLine.description, code: kortingRes.code, error: kortingRes.data });
+            }
+        }
+
         // Stap 4: Factuur ophalen voor totalen + OGM
         let finalInvoice = await this.get(`sales-invoices/${invoiceId}`);
         let inv = finalInvoice.data || {};
@@ -5023,8 +5093,14 @@ const RobawsAPI = {
                     delete body.updatedAt;
                     delete body.createdBy;
                     delete body.updatedBy;
-                    delete body.logicId;
-                    await this.put(`work-orders/${workOrderId}`, body);
+                    // v323: logicId (werkbon-nummer) MOET mee — ontbreken = nummer
+                    // gewist (zelfde bug als de factuurnummers, 4 aug).
+                    let sp = await this.put(`work-orders/${workOrderId}`, body);
+                    if (sp.code === 400 || sp.code === 422) {
+                        const zonder = { ...body };
+                        delete zonder.logicId;
+                        await this.put(`work-orders/${workOrderId}`, zonder);
+                    }
                 }
             } catch(e) { /* niet fataal */ }
         }
@@ -5159,8 +5235,18 @@ const RobawsAPI = {
             delete body.updatedAt;
             delete body.createdBy;
             delete body.updatedBy;
-            delete body.logicId;
-            const put = await this.put(`sales-invoices/${invoiceId}`, body);
+            // v323: logicId (factuurNUMMER) MOET mee — sinds 4 aug wist Robaws
+            // het nummer als het veld in de full-replace ontbreekt (nummer werd
+            // daarna zelfs HERUITGEDEELD aan een andere factuur). We sturen de
+            // huidige waarde terug; weigert Robaws dat ooit (400/422), dan één
+            // herkansing zonder (het oude gedrag).
+            let put = await this.put(`sales-invoices/${invoiceId}`, body);
+            if (put.code === 400 || put.code === 422) {
+                const zonder = Object.assign({}, body);
+                delete zonder.logicId;
+                console.warn('[RobawsAPI] status-PUT met logicId geweigerd (' + put.code + ') — herkansing zonder');
+                put = await this.put(`sales-invoices/${invoiceId}`, zonder);
+            }
             if (put.code !== 200 && put.code !== 204) {
                 return { ok: false, error: 'status-PUT faalde (code ' + put.code + ')' };
             }
@@ -5537,8 +5623,22 @@ const RobawsAPI = {
             wo.remark = existing ? (existing + '\n' + appendRemark) : appendRemark;
         }
         try { localStorage.setItem('qe_last_uitg_put_req', JSON.stringify(wo)); } catch(_) {}
-        const putRes = await this.put(`work-orders/${workOrderId}`, wo);
+        let putRes = await this.put(`work-orders/${workOrderId}`, wo);
+        if (putRes.code === 400 || putRes.code === 422) {
+            // v324: zelfde logicId-herkansing als elders (v323-conventie)
+            const zonder = { ...wo };
+            delete zonder.logicId;
+            putRes = await this.put(`work-orders/${workOrderId}`, zonder);
+        }
         try { localStorage.setItem('qe_last_uitg_put_res', JSON.stringify({code: putRes.code, data: putRes.data})); } catch(_) {}
+        // v324: STILLE-SUCCES-FIX — voorheen werd het PUT-resultaat ONGECONTROLEERD
+        // teruggegeven: een 429/4xx/5xx verdween geruisloos, de app toonde de
+        // uitklok-celebratie maar de werkbon bleef in Robaws open ("scan zegt
+        // voltooid maar is het niet"). Nu hard falen → de aanroepers tonen de
+        // eerlijke melding en de sessie blijft actief zodat een herscan herstelt.
+        if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) {
+            throw new Error('Uitgeklokt-PUT faalde (' + putRes.code + ')');
+        }
         return putRes;
     },
 

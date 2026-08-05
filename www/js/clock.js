@@ -1994,6 +1994,20 @@ window.QEClock = {
 
         const session = this.getSession() || this._newSession();
 
+        // v324: recent-gesloten-guard — vlak na een geslaagde uitklok kan deze
+        // sync nog een VEROUDERDE werkbon-staat zien (cache/race) waarin
+        // Uitgeklokt leeg lijkt, en zette hij de net-gesloten sessie weer op
+        // actief ("scan zei voltooid, maar de klok liep opnieuw"). Lokaal
+        // < 10 min geleden uitgeklokt op dezelfde werkbon → lokaal is leidend.
+        if (isActive && session.active === false && session.endISO
+                && String(session.workOrderId || '') === String(wo.id)) {
+            const ageMs = Date.now() - Date.parse(session.endISO);
+            if (isFinite(ageMs) && ageMs >= 0 && ageMs < 10 * 60 * 1000) {
+                console.log('[Clock] sync: sessie < 10 min geleden lokaal uitgeklokt — verouderde open-staat genegeerd');
+                isActive = false;
+            }
+        }
+
         // v251: een 2e sessie op dezelfde werkbon wist het Uitgeklokt-veld
         // van de ochtend NIET (alleen create/setUitgeklokt schrijven dat).
         // Direct na de 2e inklok draaide deze sync en zette de verse lokale
@@ -2409,6 +2423,7 @@ window.QEClock = {
 
         const exF = (o, f) => { try { const fd = o.extraFields && o.extraFields[f]; return fd ? String(fd.stringValue ?? fd.value ?? '').trim() : ''; } catch (_) { return ''; } };
         const ingeklokt = exF(wo, 'Ingeklokt');
+        const uitgeklokt = exF(wo, 'Uitgeklokt');  // v324: nodig voor het "alleen afsluiten"-pad
 
         // Zelfde kwartier-afronding als _clockOut (v74 + 4-min tolerantie)
         const TOL = 4;
@@ -2421,6 +2436,7 @@ window.QEClock = {
         const ART = RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject;
         let prevHours = 0, lastEndMin = null;
         const untimed = [];
+        const exStartSet = new Set();  // v324: per-blok-idempotency (zoals _clockOut)
         const HT_W = RobawsAPI.HOUR_TYPE_IDS.werkuren;
         const HT_O = RobawsAPI.HOUR_TYPE_IDS.overuren;
         try {
@@ -2434,6 +2450,7 @@ window.QEClock = {
                     prevHours += (parseFloat(te.hours) || 0);
                     const e2 = (te.endTime.hour || 0) * 60 + (te.endTime.minute || 0);
                     if (lastEndMin == null || e2 > lastEndMin) lastEndMin = e2;
+                    exStartSet.add((te.startTime.hour || 0) * 60 + (te.startTime.minute || 0));
                 } else if (te.startTime == null && te.endTime == null) {
                     const h = parseFloat(te.hours) || 0;
                     untimed.push({
@@ -2449,8 +2466,20 @@ window.QEClock = {
         // Starttijd bepalen: eerste blok = Ingeklokt-veld; extra blok = vanHHMM
         const isExtraBlok = prevHours > 0;
         let startRaw;
+        let alleenAfsluiten = false;
         if (isExtraBlok) {
             startRaw = toMin(vanHHMM);
+            if (startRaw == null && !uitgeklokt) {
+                // v324: halfgelukte uitklok repareren — de uren staan al in
+                // Robaws maar de werkbon bleef open (afsluit-PUT faalde eerder).
+                // Uitkloktijd op/vóór het einde van het laatste blok → alleen
+                // nog afsluiten; erna → het gat automatisch als blok bijboeken.
+                const probe = toMin(timeHHMM);
+                if (probe != null && lastEndMin != null) {
+                    if (down15(probe) <= lastEndMin) alleenAfsluiten = true;
+                    startRaw = lastEndMin;
+                }
+            }
             if (startRaw == null) {
                 return { ok: false, needsVan: true,
                     message: 'Er staan al uren op deze werkbon — geef voor het extra blok ook een VAN-tijd (gebruik "Extra blok").' };
@@ -2461,6 +2490,17 @@ window.QEClock = {
         }
         const outMinRaw = toMin(timeHHMM);
         if (outMinRaw == null) return { ok: false, message: 'Ongeldige tijd (gebruik UU:MM)' };
+        if (alleenAfsluiten) {
+            // v324: niets meer te boeken — alleen de werkbon nog sluiten
+            try {
+                await RobawsAPI.setTimeRegistrationUitgeklokt(wo.id, timeHHMM,
+                    'klok-uit: Manueel afgesloten door ' + (byName || 'bureel') + ' — ' + timeHHMM + ' (uren stonden al geboekt)');
+                return { ok: true, message: att.name + ': werkbon afgesloten om ' + timeHHMM +
+                    '\n(de uren stonden al geboekt, tot ' + fromMin(lastEndMin) + ')' };
+            } catch (e) {
+                return { ok: false, message: 'Afsluiten mislukt: ' + ((e && e.message) || e) };
+            }
+        }
         const entryStartMin = up15(startRaw);
         const entryEndMin = down15(outMinRaw);
         if (entryEndMin <= entryStartMin) return { ok: false, message: 'Eindtijd moet na de starttijd liggen (afgerond: ' + fromMin(entryStartMin) + ')' };
@@ -2480,47 +2520,36 @@ window.QEClock = {
         const isWeekend = (day === 0 || day === 6);
 
         try {
-            if (isWeekend) {
-                // v215-regel: weekend = alles overuren (za/zo-variant via adjust)
+            // v324: idempotent boeken — een blok met dezelfde starttijd staat
+            // al in Robaws (halfgelukte vorige poging) → niet dubbel posten.
+            const boekBlok = async (startMin, endMin, breakMin, hourTypeId, naam) => {
+                if (exStartSet.has(startMin)) {
+                    console.log('[Klok] manueel: blok ' + fromMin(startMin) + ' bestaat al — overgeslagen');
+                    return;
+                }
                 const r = await RobawsAPI.addWorkHoursTimeEntry({
                     workOrderId: wo.id, employeeId: att.employeeId,
-                    startTime: entryStart, endTime: entryEnd, breakMinutes: pauseMinutes,
-                    articleId: ART, hourTypeId: HT_O, date: dateStr,
+                    startTime: fromMin(startMin), endTime: fromMin(endMin), breakMinutes: breakMin,
+                    articleId: ART, hourTypeId: hourTypeId, date: dateStr,
                 });
-                if (r.code !== 200 && r.code !== 201) throw new Error('overuren POST ' + r.code);
+                if (r.code !== 200 && r.code !== 201) throw new Error(naam + ' POST ' + r.code);
+            };
+            if (isWeekend) {
+                // v215-regel: weekend = alles overuren (za/zo-variant via adjust)
+                await boekBlok(entryStartMin, entryEndMin, pauseMinutes, HT_O, 'overuren');
             } else if (dayKlant > 8.004) {
                 // v257: split op DAG-totaal (zoals _clockOut v251) — het
                 // werkuren-restant van de dag als werkuren, de rest overuren.
                 const werkurenRestMin = Math.max(0, Math.round((8 - prevHours) * 60));
                 if (werkurenRestMin < 1) {
-                    const r = await RobawsAPI.addWorkHoursTimeEntry({
-                        workOrderId: wo.id, employeeId: att.employeeId,
-                        startTime: entryStart, endTime: entryEnd, breakMinutes: pauseMinutes,
-                        articleId: ART, hourTypeId: HT_O, date: dateStr,
-                    });
-                    if (r.code !== 200 && r.code !== 201) throw new Error('overuren POST ' + r.code);
+                    await boekBlok(entryStartMin, entryEndMin, pauseMinutes, HT_O, 'overuren');
                 } else {
-                    const wEnd = fromMin(entryStartMin + werkurenRestMin + pauseMinutes);
-                    const r1 = await RobawsAPI.addWorkHoursTimeEntry({
-                        workOrderId: wo.id, employeeId: att.employeeId,
-                        startTime: entryStart, endTime: wEnd, breakMinutes: pauseMinutes,
-                        articleId: ART, hourTypeId: HT_W, date: dateStr,
-                    });
-                    if (r1.code !== 200 && r1.code !== 201) throw new Error('werkuren POST ' + r1.code);
-                    const r2 = await RobawsAPI.addWorkHoursTimeEntry({
-                        workOrderId: wo.id, employeeId: att.employeeId,
-                        startTime: wEnd, endTime: entryEnd, breakMinutes: 0,
-                        articleId: ART, hourTypeId: HT_O, date: dateStr,
-                    });
-                    if (r2.code !== 200 && r2.code !== 201) throw new Error('overuren POST ' + r2.code);
+                    const wEndMin = entryStartMin + werkurenRestMin + pauseMinutes;
+                    await boekBlok(entryStartMin, wEndMin, pauseMinutes, HT_W, 'werkuren');
+                    await boekBlok(wEndMin, entryEndMin, 0, HT_O, 'overuren');
                 }
             } else {
-                const r = await RobawsAPI.addWorkHoursTimeEntry({
-                    workOrderId: wo.id, employeeId: att.employeeId,
-                    startTime: entryStart, endTime: entryEnd, breakMinutes: pauseMinutes,
-                    articleId: ART, hourTypeId: HT_W, date: dateStr,
-                });
-                if (r.code !== 200 && r.code !== 201) throw new Error('werkuren POST ' + r.code);
+                await boekBlok(entryStartMin, entryEndMin, pauseMinutes, HT_W, 'werkuren');
             }
 
             // v257: 8u-aanvulling HERREKENEN (zelfde helper als _clockOut) —
@@ -2536,9 +2565,18 @@ window.QEClock = {
                 untimed: untimed,
             });
 
-            await RobawsAPI.setTimeRegistrationUitgeklokt(wo.id, timeHHMM,
-                'klok-uit: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM +
-                (isExtraBlok ? ' (extra blok ' + entryStart + '-' + entryEnd + ')' : ''));
+            // v324: afsluit-PUT apart afvangen — de uren staan er dan al, dus
+            // een eerlijke melding geven i.p.v. een generiek "mislukt" (een
+            // nieuwe poging met dezelfde tijd sluit dan alleen nog af).
+            try {
+                await RobawsAPI.setTimeRegistrationUitgeklokt(wo.id, timeHHMM,
+                    'klok-uit: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM +
+                    (isExtraBlok ? ' (extra blok ' + entryStart + '-' + entryEnd + ')' : ''));
+            } catch (ePut) {
+                return { ok: false,
+                    message: 'De uren (' + entryStart + ' - ' + entryEnd + ') zijn geboekt, maar het afsluiten van de werkbon mislukte (' +
+                        ((ePut && ePut.message) || ePut) + ').\nTik nogmaals op "Uitklokken" met dezelfde tijd — de app sluit dan alleen nog af, zonder dubbele uren.' };
+            }
             return {
                 ok: true,
                 message: att.name + ' uitgeklokt om ' + timeHHMM +

@@ -119,6 +119,7 @@ const app = {
         startTime: null,
         elapsed: 0,
         interval: null,
+        woId: null,        // v324: de werkbon waar deze timer aan hangt
     },
 
     // Hour types (uurcodes)
@@ -2287,14 +2288,27 @@ const app = {
         // bon. De state blijft in localStorage staan (met de oude woId), dus
         // de timer loopt onzichtbaar door en verschijnt weer zodra je de
         // oorspronkelijke werkbon opnieuw opent.
-        if (this.timer && this.timer.running && this.currentWO
-                && String(this.currentWO.id) !== String(woId)) {
-            try {
-                this._saveTimerState();   // state veiligstellen onder de OUDE woId
-                if (this.timer.interval) clearInterval(this.timer.interval);
-                this._resetTimerUI();
-                this.toast('Timer van de vorige werkbon loopt door — open die werkbon om te stoppen');
-            } catch (_) {}
+        // v324: óók niet-lopende restanten (gepauzeerd/half gestopt) opruimen —
+        // die bleven op het gedeelde paneel staan en werden bij Stop als blok
+        // op de VERKEERDE werkbon geboekt (met de starttijd van de vorige).
+        const _t = this.timer;
+        if (_t && (_t.running || _t.elapsed > 0 || _t.startTime)) {
+            const _ownWoId = _t.woId || (this.currentWO && String(this.currentWO.id)) || null;
+            if (_ownWoId && String(_ownWoId) !== String(woId)) {
+                try {
+                    const _wasRunning = _t.running;
+                    this._saveTimerState();   // state veiligstellen onder de EIGEN woId
+                    if (_t.interval) clearInterval(_t.interval);
+                    this._resetTimerUI();
+                    if (_wasRunning) this.toast('Timer van de vorige werkbon loopt door — open die werkbon om te stoppen');
+                } catch (_) {}
+            } else if (!_ownWoId) {
+                // restant zonder werkbon-koppeling → kan nergens aan hangen, wissen
+                try {
+                    if (_t.interval) clearInterval(_t.interval);
+                    this._resetTimerUI();
+                } catch (_) {}
+            }
         }
 
         this.currentWO = this.workorders.find(w => String(w.id) === String(woId));
@@ -2495,6 +2509,7 @@ const app = {
         this.renderNoteTemplates();
         this.initChecklist();
         this._restoreTimerState();
+        this._maybeResumePendingTimerBlock(woId);
 
         // Load uurcodes
         this.loadHourTypes();
@@ -2747,10 +2762,28 @@ const app = {
 
     toggleTimer(type) {
         if (!this.timer.running) {
+            // v324: er loopt (geparkeerd) nog een timer op een ANDERE werkbon —
+            // niet starten, anders overschrijft de nieuwe save die uren stil.
+            try {
+                const st = JSON.parse(localStorage.getItem('qe_timer') || 'null');
+                if (st && st.running && st.woId && this.currentWO
+                        && String(st.woId) !== String(this.currentWO.id)) {
+                    const w = (this.workorders || []).find(x => String(x.id) === String(st.woId));
+                    const nm = (w && ((w.client && w.client.name) || w.summary)) || ('werkbon #' + st.woId);
+                    this.toast('Er loopt nog een timer op ' + nm + ' — stop die eerst');
+                    return;
+                }
+            } catch (_) {}
             // v275: haptiek "timer start" — korte tik (Marble-tabel). No-op in 1.x.
             try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('timer'); } catch (_) {}
             this.timer.running = true;
             this.timer.type = type;
+            // v324: restant van een ANDERE werkbon nooit meetellen als starttijd
+            if (this.timer.woId && this.currentWO
+                    && String(this.timer.woId) !== String(this.currentWO.id)) {
+                this.timer.elapsed = 0;
+            }
+            this.timer.woId = this.currentWO ? String(this.currentWO.id) : null;
             // Sanity: als elapsed ongeldig is (null, NaN, negatief, >24u), reset naar 0
             if (!this.timer.elapsed || this.timer.elapsed < 0 || this.timer.elapsed > 86400000) {
                 this.timer.elapsed = 0;
@@ -2797,21 +2830,57 @@ const app = {
             try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('timer'); } catch (_) {}
             clearInterval(this.timer.interval);
             const elapsed = this.timer.running ? (Date.now() - this.timer.startTime) : this.timer.elapsed;
+            // v324: de stop is METEEN definitief — de correctie-modal werkt op
+            // een snapshot, niet op de live timer. De modal wegtikken (backdrop
+            // of terugknop) kan dus nooit meer een "lopende" timer achterlaten
+            // die bij de volgende werkbon doortikt. Het snapshot staat ook in
+            // localStorage: weggetikt of app gesloten → het blok wordt opnieuw
+            // aangeboden zodra deze werkbon weer opengaat.
+            this._timerSnapshot = {
+                type: this.timer.type || 'klant',
+                startTime: this.timer.startTime,
+                endTime: Date.now(),
+                gpsStart: this.timer.gpsStart || null,
+                woId: this.timer.woId || (this.currentWO ? String(this.currentWO.id) : null),
+            };
+            this._resetTimerUI();
+            this._clearTimerState();
             // Alleen correctie-modal tonen als er minstens 1 minuut getimed is
             if (elapsed >= 1000) {
+                try { localStorage.setItem('qe_timer_pending_block', JSON.stringify(this._timerSnapshot)); } catch (_) {}
                 this._showTimerCorrection();
             } else {
                 // Te kort — gewoon resetten
-                this._resetTimerUI();
-                this._clearTimerState();
+                this._timerSnapshot = null;
             }
         }
     },
 
+    /** v324: een gestopte timer waarvan de correctie-modal werd weggetikt (of
+     *  de app werd afgesloten) → het blok opnieuw aanbieden zodra dezelfde
+     *  werkbon weer wordt geopend, zodat getimede tijd nooit stil verdwijnt. */
+    _maybeResumePendingTimerBlock(woId) {
+        try {
+            const raw = localStorage.getItem('qe_timer_pending_block');
+            if (!raw) return;
+            const snap = JSON.parse(raw);
+            if (!snap || !snap.startTime || !snap.endTime
+                    || (Date.now() - snap.endTime) > 24 * 60 * 60 * 1000) {
+                localStorage.removeItem('qe_timer_pending_block');
+                return;
+            }
+            if (String(snap.woId || '') !== String(woId)) return;  // wacht op de eigen werkbon
+            this._timerSnapshot = snap;
+            this._showTimerCorrection();
+        } catch (_) {}
+    },
+
     async _showTimerCorrection() {
-        const startDate = new Date(this.timer.startTime);
-        const endDate = new Date();
-        const type = this.timer.type || 'klant';
+        // v324: werkt op het stop-snapshot — de live timer is dan al gereset.
+        const snap = this._timerSnapshot || {};
+        const startDate = new Date(snap.startTime || Date.now());
+        const endDate = new Date(snap.endTime || Date.now());
+        const type = snap.type || 'klant';
         const label = this._timerLabels[type] || type;
 
         // Toon eerst loading zodat de modal direct verschijnt
@@ -2907,20 +2976,29 @@ const app = {
         const employeeId = empSelect ? empSelect.value : (this.currentUser ? String(this.currentUser.robawsEmployeeId) : null);
         const employeeName = empSelect ? empSelect.options[empSelect.selectedIndex].text : (this.currentUser ? this.currentUser.name : '');
 
+        // v324: boeken op de werkbon uit het stop-snapshot — niet op wat er
+        // toevallig open staat (na een weggetikte modal kan dat een andere zijn).
+        const snap = this._timerSnapshot || {};
+        const woId = snap.woId || (this.currentWO && String(this.currentWO.id)) || null;
         const pushed = [];
-        if (this.currentWO) {
+        if (woId) {
+            if (!this.woData[woId]) {
+                this.woData[woId] = { hours: [], materials: [], photos: [], notes: '' };
+            }
             const baseId = Date.now();
             blocks.forEach((b, i) => {
                 const entry = {
                     id: baseId + i, type, startTime: b.startTime, endTime: b.endTime,
                     duration: b.duration, pauze: b.pauze,
                     employeeId, employeeName,
-                    gpsStart: (i === 0 && this.timer.gpsStart) || null,
+                    gpsStart: (i === 0 && snap.gpsStart) || null,
                 };
-                this.woData[this.currentWO.id].hours.push(entry);
+                this.woData[woId].hours.push(entry);
                 pushed.push(entry);
             });
-            this.renderHoursList();
+            if (this.currentWO && String(woId) === String(this.currentWO.id)) {
+                this.renderHoursList();
+            }
             this._saveWoData();
         }
 
@@ -2941,6 +3019,8 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
+        this._timerSnapshot = null;  // v324
+        try { localStorage.removeItem('qe_timer_pending_block'); } catch (_) {}
         const pauzeTxt = pauze > 0 ? ` (${pauze}min pauze)` : '';
         const splitTxt = blocks.length > 1 ? ' (gesplitst rond middernacht)' : '';
         this.toast(`${this._timerLabels[type] || type}: ${from} - ${to}${pauzeTxt}${splitTxt}`);
@@ -2950,10 +3030,12 @@ const app = {
         this.closeModal();
         this._resetTimerUI();
         this._clearTimerState();
+        this._timerSnapshot = null;  // v324
+        try { localStorage.removeItem('qe_timer_pending_block'); } catch (_) {}
     },
 
     _resetTimerUI() {
-        this.timer = { running: false, elapsed: 0, type: null, startTime: null, interval: null };
+        this.timer = { running: false, elapsed: 0, type: null, startTime: null, interval: null, woId: null };
         document.getElementById('timerValue').textContent = '00:00:00';
         document.getElementById('timerLabel').textContent = 'Werkuren';
         document.getElementById('btnTimerStart').style.display = '';
@@ -2973,8 +3055,11 @@ const app = {
         if (!this.timer.running) {
             try {
                 const st = JSON.parse(localStorage.getItem('qe_timer') || 'null');
+                // v324: vergelijken met de EIGEN timer-woId (niet currentWO) —
+                // de timer weet nu zelf aan welke werkbon hij hangt.
+                const ownId = this.timer.woId || (this.currentWO && String(this.currentWO.id)) || null;
                 if (st && st.running && st.woId
-                        && (!this.currentWO || String(st.woId) !== String(this.currentWO.id))) {
+                        && (!ownId || String(st.woId) !== String(ownId))) {
                     return;
                 }
             } catch (_) {}
@@ -2984,7 +3069,9 @@ const app = {
             type: this.timer.type,
             startTime: this.timer.startTime,
             elapsed: this.timer.elapsed || 0,
-            woId: this.currentWO?.id || null,
+            // v324: eigen woId is leidend — een vertraagde GPS-callback of het
+            // sanity-pad kan de timer zo nooit aan de verkeerde werkbon hangen.
+            woId: this.timer.woId || this.currentWO?.id || null,
         };
         localStorage.setItem('qe_timer', JSON.stringify(state));
     },
@@ -3017,7 +3104,11 @@ const app = {
                 this.timer.startTime = state.startTime;
                 this.timer.elapsed = state.elapsed || 0;
                 this.timer.running = state.running;
+                this.timer.woId = String(state.woId);  // v324
                 if (state.running) {
+                    // v324: nooit een tweede interval stapelen (heropening van
+                    // dezelfde werkbon, bv. na een BTW-wijziging)
+                    if (this.timer.interval) clearInterval(this.timer.interval);
                     this.timer.interval = setInterval(() => this.updateTimerDisplay(), 1000);
                     document.getElementById('timerLabel').textContent = this._timerLabels[state.type] || state.type;
                     document.getElementById('btnTimerStart').style.display = 'none';
@@ -5350,6 +5441,87 @@ const app = {
         // Totalen — alleen het juiste BTW tarief tonen (of beide als onbekend)
         document.getElementById('wbSubtotal').textContent = this.formatPrice(subtotal);
 
+        // v321/v324: KORTING (alleen technieker/bureel) — één nette kortinglijn
+        // op de factuur. Betekenis (afspraak "B", 4 aug): een VAST bedrag is
+        // wat de klant écht minder betaalt (incl. BTW); een percentage werkt
+        // op het subtotaal (en dus relatief ook op het totaal). De lijn op de
+        // factuur is excl. BTW; voor een vast bedrag zoeken we het excl-bedrag
+        // (op de cent) dat het incl-totaal met exact het gevraagde bedrag
+        // verlaagt. Preview = factuur = betaalbedrag.
+        this._wbLastSubtotal = subtotal;
+        this._wbKorting = null;
+        const kortingCfg = (!this.isMonteur() && data.korting) ? data.korting : null;
+        const vatPctVooraf = client.vatPercentage ?? null;
+        const rate = vatPctVooraf !== null ? (vatPctVooraf / 100) : null;
+        this._wbLastVatRate = rate;  // v324: voor de korting-sheet (incl-rekenwerk)
+        let kortingExcl = 0;      // bedrag van de factuurlijn (excl. BTW)
+        let kortingIncl = 0;      // wat de klant minder betaalt (incl. BTW)
+        let kortingWaarschuwing = '';
+        if (kortingCfg && Number(kortingCfg.waarde) > 0) {
+            if (kortingCfg.type === 'pct') {
+                const pct = Math.min(100, Number(kortingCfg.waarde));
+                kortingExcl = Math.round(subtotal * (pct / 100) * 100) / 100;
+                kortingIncl = rate !== null
+                    ? Math.round(subtotal * (1 + rate) * 100) / 100 - Math.round((subtotal - kortingExcl) * (1 + rate) * 100) / 100
+                    : kortingExcl;
+            } else if (rate === null) {
+                // Vast bedrag vergt een gekend BTW-tarief (incl-betekenis)
+                kortingWaarschuwing = 'Korting in euro vergt een ingesteld BTW-tarief (Info-tab) — korting nog niet toegepast.';
+            } else {
+                const K = Math.round(Number(kortingCfg.waarde) * 100) / 100;
+                const doelIncl = Math.round(subtotal * (1 + rate) * 100) / 100 - K;
+                // excl-bedrag zoeken (± 3 cent rond K/(1+r)) dat het incl-totaal
+                // met exact K verlaagt; anders de dichtstbijzijnde cent.
+                let best = Math.round((K / (1 + rate)) * 100) / 100;
+                let bestDiff = Infinity;
+                for (let c = -3; c <= 3; c++) {
+                    const p = Math.round((K / (1 + rate)) * 100 + c) / 100;
+                    if (p <= 0 || p > subtotal) continue;
+                    const incl = Math.round((subtotal - p) * (1 + rate) * 100) / 100;
+                    const diff = Math.abs(incl - doelIncl);
+                    if (diff < bestDiff) { bestDiff = diff; best = p; }
+                }
+                kortingExcl = Math.min(best, subtotal);
+                kortingIncl = Math.round(subtotal * (1 + rate) * 100) / 100 - Math.round((subtotal - kortingExcl) * (1 + rate) * 100) / 100;
+            }
+            if (kortingExcl < 0) kortingExcl = 0;
+        }
+        const btwBasis = Math.max(0, Math.round((subtotal - kortingExcl) * 100) / 100);
+        if (kortingExcl > 0) {
+            this._wbKorting = {
+                type: kortingCfg.type,
+                pct: kortingCfg.type === 'pct' ? Number(kortingCfg.waarde) : null,
+                bedrag: kortingExcl,        // factuurlijn (excl. BTW)
+                bedragIncl: Math.round(kortingIncl * 100) / 100,
+                label: kortingCfg.type === 'pct'
+                    ? ('Korting ' + Number(kortingCfg.waarde) + '%')
+                    : ('Korting ' + this.formatPrice(Math.round(Number(kortingCfg.waarde) * 100) / 100)),
+                reden: kortingCfg.reden || '',
+            };
+        }
+        const kortingRowEl = document.getElementById('wbKortingRow');
+        if (kortingRowEl) {
+            if (kortingExcl > 0) {
+                kortingRowEl.innerHTML = `<div class="total-row" style="color:var(--qe-orange);font-weight:600">
+                    <span>${this.escapeHtml(this._wbKorting.label)}${this._wbKorting.reden ? ` <span style="font-weight:400;font-size:12px;color:var(--qe-grey)">(${this.escapeHtml(this._wbKorting.reden)})</span>` : ''}
+                        <span onclick="app.verwijderKorting()" style="margin-left:8px;cursor:pointer;color:var(--qe-grey);font-weight:700">&#10005;</span></span>
+                    <span>&minus; ${this.formatPrice(kortingExcl)}</span></div>
+                    ${this._wbKorting.type !== 'pct' ? `<div style="font-size:11.5px;color:var(--qe-grey);text-align:right;margin:-4px 0 4px">klant betaalt ${this.formatPrice(this._wbKorting.bedragIncl)} minder (incl. BTW)</div>` : ''}`;
+                kortingRowEl.style.display = 'block';
+            } else if (kortingWaarschuwing) {
+                kortingRowEl.innerHTML = `<div style="font-size:12px;color:var(--qe-orange);padding:4px 0">${this.escapeHtml(kortingWaarschuwing)}</div>`;
+                kortingRowEl.style.display = 'block';
+            } else {
+                kortingRowEl.innerHTML = '';
+                kortingRowEl.style.display = 'none';
+            }
+        }
+        const kortingBtn = document.getElementById('btnWbKorting');
+        if (kortingBtn) {
+            kortingBtn.style.display = this.isMonteur() ? 'none' : 'block';
+            kortingBtn.textContent = kortingExcl > 0 ? 'Korting aanpassen' : '+ Korting toevoegen';
+        }
+
         const clientBtwInfo = document.getElementById('wbClientBtwInfo');
         const vatPct = client.vatPercentage ?? null;
         const vatName = client.vatTariffName || null;
@@ -5362,7 +5534,7 @@ const app = {
             clientBtwInfo.style.display = 'block';
 
             const pct = vatPct / 100;
-            const btwBedrag = subtotal * pct;
+            const btwBedrag = btwBasis * pct;
             btwRowsEl.innerHTML = `
                 <div class="total-row" style="font-weight:600;color:var(--qe-purple)">
                     <span>BTW ${vatPct}%</span>
@@ -5370,7 +5542,7 @@ const app = {
                 </div>
                 <div class="total-row subtotal" style="font-weight:700;color:var(--qe-purple)">
                     <span>Totaal incl. ${vatPct}% BTW</span>
-                    <span>${this.formatPrice(subtotal + btwBedrag)}</span>
+                    <span>${this.formatPrice(btwBasis + btwBedrag)}</span>
                 </div>`;
         } else {
             // Onbekend BTW tarief — toon beide zodat technieker kan vergelijken
@@ -5378,13 +5550,13 @@ const app = {
             clientBtwInfo.style.background = 'rgba(249,157,62,0.1)';
             clientBtwInfo.style.display = 'block';
 
-            const btw6 = subtotal * 0.06;
-            const btw21 = subtotal * 0.21;
+            const btw6 = btwBasis * 0.06;
+            const btw21 = btwBasis * 0.21;
             btwRowsEl.innerHTML = `
                 <div class="total-row"><span>BTW 6%</span><span>${this.formatPrice(btw6)}</span></div>
                 <div class="total-row"><span>BTW 21%</span><span>${this.formatPrice(btw21)}</span></div>
-                <div class="total-row subtotal"><span>Totaal incl. 6% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw6)}</span></div>
-                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(subtotal + btw21)}</span></div>`;
+                <div class="total-row subtotal"><span>Totaal incl. 6% BTW</span><span style="font-weight:500">${this.formatPrice(btwBasis + btw6)}</span></div>
+                <div class="total-row subtotal"><span>Totaal incl. 21% BTW</span><span style="font-weight:500">${this.formatPrice(btwBasis + btw21)}</span></div>`;
         }
 
         // Opmerkingen & foto's
@@ -5802,6 +5974,30 @@ const app = {
     startSubmitFlow() {
         if (!this.currentWO) return;
 
+        // v324: versturen met een nog lopende/gepauzeerde timer op DEZE werkbon
+        // → eerst netjes stoppen (correctie-modal), anders bleef er een
+        // fantoom-timer doorlopen en misten de getimede uren op de bon.
+        if (this.timer && (this.timer.running || this.timer.elapsed > 0)
+                && (!this.timer.woId || String(this.timer.woId) === String(this.currentWO.id))) {
+            this.toast('De timer loopt nog — sla de uren eerst op');
+            this.stopTimer();
+            return;
+        }
+        // v324: weggetikte correctie-modal met een onverwerkt timer-blok voor
+        // deze werkbon → eerst laten opslaan of verwijderen.
+        try {
+            const rawPend = localStorage.getItem('qe_timer_pending_block');
+            if (rawPend) {
+                const pend = JSON.parse(rawPend);
+                if (pend && String(pend.woId || '') === String(this.currentWO.id)) {
+                    this.toast('Er staat nog een getimed blok klaar — sla het eerst op of verwijder het');
+                    this._timerSnapshot = pend;
+                    this._showTimerCorrection();
+                    return;
+                }
+            }
+        } catch (_) {}
+
         if (this.isMonteur()) {
             return this.executeMonteurSubmitFlow();
         }
@@ -6165,6 +6361,9 @@ const app = {
                 })),
                 hoursPrerounded: true,  // v212: createInvoice rondt niet dubbel
                 onderhoud: data.onderhoud || false,
+                // v321: korting exact zoals in de preview berekend (bedrag in
+                // euro's) — createInvoice zet er één negatieve lijn van.
+                korting: this._wbKorting || null,
             };
 
             // Overschrijving ter plaatse: geen email meer nodig (QR scherm wordt getoond)
@@ -12073,6 +12272,9 @@ const app = {
                     </div>
                 </div>`;
 
+            // v324: hint BOVEN de daglijst (stond onder 31 blokken verstopt)
+            html += `<div style="font-size:12px;color:var(--g1);margin:2px 0 6px">Klopt een dag niet? Tik erop om een aanpassing aan te vragen.</div>`;
+
             // Per dag: huidige maand t/m vandaag; een vorige maand = volledige
             // maand (laatste dag t/m de 1e). v179.
             const days = ['Zo','Ma','Di','Wo','Do','Vr','Za'];
@@ -12106,10 +12308,16 @@ const app = {
                     // v266 (Marble): dag = één blok met hairline-onderlijn.
                     // v268: het DAGTOTAAL is de hoofdzaak (groot, ink, rechts);
                     // de opsplitsing eronder is bijzaak (compact, grijs).
-                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)">
+                    // v324: het HELE dag-blok is klikbaar (aanpassing aanvragen) —
+                    // sinds Marble waren alleen de dunne grijze subrijtjes (±8%
+                    // van het blok) klikbaar en leek "aanpassing vragen" stuk.
+                    // Klik-doel = de eerste NIET-afwezigheids-werkbon; een dag met
+                    // enkel Verlof/Ziek blijft (bewust, v197) niet klikbaar.
+                    const clickWo = wos.find(w => !this._isAbsenceTijd(getField(w, 'Tijd') || 'Op tijd')) || null;
+                    html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)${clickWo ? ';cursor:pointer' : ''}"${clickWo ? ` onclick="app.openAanpassing('${clickWo.id}')"` : ''}>
                         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
                             <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
-                            <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u</span>
+                            <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u${clickWo ? ' <span style="color:var(--g3);font-weight:400">&rsaquo;</span>' : ''}</span>
                         </div>`;
 
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
@@ -12147,7 +12355,7 @@ const app = {
                         if (teList.length === 0) {
                             // Open werkbon zonder entries (nog niet uitgeklokt) — compacte rij
                             const ingeklokt = getField(wo, 'Ingeklokt') || '?';
-                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="event.stopPropagation();app.openAanpassing('${wo.id}')">
                                 <span style="width:22px;height:22px;border-radius:7px;background:var(--gwash);color:var(--green2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('clock', { size: 12 })}</span>
                                 <div style="flex:1;min-width:0;font-size:12px;color:var(--g2)">Nog ingeklokt · ${tijd} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${ingeklokt} → …</span></div>
                             </div>`;
@@ -12198,7 +12406,7 @@ const app = {
 
                             // v268: opsplitsing = bijzaak — één compacte grijze regel
                             // per blok (22px chip, label · bereik, waarde klein rechts).
-                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="app.openAanpassing('${wo.id}')">
+                            html += `<div style="display:flex;align-items:center;gap:10px;padding:3px 0 3px 2px;cursor:pointer" onclick="event.stopPropagation();app.openAanpassing('${wo.id}')">
                                 <span style="width:22px;height:22px;border-radius:7px;background:${chipBg};color:${chipFg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${icon}</span>
                                 <div style="flex:1;min-width:0;font-size:12px;color:var(--g2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label} <span style="color:var(--g3);font-variant-numeric:tabular-nums">· ${range}</span></div>
                                 <span style="font-size:12.5px;font-variant-numeric:tabular-nums;color:${valFg};flex-shrink:0">${rightTxt}</span>
@@ -12219,7 +12427,7 @@ const app = {
                 }
             }
 
-            html += `<div style="font-size:12px;color:var(--g1);margin-top:14px">Tik op een registratie om een aanpassing aan te vragen.</div>`;
+            html += `<div style="font-size:12px;color:var(--g1);margin-top:14px">Tik op een dag om een aanpassing aan te vragen.</div>`;
 
             container.innerHTML = html;
             this._animateCountUps(container);
@@ -13550,8 +13758,32 @@ const app = {
                     }
                 }
             };
-            // Initial calc - bij open
-            setTimeout(() => { recalcKm(); }, 250);
+            // v324: km al gepost bij een eerdere (halfgelukte) uitklok-poging?
+            // Het formulier blijft dé uitklok-bevestiging (v272) en moet dus
+            // gewoon verschijnen, maar de commute-POST wordt dan overgeslagen —
+            // anders kreeg de werknemer dubbele km-vergoeding bij elke retry.
+            // 30 min venster: een retry gebeurt binnen minuten; een échte
+            // tweede uitklok (extra blok) later op de dag boekt weer normaal.
+            const kmFlagKey = 'qe_km_posted_' + workOrderId + '_' + employeeId;
+            let kmAlGepost = false;
+            try {
+                const ts = Date.parse(localStorage.getItem(kmFlagKey) || '');
+                kmAlGepost = isFinite(ts) && (Date.now() - ts) >= 0 && (Date.now() - ts) < 30 * 60 * 1000;
+            } catch (_) {}
+            if (kmAlGepost) {
+                try {
+                    heenEl.disabled = true;
+                    terugEl.disabled = true;
+                    heenEl.style.opacity = '0.5';
+                    terugEl.style.opacity = '0.5';
+                    errEl.textContent = 'Kilometers zijn al opgeslagen bij de vorige poging — bevestigen rondt alleen de uitklok af.';
+                    errEl.style.color = '#0277bd';
+                    errEl.style.display = 'block';
+                } catch (_) {}
+            } else {
+                // Initial calc - bij open
+                setTimeout(() => { recalcKm(); }, 250);
+            }
             // Re-calc bij thuis-werf vinkjes (fiets-vinkje heeft geen invloed meer)
             if (directTWEl) directTWEl.addEventListener('change', recalcKm);
             if (directWTEl) directWTEl.addEventListener('change', recalcKm);
@@ -13584,6 +13816,11 @@ const app = {
                 errEl.style.display = 'none';
 
                 try {
+                    if (kmAlGepost) {
+                        // v324: km stonden al in Robaws (eerdere poging) — niets
+                        // dubbel boeken, formulier dient enkel als bevestiging.
+                        console.log('[App] km al gepost voor deze werkbon — POST overgeslagen');
+                    } else {
                     // Stap 1: commute-entry voor de hoofd-rit
                     const r = await RobawsAPI.addCommuteEntry({
                         workOrderId,
@@ -13595,6 +13832,9 @@ const app = {
                     if (r.code !== 200 && r.code !== 201) {
                         throw new Error('Robaws (' + r.code + ')');
                     }
+                    // v324: vlag direct na de hoofd-POST — mislukt hierna nog
+                    // iets (split/afsluiten), dan boekt een retry niet dubbel.
+                    try { localStorage.setItem(kmFlagKey, new Date().toISOString()); } catch (_) {}
 
                     // v131: stap 1b — tweede commute-entry indien split aangevinkt
                     if (hasSplit) {
@@ -13609,6 +13849,7 @@ const app = {
                             throw new Error('Robaws split (' + r2.code + ')');
                         }
                         console.log('[App] split commute-entry gepost:', { heen2, terug2, mobility2TypeId });
+                    }
                     }
 
                     // Stap 2: checkboxes (Fietsvergoeding + Rechtstreeks routes) → set
@@ -13660,7 +13901,9 @@ const app = {
  if (hasSplit) tags.push('');
                     const tagTxt = tags.length ? ' · ' + tags.join(' ') : '';
                     const totaalKm = (heen + terug) + (hasSplit ? (heen2 + terug2) : 0);
-                    this.toast('Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);
+                    this.toast(kmAlGepost
+                        ? 'Uitklokken bevestigd — kilometers stonden al opgeslagen'
+                        : 'Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);
                     resolve(true);
                 } catch (e) {
                     console.warn('[App] km POST faalde:', e && e.message);
@@ -14608,6 +14851,134 @@ const app = {
         }
         const chev = chevId ? document.getElementById(chevId) : null;
         if (chev) chev.textContent = open ? '▾' : '▴';
+    },
+
+    // ============================================================
+    // KORTING (v321) — technieker geeft korting op het werkbon-overzicht
+    // (totaal + betaalopties). Percentage óf vast bedrag, optionele reden.
+    // Het berekende bedrag gaat als NEGATIEVE factuurlijn mee (zelfde
+    // BTW-tarief), dus QR/terminal/cash vragen automatisch het juiste
+    // bedrag. Opslag in woData[woId].korting (persist zoals uren/materiaal).
+    // ============================================================
+
+    openKortingSheet() {
+        if (this.isMonteur() || !this.currentWO) return;
+        const data = this.woData[this.currentWO.id] || {};
+        const huidig = data.korting || null;
+        const subtotal = this._wbLastSubtotal || 0;
+        const oud = document.getElementById('kortingSheet');
+        if (oud) oud.remove();
+
+        const ov = document.createElement('div');
+        ov.id = 'kortingSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);display:flex;flex-direction:column;justify-content:flex-end';
+        const chip = (type, label) => `<button type="button" id="ktType${type}" onclick="app._kortingKiesType('${type}')"
+            style="flex:1;padding:11px;border-radius:10px;border:1px solid var(--b1,#DCD9D0);background:var(--card,#FDFCFA);font:600 14px var(--font);color:var(--qe-grey);cursor:pointer">${label}</button>`;
+        ov.innerHTML =
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Korting</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Korting geven</div></div>' +
+            '    <button onclick="document.getElementById(\'kortingSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <div style="display:flex;gap:8px;margin-bottom:12px">' + chip('pct', '% percentage') + chip('bedrag', '&euro; van het totaal') + '</div>' +
+            '  <input id="ktWaarde" type="text" inputmode="decimal" placeholder="bv. 10" class="form-input" style="width:100%;font-size:18px;padding:12px;margin-bottom:10px" oninput="app._kortingPreview()">' +
+            '  <input id="ktReden" type="text" placeholder="Reden (optioneel, komt op de factuur)" class="form-input" style="width:100%;padding:11px;margin-bottom:10px" oninput="app._kortingPreview()">' +
+            '  <div id="ktPreview" style="font-size:13.5px;color:var(--qe-grey);margin:2px 2px 14px;min-height:18px"></div>' +
+            '  <button class="btn btn-primary btn-full" style="padding:14px" onclick="app.pasKortingToe()">Korting toepassen</button>' +
+            '</div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+
+        this._kortingType = (huidig && huidig.type) || 'pct';
+        this._kortingKiesType(this._kortingType);
+        if (huidig) {
+            const w = document.getElementById('ktWaarde');
+            const r = document.getElementById('ktReden');
+            if (w) w.value = String(huidig.waarde).replace('.', ',');
+            if (r) r.value = huidig.reden || '';
+        }
+        this._kortingPreview();
+    },
+
+    _kortingKiesType(type) {
+        this._kortingType = type;
+        for (const t of ['pct', 'bedrag']) {
+            const el = document.getElementById('ktType' + t);
+            if (!el) continue;
+            const actief = t === type;
+            el.style.borderColor = actief ? 'var(--qe-orange)' : 'var(--b1, #DCD9D0)';
+            el.style.background = actief ? 'rgba(249,157,62,0.12)' : 'var(--card, #FDFCFA)';
+            el.style.color = actief ? 'var(--amber2, #E88A2A)' : 'var(--qe-grey)';
+        }
+        this._kortingPreview();
+    },
+
+    _kortingWaarde() {
+        const el = document.getElementById('ktWaarde');
+        const v = parseFloat(String((el && el.value) || '').replace(/\s/g, '').replace(',', '.'));
+        return isNaN(v) ? 0 : v;
+    },
+
+    _kortingPreview() {
+        const p = document.getElementById('ktPreview');
+        if (!p) return;
+        const subtotal = this._wbLastSubtotal || 0;
+        const rate = (this._wbLastVatRate != null) ? this._wbLastVatRate : null;
+        const totaalIncl = rate !== null ? Math.round(subtotal * (1 + rate) * 100) / 100 : null;
+        const w = this._kortingWaarde();
+        if (w <= 0) {
+            p.textContent = totaalIncl !== null
+                ? 'Totaal nu: ' + this.formatPrice(totaalIncl) + ' incl. BTW'
+                : 'Subtotaal excl. BTW: ' + this.formatPrice(subtotal);
+            return;
+        }
+        if (this._kortingType === 'pct') {
+            if (w > 100) { p.innerHTML = '<span style="color:var(--qe-red)">Maximum 100%</span>'; return; }
+            const excl = Math.round(subtotal * (w / 100) * 100) / 100;
+            const nieuw = totaalIncl !== null ? Math.round((subtotal - excl) * (1 + rate) * 100) / 100 : null;
+            p.innerHTML = 'Korting ' + w + '%' + (nieuw !== null
+                ? ': klant betaalt <b>' + this.formatPrice(totaalIncl - nieuw) + '</b> minder &rarr; nieuw totaal <b>' + this.formatPrice(nieuw) + '</b> incl. BTW'
+                : ': <b>&minus; ' + this.formatPrice(excl) + '</b> op het subtotaal');
+            return;
+        }
+        // vast bedrag = wat de klant écht minder betaalt (incl. BTW)
+        if (rate === null) { p.innerHTML = '<span style="color:var(--qe-red)">BTW-tarief onbekend — stel het eerst in via de Info-tab</span>'; return; }
+        const K = Math.round(w * 100) / 100;
+        if (K >= totaalIncl) { p.innerHTML = '<span style="color:var(--qe-red)">Korting is groter dan het totaal (' + this.formatPrice(totaalIncl) + ')</span>'; return; }
+        p.innerHTML = 'Klant betaalt <b>' + this.formatPrice(K) + '</b> minder &rarr; nieuw totaal <b>' + this.formatPrice(totaalIncl - K) + '</b> incl. BTW';
+    },
+
+    pasKortingToe() {
+        if (!this.currentWO) return;
+        const w = this._kortingWaarde();
+        if (w <= 0) { this.toast('Vul een korting in', true); return; }
+        if (this._kortingType === 'pct' && w > 100) { this.toast('Maximum 100%', true); return; }
+        if (this._kortingType === 'bedrag') {
+            const rate = (this._wbLastVatRate != null) ? this._wbLastVatRate : null;
+            if (rate === null) { this.toast('Korting in euro vergt een ingesteld BTW-tarief (Info-tab)', true); return; }
+            const totaalIncl = Math.round((this._wbLastSubtotal || 0) * (1 + rate) * 100) / 100;
+            if (w >= totaalIncl) { this.toast('Korting is groter dan het totaal', true); return; }
+        }
+        const reden = String((document.getElementById('ktReden') || {}).value || '').trim().substring(0, 80);
+        const data = this.woData[this.currentWO.id];
+        if (!data) return;
+        data.korting = { type: this._kortingType, waarde: Math.round(w * 100) / 100, reden };
+        this._saveWoData();
+        const sheet = document.getElementById('kortingSheet');
+        if (sheet) sheet.remove();
+        this._showWerkbonPreviewDirect();
+        try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('success'); } catch (_e) {}
+    },
+
+    verwijderKorting() {
+        if (!this.currentWO) return;
+        const data = this.woData[this.currentWO.id];
+        if (data && data.korting) {
+            delete data.korting;
+            this._saveWoData();
+        }
+        this._showWerkbonPreviewDirect();
     },
 
     // ============================================================
