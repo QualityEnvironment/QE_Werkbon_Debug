@@ -12,8 +12,14 @@ const RobawsAPI = {
     // === CACHE ===
     _articleCache: null,       // Alle artikelen (1x geladen)
     _articleCacheLoading: false,
-    API_KEY: 'KBM8UEKYPLHIXDHIQ1IL',
-    API_SECRET: 'xmFYgMmDi4xFLiPZy8qCslSKbCmSDIgIErmTWJZ5',
+    // v336 — CUTOVER: geen sleutels meer in de bundel. Ál het verkeer draait
+    // op de ALGEMENE key uit de Worker-kluis (apikey:standaard = het API-only
+    // account met admin-rol), opgehaald bij de login en bewaard in
+    // localStorage `qe_api_alg`. De persoonlijke kluis-key blijft de
+    // handtekening voor goedkeuren/mailen. Deze twee velden blijven bestaan
+    // als noodklep: vul ze alleen tijdelijk in als de kluis onbereikbaar is.
+    API_KEY: '',
+    API_SECRET: '',
 
     // v315: per-werknemer API-keys uit de WORKER-KLUIS (Cloudflare KV) — er
     // staan geen persoonlijke keys in code of bundel. Bij het inloggen
@@ -168,6 +174,12 @@ const RobawsAPI = {
                 const a = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
                 if (a && a.key && a.secret) { this._algKey = a.key; this._algSecret = a.secret; }
             } catch (_e) {}
+        }
+        // v336: zonder kluis-key én zonder noodklep-key kán er niets werken —
+        // één duidelijke waarschuwing i.p.v. mysterieuze 401's.
+        if (!this._algKey && !this.API_KEY && !this._geenKeyGemeld) {
+            this._geenKeyGemeld = true;
+            console.warn('[RobawsAPI] GEEN API-key actief — log opnieuw in zodat de app de sleutel uit de kluis kan ophalen.');
         }
         return {
             key: this._algKey || this.API_KEY,
@@ -1383,6 +1395,21 @@ const RobawsAPI = {
         if (!employeeId) return null;
         const empIdStr = String(employeeId);
 
+        // 0) v335: EMPLOYEES-map eerst — geen API-call nodig én immuun voor
+        // een API-account zonder gebruikers-leesrecht (/users geeft dan
+        // stille lege lijsten, waardoor stappen 2-4 droogvallen — zo verloor
+        // Bjorn zijn userId na de overstap op het API-account). De map wordt
+        // onderhouden; nieuwe medewerkers vallen door naar de dynamische
+        // stappen hieronder.
+        try {
+            const hint = String(emailHint || '').toLowerCase().trim();
+            for (const [em, e] of Object.entries(this.EMPLOYEES)) {
+                if (String(e.employeeId) === empIdStr || (hint && em === hint)) {
+                    if (e.userId != null) return e.userId;
+                }
+            }
+        } catch (_e) {}
+
         // 1) Probeer via /employees/{id}
         try {
             const empRes = await this.get(`employees/${empIdStr}`);
@@ -1563,6 +1590,11 @@ const RobawsAPI = {
             }
         } catch (_e) {
             console.warn('[RobawsAPI] Worker-kluis niet bereikbaar — verder met bestaande credentials');
+        }
+        // v336 (cutover): zonder sleutel is inloggen zinloos — meld het
+        // eerlijk i.p.v. verderop te stranden op mysterieuze 401's.
+        if (!this._algKey && !this.API_KEY) {
+            return { success: false, error: 'Geen verbinding met de sleutelkluis — controleer je internetverbinding en probeer opnieuw.' };
         }
 
         // Stap 1: Zoek de werknemer op email in Robaws.

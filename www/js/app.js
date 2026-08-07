@@ -6434,7 +6434,9 @@ const app = {
      */
     async _uploadPhotosToInvoice(photos, invoiceId) {
         if (!photos || !photos.length || !invoiceId) return;
-        const auth = btoa(RobawsAPI.API_KEY + ':' + RobawsAPI.API_SECRET);
+        // v336: actieve (kluis-)key i.p.v. de verwijderde bundel-key
+        const _ap = RobawsAPI._authPair();
+        const auth = btoa(_ap.key + ':' + _ap.secret);
         const BASE = RobawsAPI.BASE_URL || 'https://app.robaws.com/api/v2';
         for (let i = 0; i < photos.length; i++) {
             const p = photos[i];

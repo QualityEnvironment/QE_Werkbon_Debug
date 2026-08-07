@@ -184,6 +184,24 @@ const APIBridge = {
         if (action === 'check-email') {
             const body = await this.parseBody(options);
             const email = (body.email || '').toLowerCase().trim();
+            // v336 (cutover): vóór de login heeft de app géén key meer (de
+            // bundel-key is uit de code). De Worker doet deze lookup met zijn
+            // eigen secrets. Faalt hij (oude Worker / geen net), dan valt de
+            // code hieronder terug op de directe Robaws-poging + lokale map.
+            try {
+                const wr = await fetch(RobawsAPI.WORKER_AUTH_URL + '/auth/check-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email }),
+                });
+                const wj = await wr.json().catch(() => null);
+                if (wj && wj.v === 'auth1' && wr.ok) {
+                    console.log('[APIBridge] check-email via kluis:', email, 'known:', wj.known, 'hasPin:', wj.hasPin);
+                    return this.jsonResponse({ known: !!wj.known, hasPin: !!wj.hasPin });
+                }
+            } catch (_e) {
+                console.warn('[APIBridge] check-email via kluis mislukt — terugval');
+            }
             // Via Robaws checken — lijst-endpoint bevat extraFields
             try {
                 let found = null;
