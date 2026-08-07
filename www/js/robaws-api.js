@@ -19,9 +19,12 @@ const RobawsAPI = {
     // staan geen persoonlijke keys in code of bundel. Bij het inloggen
     // controleert de Worker e-mail + PIN en geeft hij de eigen key terug;
     // die bewaren we in localStorage zodat de app offline blijft starten.
-    // De gedeelde API_KEY hierboven blijft de TERUGVAL zolang een werknemer
-    // nog geen eigen key in de kluis heeft (uitrol per werknemer); daarna
-    // kan hij uit de bundel.
+    // v330 — HYBRIDE MODEL: de persoonlijke key is alléén nog de
+    // HANDTEKENING voor goedkeuren/afkeuren (_personalFetch); ál het andere
+    // verkeer loopt op de gedeelde API_KEY hieronder (volle rechten, replica,
+    // 20k-maatwerklimiet). Persoonlijke keys hebben dus enkel het
+    // goedkeuringen-recht nodig — géén werknemers-/planning-/facturen-rechten
+    // (en de werknemer ziet in Robaws-web dus ook niets extra).
     USER_API_KEYS: {},          // legacy (leeg laten — keys komen uit de Worker, nooit uit code)
     WORKER_AUTH_URL: 'https://qe-mollie-webhook.levi-957.workers.dev',
     _activeKey: null,
@@ -64,35 +67,44 @@ const RobawsAPI = {
         return !!this._activeKey && this._activeSoort !== 'rol';
     },
 
-    /** v318: KLUIS-ZELFTEST — proeft de belangrijkste modules met de ACTIEVE
-     *  key (vers, via live) en logt per module het statusnummer. Draait
-     *  automatisch kort na een login met eigen key; handmatig aanroepen kan
-     *  altijd via de console: RobawsAPI.kluisZelftest()
-     *  Zo zien we in één oogopslag welke rechten een key-profiel mist. */
+    /** v318/v330: KLUIS-ZELFTEST. Sinds het hybride model (v330) loopt al het
+     *  gewone verkeer op de gedeelde key — de persoonlijke key is alleen nog
+     *  de handtekening voor goedkeuringen. De test proeft dus:
+     *  (a) de GEDEELDE key op de kernmodules, en
+     *  (b) de PERSOONLIJKE key alléén op approval-requests (het enige recht
+     *      dat een persoonlijke key nodig heeft).
+     *  Handmatig aanroepen kan altijd via de console: RobawsAPI.kluisZelftest() */
     async kluisZelftest() {
         const user = this.getLoggedInUser && this.getLoggedInUser();
         const empId = (user && user.robawsEmployeeId) || '1';
         const probes = [
             ['fiche (werknemers lezen)', `employees/${empId}`],
-            ['documenten op de fiche',   `employees/${empId}/documents?limit=1`],
             ['planning',                 `planning-items?employeeId=${empId}&limit=1&sort=startDate:desc`],
             ['artikels',                 'articles?limit=1'],
-            ['goedkeuringen',            'approval-requests?limit=1'],
             ['verkoopfacturen',          'sales-invoices?limit=1'],
         ];
         const out = [];
-        console.log('[Kluis-zelftest] start — ' + (this.hasPersonalKey() ? 'EIGEN key actief' : 'gedeelde key'));
+        console.log('[Kluis-zelftest] start — hybride model: gewoon verkeer = gedeelde key'
+            + (this.hasPersonalKey() ? ', eigen key = alleen goedkeuren' : ', geen eigen key (goedkeuren = alleen Rolf)'));
         for (const [naam, ep] of probes) {
             try {
-                const r = await this.get(ep, { bypassCache: true });  // altijd live + vers
-                out.push(naam + ' → ' + r.code + (r.code === 200 ? ' ✓' : ' ✗'));
+                const r = await this.get(ep, { bypassCache: true });  // gedeelde key, live + vers
+                out.push('[gedeeld] ' + naam + ' → ' + r.code + (r.code === 200 ? ' ✓' : ' ✗'));
             } catch (e) {
-                out.push(naam + ' → FOUT: ' + ((e && e.message) || '?'));
+                out.push('[gedeeld] ' + naam + ' → FOUT: ' + ((e && e.message) || '?'));
             }
             await new Promise(r => setTimeout(r, 400));  // rustig aan (burst)
         }
-        // v319: rate-headers van de actieve key erbij — zo zie je meteen of
-        // de daglimiet van deze key (bijna) op is (429 = lege resultaten).
+        // Persoonlijke key: alleen het goedkeuren-recht testen.
+        if (this.hasPersonalKey()) {
+            try {
+                const r = await this._personalFetch('GET', 'approval-requests?limit=1');
+                out.push('[eigen key] goedkeuringen → ' + r.code + (r.code === 200 ? ' ✓ (beslissen op eigen naam werkt)' : ' ✗ — key mist het goedkeuringen-recht'));
+            } catch (e) {
+                out.push('[eigen key] goedkeuringen → FOUT: ' + ((e && e.message) || '?'));
+            }
+        }
+        // v319: rate-headers — daglimiet-tegoed van de gedeelde key.
         try {
             const rs = this.getRateStats();
             const f = (s) => s ? (s.remaining + ' van ' + s.limit + ' over') : 'geen meting';
@@ -121,10 +133,45 @@ const RobawsAPI = {
                 }
             } catch (_e) {}
         }
-        return {
-            key: this._activeKey || this.API_KEY,
-            secret: this._activeSecret || this.API_SECRET,
+        // v330 — HYBRIDE SLEUTELS: al het gewone verkeer loopt ALTIJD op de
+        // gedeelde app-key (volle leesrechten, replica-recht, 20k-maatwerk-
+        // limiet). De persoonlijke kluis-key is enkel nog een HANDTEKENING
+        // voor identiteits-acties (goedkeuren/afkeuren) via _personalPair().
+        // Zo hoeven persoonlijke keys géén werknemers-/lees-rechten meer —
+        // en zien werknemers dus ook in Robaws-web niets extra.
+        return { key: this.API_KEY, secret: this.API_SECRET };
+    },
+
+    /** v330: de persoonlijke kluis-key (of null) — alleen voor acties waar
+     *  de identiteit van de beslisser telt. */
+    _personalPair() {
+        this._authPair();  // triggert de lazy restore
+        if (!this._activeKey || !this._activeSecret) return null;
+        return { key: this._activeKey, secret: this._activeSecret, soort: this._activeSoort };
+    },
+
+    /** v330: request met de PERSOONLIJKE key (live, nooit replica — replica
+     *  is een per-key-recht dat persoonlijke keys niet hebben, v316-les).
+     *  Retourneert {code, data} zoals get/post. */
+    async _personalFetch(method, endpoint, body) {
+        const p = this._personalPair();
+        if (!p) throw new Error('geen persoonlijke key actief');
+        const headers = {
+            'Authorization': 'Basic ' + btoa(p.key + ':' + p.secret),
+            'X-Tenant': this.TENANT,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
         };
+        const opts = { method, headers };
+        if (body !== undefined) opts.body = JSON.stringify(body);
+        let res = await this._fetchWithTimeout(this.BASE_URL + '/' + endpoint, opts);
+        if (res.status === 429) {  // burst per key — één herkansing
+            await new Promise(r => setTimeout(r, 1200));
+            res = await this._fetchWithTimeout(this.BASE_URL + '/' + endpoint, opts);
+        }
+        let data = null;
+        try { data = await res.json(); } catch (_e) {}
+        return { code: res.status, data: (data && data.data !== undefined) ? data.data : data };
     },
     TENANT: 'qualityenvironment',
 
@@ -671,26 +718,35 @@ const RobawsAPI = {
     KEY_OWNER_USER_ID: '2',
 
     /** Generiek: keur een approval-request goed (accept) of weiger (reject).
-     *  asUserId = de ingelogde app-gebruiker. Omdat de API altijd als de
-     *  sleutel-eigenaar (Rolf) beslist, kan de app alleen beslissen wanneer het
-     *  Rólfs beurt is; voor iedere andere goedkeurder gooien we een duidelijke
-     *  fout VÓÓR de POST — die zou een stille no-op zijn en de app toonde dan
-     *  "Goedgekeurd" terwijl er niets veranderde. */
+     *  v330 — hybride sleutels:
+     *  - Is er een PERSOONS-key uit de kluis, dan beslissen we DAARMEE: de
+     *    API handelt dan als de ingelogde gebruiker zelf en de beslissing
+     *    komt op zíjn naam. Naverificatie op zijn eigen userState.
+     *  - Zonder eigen key geldt de oude Rolf-regel: de gedeelde key beslist
+     *    altijd als de sleutel-eigenaar (Rolf) — voor iedere andere
+     *    goedkeurder gooien we een duidelijke fout VÓÓR de POST (die zou een
+     *    stille no-op zijn). */
     async decideApproval(approvalId, approve, reason, asUserId) {
+        const action = approve ? 'accept' : 'reject';
         const uid = (asUserId != null && asUserId !== '') ? String(asUserId) : null;
-        if (uid && uid !== String(this.KEY_OWNER_USER_ID)) {
+        const eigenKey = this.hasOwnKey();
+
+        if (!eigenKey && uid && uid !== String(this.KEY_OWNER_USER_ID)) {
             throw new Error('deze goedkeuring wacht op jou persoonlijk; de app beslist met het kantoor-account en kan niet namens jou beslissen — keur goed/af in Robaws zelf');
         }
-        const action = approve ? 'accept' : 'reject';
-        const res = await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
+
+        const res = eigenKey
+            ? await this._personalFetch('POST', 'approval-requests/' + approvalId + '/' + action, { reason: reason || '' })
+            : await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
         // Naverificatie: een accept door wie al besliste is een stille 204-no-op —
-        // check dat de sleutel-eigenaar nu écht een beslissing heeft staan.
+        // check dat de BESLISSER (eigen user of Rolf) nu écht beslist heeft.
+        const verwachtUid = (eigenKey && uid) ? uid : String(this.KEY_OWNER_USER_ID);
         try {
             const chk = await this.get('approval-requests/' + approvalId + '?include=userStates', { bypassCache: true });
-            const st = ((chk.data && chk.data.userStates) || []).find(s => String(s.userId) === String(this.KEY_OWNER_USER_ID));
+            const st = ((chk.data && chk.data.userStates) || []).find(s => String(s.userId) === verwachtUid);
             if (st && String(st.status) === 'AWAITING_DECISION') {
                 throw new Error('Robaws registreerde de beslissing niet');
             }
