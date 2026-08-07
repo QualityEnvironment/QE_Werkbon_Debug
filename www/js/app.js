@@ -8458,7 +8458,13 @@ const app = {
                     // v257: extra blok toevoegen na de uitklok (bv. vergeten
                     // namiddag) — van/tot-prompt, dag-split + aanvulling worden
                     // automatisch herrekend. Kon voorheen enkel via Robaws.
-                    btnHtml = `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px;flex-shrink:0" onclick="app._manualClockPrompt('${clockKey}','extra')">Extra blok</button>`;
+                    // v327: "2e inklok" — alleen een starttijd; de dag gaat
+                    // weer open en de werknemer klokt straks zelf uit via de
+                    // scan (of bureel via Uitklokken).
+                    btnHtml = `<div style="display:flex;gap:6px;flex-shrink:0">`
+                        + `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px" onclick="app._manualClockPrompt('${clockKey}','in2')">2e inklok</button>`
+                        + `<button class="btn btn-outline btn-sm" style="font-size:12px;padding:5px 10px" onclick="app._manualClockPrompt('${clockKey}','extra')">Extra blok</button>`
+                        + `</div>`;
                 } else if (a.ingeklokt) {
                     const inMin = toMin(a.ingeklokt);
                     const worked = (inMin != null) ? Math.max(0, nowMin - inMin) : null;
@@ -10235,12 +10241,17 @@ const app = {
         this._manualCtx = { email, mode };
         const nu = new Date();
         const defTime = String(nu.getHours()).padStart(2, '0') + ':' + String(nu.getMinutes()).padStart(2, '0');
-        const titel = mode === 'in' ? 'Inklokken' : mode === 'extra' ? 'Extra blok' : 'Uitklokken';
+        const titel = mode === 'in' ? 'Inklokken'
+            : mode === 'in2' ? '2e inklok'
+            : mode === 'extra' ? 'Extra blok' : 'Uitklokken';
         const uitleg = mode === 'in'
             ? 'Maakt de tijdsregistratie in Robaws aan — de telefoon van ' + this.escapeHtml(a.name) + ' pikt dit vanzelf op.'
+            : mode === 'in2'
+                ? 'Klokt ' + this.escapeHtml(a.name) + ' opnieuw in ná de uitklok van ' + this.escapeHtml(a.uitgeklokt || '?') +
+                  ' — alleen een starttijd. Uitklokken gaat daarna gewoon via de scan (of hier via Uitklokken).'
             : mode === 'extra'
-                ? 'Voegt een extra tijdsblok toe ná de uitklok van ' + this.escapeHtml(a.uitgeklokt || '?') +
-                  '. De dag-split werk/overuren en de 8u-aanvulling worden automatisch herrekend.'
+                ? 'Voegt een afgerond extra tijdsblok toe ná de uitklok van ' + this.escapeHtml(a.uitgeklokt || '?') +
+                  ' (start én eind al gekend). De dag-split werk/overuren en de 8u-aanvulling worden automatisch herrekend.'
                 : 'Sluit de dag af met de normale regels (kwartierafronding, pauze, 8u-aanvulling, weekend).';
         // v257: extra blok vraagt VAN én TOT; in/uit blijft één tijdveld
         const vanVeld = mode === 'extra'
@@ -10252,7 +10263,7 @@ const app = {
             <h3>${titel}: ${this.escapeHtml(a.name)}</h3>
             <p style="font-size:13px;color:var(--qe-grey);margin:6px 0 12px">${uitleg}</p>
             ${vanVeld}
-            <label style="font-size:13px;font-weight:600">${mode === 'extra' ? 'Tot' : 'Tijd'}</label>
+            <label style="font-size:13px;font-weight:600">${mode === 'extra' ? 'Tot' : mode === 'in2' ? 'Starttijd' : 'Tijd'}</label>
             <input type="time" id="manualClockTime" value="${defTime}"
                 style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:8px;font-size:16px;box-sizing:border-box;margin:6px 0 14px">
             <button class="btn btn-primary btn-full" onclick="app._manualClockConfirm()" style="margin-bottom:8px">
@@ -10286,11 +10297,15 @@ const app = {
         this._manualClockBusy = true;
         try {
             this.closeModal();
-            const label = ctx.mode === 'in' ? 'Inklokken' : ctx.mode === 'extra' ? 'Extra blok' : 'Uitklokken';
+            const label = ctx.mode === 'in' ? 'Inklokken'
+                : ctx.mode === 'in2' ? '2e inklok'
+                : ctx.mode === 'extra' ? 'Extra blok' : 'Uitklokken';
             this.toast(label + ' van ' + a.name + '...');
             const res = (ctx.mode === 'in')
                 ? await QEClock.manualClockIn(a, timeVal, user.name || 'bureel')
-                : await QEClock.manualClockOut(a, timeVal, user.name || 'bureel', vanVal);
+                : (ctx.mode === 'in2')
+                    ? await QEClock.manualSecondClockIn(a, timeVal, user.name || 'bureel')
+                    : await QEClock.manualClockOut(a, timeVal, user.name || 'bureel', vanVal);
             this.toast(res.message, !res.ok);
             this.loadClockAdmin();
         } finally {

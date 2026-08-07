@@ -5642,6 +5642,37 @@ const RobawsAPI = {
         return putRes;
     },
 
+    /**
+     * v327: HEROPEN een tijdsregistratie voor een 2e sessie op dezelfde dag —
+     * wist het Uitgeklokt-veld en voegt een "klok-in:"-regel toe aan de
+     * opmerking. Zelfde conventies als setTimeRegistrationUitgeklokt:
+     * vers GET vóór full-replace, logicId MEE (v323), 400/422-herkansing
+     * zonder, en hard falen op non-2xx (nooit stil succes).
+     */
+    async reopenTimeRegistration(workOrderId, appendRemark) {
+        const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });
+        if (getRes.code !== 200 || !getRes.data) {
+            throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
+        }
+        const wo = getRes.data;
+        wo.extraFields = wo.extraFields || {};
+        wo.extraFields['Uitgeklokt'] = { stringValue: '' };
+        if (appendRemark) {
+            const existing = String(wo.remark || '').trim();
+            wo.remark = existing ? (existing + '\n' + appendRemark) : appendRemark;
+        }
+        let putRes = await this.put(`work-orders/${workOrderId}`, wo);
+        if (putRes.code === 400 || putRes.code === 422) {
+            const zonder = { ...wo };
+            delete zonder.logicId;
+            putRes = await this.put(`work-orders/${workOrderId}`, zonder);
+        }
+        if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) {
+            throw new Error('Heropen-PUT faalde (' + putRes.code + ')');
+        }
+        return putRes;
+    },
+
     /** Update Tijd-keuze (bv. naar "Ziek"). v59: GET-then-PUT. */
     async setTimeRegistrationTijd(workOrderId, tijdLabel) {
         const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
@@ -5701,15 +5732,37 @@ const RobawsAPI = {
      * Robaws v2 ondersteunt PUT op /work-orders/{id}/time-entries/{teId}.
      */
     async closeOpenLLTimeEntry(workOrderId, teId, opts) {
-        const { startTime, endTime, date } = opts;
+        const { startTime, endTime, date, employeeId } = opts;
         // v110: bij PUT update ook hourTypeId op OVERUREN zetten (was werkuren).
         // v251: idem weekend-variant, zodat de PUT de POST niet terugzet.
         const llHourType = await this.getWeekendAdjustedHourTypeId(
             this.HOUR_TYPE_IDS.overuren, date || this._localDateStr());
-        const body = {
-            articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
-            hourTypeId: String(llHourType),
-        };
+        // v327: PUT = full replace — voorheen ging er GEEN employeeId mee,
+        // waardoor Robaws de werknemer van het L&L-blok wiste ("naam ontbreekt
+        // bij het tijdsblok"). Nu: de bestaande entry vers ophalen en alle
+        // scalars behouden; de wijzigingen gaan er overheen.
+        let base = null;
+        try {
+            const exRes = await this.get(`work-orders/${workOrderId}/time-entries?limit=100`, { bypassCache: true });
+            const items = (exRes.data && (exRes.data.items || exRes.data)) || [];
+            const found = items.find(t => String(t.id) === String(teId));
+            if (found) {
+                base = {};
+                const DROP = ['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
+                    'deletedAt', 'archivedAt', 'lockedAt', '_metadata'];
+                for (const [k, v] of Object.entries(found)) {
+                    if (DROP.includes(k)) continue;
+                    // expansie-objecten (article/hourType/employee) droppen;
+                    // tijd-objecten {hour,minute} en scalars behouden
+                    if (v !== null && typeof v === 'object' && !('hour' in v)) continue;
+                    base[k] = v;
+                }
+            }
+        } catch (_) { /* terugval: minimale body hieronder */ }
+        const body = base || {};
+        if (!body.employeeId && employeeId != null) body.employeeId = String(employeeId);
+        body.articleId = String(this.WERKUUR_ARTICLE_IDS.ladenLossen);
+        body.hourTypeId = String(llHourType);
         if (startTime) {
             const [sh, sm] = startTime.split(':').map(Number);
             body.startTime = { hour: sh || 0, minute: sm || 0 };

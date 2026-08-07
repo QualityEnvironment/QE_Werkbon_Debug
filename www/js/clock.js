@@ -400,6 +400,39 @@ window.QEClock = {
         return session ? (session.completedSessions || []).length > 0 : false;
     },
 
+    /** v327: laatste "klok-in: … — HH:MM"-regel uit een werkbon-opmerking.
+     *  Bij een 2e sessie is DAT de start van het open blok (het Ingeklokt-
+     *  veld blijft de eerste inklok van de dag). */
+    _lastKlokInFromRemark(remark) {
+        let last = null;
+        for (const ln of String(remark || '').split(/\r?\n/)) {
+            if (!/^\s*klok-in:/i.test(ln)) continue;
+            const m = ln.match(/—\s*(\d{1,2}:\d{2})\s*$/);
+            if (m) last = m[1];
+        }
+        return last;
+    },
+
+    /** v327: leesverificatie ná een klok-schrijfactie (foolproof-melding).
+     *  expect: { uitgekloktLeeg: true/false } en/of { ingekloktLeeg: false }.
+     *  Retourneert true (staat klopt), false (staat klopt NIET — melding mag
+     *  géén succes tonen) of null (controle zelf niet gelukt; de 2xx van de
+     *  schrijfactie blijft dan het bewijs). */
+    async _verifyWerkbonState(workOrderId, expect) {
+        try {
+            const r = await RobawsAPI.get('work-orders/' + workOrderId, { bypassCache: true });
+            if (r.code !== 200 || !r.data) return null;
+            const val = (f) => {
+                const fd = r.data.extraFields && r.data.extraFields[f];
+                return fd ? String(fd.stringValue ?? fd.value ?? '').trim() : '';
+            };
+            if (expect.uitgekloktLeeg === true && val('Uitgeklokt') !== '') return false;
+            if (expect.uitgekloktLeeg === false && val('Uitgeklokt') === '') return false;
+            if (expect.ingekloktLeeg === false && val('Ingeklokt') === '') return false;
+            return true;
+        } catch (_) { return null; }
+    },
+
     // =============================================
     // NFC SCAN (aangeroepen vanuit Java/MainActivity)
     // =============================================
@@ -568,32 +601,72 @@ window.QEClock = {
                         // de klok) — een foute toesteldatum checkte anders de
                         // verkeerde gisteren-key en de open dag bleef staan.
                         const nowSrv = await this._getNow();
-                        const yd = new Date(nowSrv.getTime() - 86400000);
-                        const yStr = yd.getFullYear() + '-' +
-                            String(yd.getMonth() + 1).padStart(2, '0') + '-' +
-                            String(yd.getDate()).padStart(2, '0');
-                        const yKey = `qe_clock_v2_${yStr}_${user.email}`;
-                        const yRaw = localStorage.getItem(yKey);
-                        if (yRaw) {
-                            const ySession = JSON.parse(yRaw);
-                            if (ySession && ySession.active && ySession.workOrderId) {
+                        // v327: niet alleen exact gisteren — ÁLLE oude open
+                        // sessies van deze gebruiker vinden (vrijdag→maandag
+                        // bleef voorheen eeuwig staan). Oude afgesloten keys
+                        // (>7 dagen) worden meteen opgeruimd.
+                        const todayStr = this._localDate(nowSrv);
+                        const weekAgoStr = this._localDate(new Date(nowSrv.getTime() - 7 * 86400000));
+                        const prefix = 'qe_clock_v2_';
+                        const suffix = '_' + user.email;
+                        let oldOpen = null;
+                        const opruimen = [];
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const k = localStorage.key(i);
+                            if (!k || !k.startsWith(prefix) || !k.endsWith(suffix)) continue;
+                            const dStr = k.slice(prefix.length, prefix.length + 10);
+                            if (!/^\d{4}-\d{2}-\d{2}$/.test(dStr) || dStr >= todayStr) continue;
+                            let s = null;
+                            try { s = JSON.parse(localStorage.getItem(k)); } catch (_) {}
+                            if (!s || !s.active || !s.workOrderId) {
+                                if (dStr < weekAgoStr) opruimen.push(k);
+                                continue;
+                            }
+                            if (!oldOpen || dStr < oldOpen.dStr) oldOpen = { key: k, dStr, session: s };
+                        }
+                        for (const k of opruimen) { try { localStorage.removeItem(k); } catch (_) {} }
+                        if (oldOpen) {
+                            // v327: EERST Robaws raadplegen — is die dag intussen
+                            // al afgesloten (bv. handmatig door bureel), dan is de
+                            // lokale sessie gewoon verouderd: opruimen en door.
+                            // Voorheen kreeg de werknemer dan "Nog ingeklokt van
+                            // gisteren" terwijl bureel "succes uitgeklokt" zag.
+                            let robawsDicht = null;
+                            try {
+                                const wr = await RobawsAPI.get('work-orders/' + oldOpen.session.workOrderId, { bypassCache: true });
+                                if (wr.code === 200 && wr.data) {
+                                    const uf = wr.data.extraFields && wr.data.extraFields.Uitgeklokt;
+                                    const uv = uf ? String(uf.stringValue ?? uf.value ?? '').trim() : '';
+                                    robawsDicht = uv || false;
+                                } else if (wr.code === 404) {
+                                    robawsDicht = 'verwijderd';
+                                }
+                            } catch (_) { /* onbekend → gewone flow */ }
+                            if (robawsDicht) {
+                                try { localStorage.removeItem(oldOpen.key); } catch (_) {}
+                                if (window.app) {
+                                    app.toast(robawsDicht === 'verwijderd'
+                                        ? 'De open dag van ' + oldOpen.dStr + ' bestaat niet meer in Robaws — genegeerd'
+                                        : oldOpen.dStr + ' was al afgesloten om ' + robawsDicht + ' — de scan gaat gewoon door');
+                                }
+                            } else {
                                 const sluiten = await this._showConfirmModal(
-                                    'Nog ingeklokt van gisteren',
-                                    'Je stond nog ingeklokt sinds ' + (ySession.startTime || '?') +
-                                    ' (' + yStr + '). Die dag wordt afgesloten om 23:45; daarna gaat de scan van vandaag gewoon door.',
+                                    'Nog ingeklokt van ' + oldOpen.dStr,
+                                    'Je stond nog ingeklokt sinds ' + (oldOpen.session.startTime || '?') +
+                                    ' (' + oldOpen.dStr + '). Die dag wordt afgesloten om 23:45; daarna gaat de scan van vandaag gewoon door.',
                                     'Afsluiten',
                                     'Niet nu'
                                 );
                                 if (!sluiten) return;
                                 showLoad();
-                                const yRes = await this._clockOut(ySession,
+                                const yRes = await this._clockOut(oldOpen.session,
                                     { name: 'Automatische afsluiting (middernacht)' },
                                     { forcedEndTime: '23:45', skipKilometers: true });
                                 if (!yRes.ok) {
-                                    scanResult = { ok: false, message: 'Afsluiten van gisteren mislukte:\n' + (yRes.message || '') };
+                                    scanResult = { ok: false, message: 'Afsluiten van ' + oldOpen.dStr + ' mislukte:\n' + (yRes.message || '') };
                                     return;
                                 }
-                                if (window.app) app.toast('Gisteren (' + yStr + ') afgesloten om 23:45');
+                                if (window.app) app.toast(oldOpen.dStr + ' afgesloten om 23:45');
                             }
                         }
                     } catch (e) { console.warn('[Clock] gisteren-check faalde:', e && e.message); }
@@ -888,6 +961,29 @@ window.QEClock = {
                 };
             }
         }
+        // v327: een 2E SESSIE (zelfde dag, na een eerdere uitklok) wordt nu
+        // ÉCHT in Robaws geregistreerd: Uitgeklokt-veld weer leeg + een
+        // "klok-in:"-regel in de opmerking. Voorheen gebeurde er niets — de
+        // "extra sessie" bestond alleen lokaal, verdween bij een app-herstart
+        // of toestelwissel, en het dagoverzicht miste de 2e inklok-regel.
+        // Slaagt de PUT niet, dan is er NIET ingeklokt (eerlijke melding).
+        if (!isFirstScan) {
+            try {
+                await RobawsAPI.reopenTimeRegistration(session.workOrderId, opmerking);
+            } catch (e) {
+                console.error('[Clock] 2e inklok (heropen-PUT) faalde:', e && e.message);
+                session.active = false;
+                session.startTime = null;
+                session.startISO = null;
+                this._saveSession(session);
+                return {
+                    ok: false,
+                    message: 'Opnieuw inklokken mislukt:\n' + ((e && e.message) || 'Robaws onbereikbaar') +
+                        '\nScan opnieuw om alsnog in te klokken.',
+                    refresh: false,
+                };
+            }
+        }
         this._saveSession(session);
 
         const lateMsg = onTimeLabel === 'Te laat' ? ' (te laat!)' : '';
@@ -1112,8 +1208,8 @@ window.QEClock = {
         // hoeveel uren naar laden & lossen gaan). Het overlapt het werkblok
         // dus niet. (De v215-aftrek was op een verkeerde aanname gebouwd en
         // kon ochtend-L&L zelfs te weinig uitbetalen — teruggedraaid.)
-        const klantMinutes = entryEndMin - entryStartMin - (pauseMinutes || 0);
-        const klantHours = Math.max(0, klantMinutes / 60);
+        let klantMinutes = entryEndMin - entryStartMin - (pauseMinutes || 0);
+        let klantHours = Math.max(0, klantMinutes / 60);
 
         // v214: idempotency — staan er op deze werkbon al GETIMEDE monteur-
         // uren van deze werknemer (artikel 185), dan is een eerdere uitklok-
@@ -1169,6 +1265,18 @@ window.QEClock = {
             /* check faalt → normaal posten (oude gedrag) */
         }
         const hasEntryAt = (m) => !!(exTimedStarts && exTimedStarts.has(m));
+
+        // v327: de pauze-1×/dag-regel óók Robaws-gestuurd. De lokale
+        // completedSessions kunnen leeg zijn (toestelwissel, heropende dag
+        // na een handmatige 2e inklok) terwijl het ochtendblok de pauze al
+        // bevatte — de pauze werd dan DUBBEL afgetrokken.
+        if (pauseMinutes > 0 && exPrevHours != null && exPrevHours > 0) {
+            console.log('[Clock] pauze al toegepast (eerder blok in Robaws) — nu 0 (was ' + pauseMinutes + 'min)');
+            pauseMinutes = 0;
+            pauseSource = 'reeds toegepast (Robaws-blok)';
+            klantMinutes = entryEndMin - entryStartMin;
+            klantHours = Math.max(0, klantMinutes / 60);
+        }
 
         // v251: dag-totaal VÓÓR het posten bepalen — zowel de >8u-split als de
         // 8u-aanvulling rekenen per DAG (niet per sessieblok).
@@ -1305,6 +1413,22 @@ window.QEClock = {
                 message: 'Uren zijn geregistreerd, maar het afsluiten van de werkbon mislukte.\nScan opnieuw om af te sluiten.',
                 refresh: true,
             };
+        }
+
+        // v327: LEESVERIFICATIE — de succesmelding moet 100% zeker zijn. We
+        // lezen de werkbon vers terug: staat Uitgeklokt er ook écht in? Alleen
+        // een geslaagde controle die "leeg" toont telt als bewijs van het
+        // tegendeel (een mislukte GET maakt van de 2xx-PUT geen leugen).
+        {
+            const vf = await this._verifyWerkbonState(session.workOrderId, { uitgekloktLeeg: false });
+            if (vf === false) {
+                console.warn('[Clock] verificatie: Uitgeklokt staat NIET in Robaws ondanks 2xx-PUT');
+                return {
+                    ok: false,
+                    message: 'Uren zijn geregistreerd, maar de werkbon staat in Robaws nog open.\nScan opnieuw om af te sluiten.',
+                    refresh: true,
+                };
+            }
         }
 
         // v63: bereken payable hours = (entry_eind - entry_start) - pauze
@@ -1512,16 +1636,22 @@ window.QEClock = {
                 if (session.llActiveTeId) {
                     // v73: PUT update met endTime
                     // v251: sessie-datum mee voor de za/zo-uursoortvariant
+                    // v327: employeeId mee — de full-replace-PUT wiste anders
+                    // de werknemer van het blok ("naam ontbreekt")
                     const r = await RobawsAPI.closeOpenLLTimeEntry(
                         session.workOrderId, session.llActiveTeId,
-                        { startTime: llStartRounded, endTime: llEnd, date: session.dateStr || session.date }
+                        { startTime: llStartRounded, endTime: llEnd,
+                          date: session.dateStr || session.date,
+                          employeeId: session.employeeId }
                     );
                     if (r.code !== 200 && r.code !== 201 && r.code !== 204) {
                         console.warn('[Clock] L&L PUT faalde:', r.code, r.data,
                             '— fallback POST nieuwe time-entry');
                         // Fallback: post een nieuwe complete entry
                         // v110: hourTypeId = overuren (was default = werkuren)
-                        await RobawsAPI.addWorkHoursTimeEntry({
+                        // v327: resultaat ÉCHT controleren — een stil mislukte
+                        // fallback toonde voorheen toch "L&L klaar"
+                        const fr = await RobawsAPI.addWorkHoursTimeEntry({
                             workOrderId: session.workOrderId,
                             employeeId: session.employeeId,
                             startTime: llStartRounded,
@@ -1531,11 +1661,15 @@ window.QEClock = {
                             hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
                             date: session.dateStr || session.date,  // v251: weekend-adjust
                         });
+                        if (fr.code !== 200 && fr.code !== 201) {
+                            throw new Error('L&L afsluiten faalde (PUT ' + r.code + ', fallback-POST ' + fr.code + ')');
+                        }
                     }
                 } else {
                     // Geen teId bekend (vroeger gestart vóór v73) → post een nieuwe
                     // v110: hourTypeId = overuren (was default = werkuren)
-                    await RobawsAPI.addWorkHoursTimeEntry({
+                    // v327: resultaat controleren (zelfde stille-succes-gat)
+                    const fr2 = await RobawsAPI.addWorkHoursTimeEntry({
                         workOrderId: session.workOrderId,
                         employeeId: session.employeeId,
                         startTime: llStartRounded,
@@ -1545,6 +1679,9 @@ window.QEClock = {
                         hourTypeId: RobawsAPI.HOUR_TYPE_IDS.overuren,
                         date: session.dateStr || session.date,  // v251: weekend-adjust
                     });
+                    if (fr2.code !== 200 && fr2.code !== 201) {
+                        throw new Error('L&L afsluiten faalde (POST ' + fr2.code + ')');
+                    }
                 }
             } catch(e) {
                 console.error('[Clock] L&L close exception:', e.message);
@@ -2048,7 +2185,13 @@ window.QEClock = {
         session.employeeName     = user.name || user.email;
         session.onTimeLabel      = tijdLabel;
         session.registrationType = tijdLabel;  // compat met oude UI
-        session.startTime        = keepLocalStart ? session.startTime : (ingeklokt || session.startTime);
+        // v327: bij een ACTIEVE 2e sessie (heropend werkbon) is de start de
+        // LAATSTE klok-in-regel uit de opmerking — niet het Ingeklokt-veld
+        // (dat blijft de eerste inklok van de dag). Zo overleeft een 2e
+        // sessie nu ook een app-herstart of toestelwissel.
+        const lastKlokIn = this._lastKlokInFromRemark(wo.remark);
+        session.startTime        = keepLocalStart ? session.startTime
+            : ((isActive && lastKlokIn) || ingeklokt || session.startTime);
         session.active           = isActive;
         // v71: strip klok-in:/klok-uit: prefix EN GPS-deel om enkel tag-naam te krijgen.
         // Sinds v70 begint elke regel met "klok-in: <tag> — <gps> — <tijd>".
@@ -2374,9 +2517,16 @@ window.QEClock = {
     async manualClockIn(att, timeHHMM, byName) {
         if (!att || !att.userId) return { ok: false, message: 'Geen Robaws-gebruikers-id voor ' + ((att && att.name) || '?') };
         try {
-            const open = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(att.userId);
-            if (open && open.id) {
-                return { ok: false, message: att.name + ' is al ingeklokt (werkbon #' + open.id + ')' };
+            const bestaand = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(att.userId);
+            if (bestaand && bestaand.id) {
+                // v327: onderscheid open vs afgesloten dag — "is al ingeklokt"
+                // bij een al uitgeklokte dag was verwarrend én verstopte dat
+                // een 2e inklok de juiste weg is.
+                const uf = bestaand.extraFields && bestaand.extraFields.Uitgeklokt;
+                const uitg = uf ? String(uf.stringValue ?? uf.value ?? '').trim() : '';
+                return uitg
+                    ? { ok: false, message: att.name + ' heeft vandaag al een afgesloten dag (uitgeklokt om ' + uitg + ') — gebruik "2e inklok" of "Extra blok"' }
+                    : { ok: false, message: att.name + ' is al ingeklokt (werkbon #' + bestaand.id + ')' };
             }
         } catch (e) {
             return { ok: false, message: 'Kon Robaws niet bereiken om te controleren: ' + (e && e.message) };
@@ -2396,10 +2546,50 @@ window.QEClock = {
                 tijdLabel,
                 opmerking: 'klok-in: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM,
             });
+            // v327: leesverificatie — bestaat de werkbon écht met Ingeklokt?
+            const vf = await this._verifyWerkbonState(wo.workOrderId, { ingekloktLeeg: false });
+            if (vf === false) {
+                return { ok: false, message: 'Inklokken NIET bevestigd — controleer in Robaws en probeer opnieuw' };
+            }
             return { ok: true, message: att.name + ' ingeklokt om ' + timeHHMM + ' (' + tijdLabel + ')', workOrderId: wo.workOrderId };
         } catch (e) {
             return { ok: false, message: 'Inklokken mislukt: ' + (e && e.message) };
         }
+    },
+
+    /**
+     * v327: handmatige 2E INKLOK door bureel — alleen een STARTtijd. Heropent
+     * de bestaande werkbon (Uitgeklokt leeg + klok-in-regel in de opmerking)
+     * zodat de werknemer daarna gewoon via de scan kan uitklokken — of bureel
+     * via "Uitklokken". Sessieloos: de telefoon van de werknemer pikt de
+     * heropende dag op via de sync (start = laatste klok-in-regel).
+     */
+    async manualSecondClockIn(att, timeHHMM, byName) {
+        if (!att || !att.workOrderId) {
+            return { ok: false, message: ((att && att.name) || '?') + ' heeft vandaag nog geen tijdsregistratie — gebruik "Inklokken"' };
+        }
+        if (!att.uitgeklokt) {
+            return { ok: false, message: att.name + ' staat nog ingeklokt — een 2e inklok kan pas na een uitklok' };
+        }
+        const toMin = (t) => { const m = String(t || '').match(/^(\d{1,2}):(\d{1,2})$/); return m ? (+m[1]) * 60 + (+m[2]) : null; };
+        const tMin = toMin(timeHHMM);
+        if (tMin == null) return { ok: false, message: 'Ongeldige tijd (gebruik UU:MM)' };
+        const uMin = toMin(att.uitgeklokt);
+        if (uMin != null && tMin < uMin) {
+            return { ok: false, message: 'De 2e inklok (' + timeHHMM + ') moet ná de uitklok van ' + att.uitgeklokt + ' liggen' };
+        }
+        try {
+            await RobawsAPI.reopenTimeRegistration(att.workOrderId,
+                'klok-in: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM);
+        } catch (e) {
+            return { ok: false, message: '2e inklok mislukt: ' + ((e && e.message) || e) };
+        }
+        // v327: leesverificatie — staat de dag nu écht weer open?
+        const vf = await this._verifyWerkbonState(att.workOrderId, { uitgekloktLeeg: true });
+        if (vf === false) {
+            return { ok: false, message: '2e inklok NIET doorgevoerd (werkbon staat nog op uitgeklokt) — probeer opnieuw' };
+        }
+        return { ok: true, message: att.name + ' opnieuw ingeklokt om ' + timeHHMM + ' — uitklokken kan straks gewoon via de scan (of hier)' };
     },
 
     /**
@@ -2485,10 +2675,23 @@ window.QEClock = {
                 // Robaws maar de werkbon bleef open (afsluit-PUT faalde eerder).
                 // Uitkloktijd op/vóór het einde van het laatste blok → alleen
                 // nog afsluiten; erna → het gat automatisch als blok bijboeken.
+                // v327: staat er ná de laatste uitklok een 2E INKLOK-regel in
+                // de opmerking (scan of handmatig), dan is DÍE de start van
+                // het open blok — niet het einde van het vorige blok.
                 const probe = toMin(timeHHMM);
+                const lastIn = this._lastKlokInFromRemark(wo.remark);
+                const lastInMin = lastIn != null ? toMin(lastIn) : null;
                 if (probe != null && lastEndMin != null) {
-                    if (down15(probe) <= lastEndMin) alleenAfsluiten = true;
-                    startRaw = lastEndMin;
+                    if (lastInMin != null && lastInMin >= lastEndMin) {
+                        // heropende dag: blok = 2e inklok → uitkloktijd
+                        startRaw = lastInMin;
+                        if (down15(probe) <= up15(lastInMin)) alleenAfsluiten = true;  // te kort om te boeken
+                    } else if (down15(probe) <= lastEndMin) {
+                        alleenAfsluiten = true;
+                        startRaw = lastEndMin;
+                    } else {
+                        startRaw = lastEndMin;
+                    }
                 }
             }
             if (startRaw == null) {
@@ -2506,6 +2709,11 @@ window.QEClock = {
             try {
                 await RobawsAPI.setTimeRegistrationUitgeklokt(wo.id, timeHHMM,
                     'klok-uit: Manueel afgesloten door ' + (byName || 'bureel') + ' — ' + timeHHMM + ' (uren stonden al geboekt)');
+                // v327: leesverificatie vóór de succesmelding
+                const vf = await this._verifyWerkbonState(wo.id, { uitgekloktLeeg: false });
+                if (vf === false) {
+                    return { ok: false, message: 'Afsluiten NIET bevestigd — de werkbon staat nog open. Probeer opnieuw.' };
+                }
                 return { ok: true, message: att.name + ': werkbon afgesloten om ' + timeHHMM +
                     '\n(de uren stonden al geboekt, tot ' + fromMin(lastEndMin) + ')' };
             } catch (e) {
@@ -2587,6 +2795,16 @@ window.QEClock = {
                 return { ok: false,
                     message: 'De uren (' + entryStart + ' - ' + entryEnd + ') zijn geboekt, maar het afsluiten van de werkbon mislukte (' +
                         ((ePut && ePut.message) || ePut) + ').\nTik nogmaals op "Uitklokken" met dezelfde tijd — de app sluit dan alleen nog af, zonder dubbele uren.' };
+            }
+            // v327: leesverificatie vóór de succesmelding — 100% zeker dat de
+            // dag in Robaws dicht staat (dit is óók de melding waarop de
+            // werknemer de volgende ochtend vertrouwt).
+            {
+                const vf = await this._verifyWerkbonState(wo.id, { uitgekloktLeeg: false });
+                if (vf === false) {
+                    return { ok: false,
+                        message: 'De uren (' + entryStart + ' - ' + entryEnd + ') zijn geboekt, maar de werkbon staat in Robaws nog open.\nTik nogmaals op "Uitklokken" met dezelfde tijd — de app sluit dan alleen nog af, zonder dubbele uren.' };
+                }
             }
             return {
                 ok: true,
