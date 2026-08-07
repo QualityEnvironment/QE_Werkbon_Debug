@@ -30,6 +30,8 @@ const RobawsAPI = {
     _activeKey: null,
     _activeSecret: null,
     _activeSoort: null,   // 'persoon' | 'rol' (v320) — alleen persoons-keys mogen goedkeuren
+    _algKey: null,        // v333: de ALGEMENE kluis-key = het API-account
+    _algSecret: null,     //       (monteurs+techniekers) — al het gewone verkeer
     _credRestoreDone: false,
     setActiveCredentials(key, secret, email, soort) {
         this._activeKey = key || null;
@@ -41,6 +43,20 @@ const RobawsAPI = {
                 localStorage.setItem('qe_api_cred', JSON.stringify({ email: String(email || '').toLowerCase().trim(), key, secret, soort: this._activeSoort }));
             }
         } catch (_e) {}
+    },
+    /** v333: algemene key (API-account uit de kluis, apikey:standaard) —
+     *  vervangt Rolfs bundel-key voor ál het gewone verkeer. */
+    setAlgemeneCredentials(key, secret) {
+        this._algKey = key || null;
+        this._algSecret = secret || null;
+        try {
+            if (key && secret) localStorage.setItem('qe_api_alg', JSON.stringify({ key, secret }));
+        } catch (_e) {}
+    },
+    clearAlgemeneCredentials(wipeStorage) {
+        this._algKey = null;
+        this._algSecret = null;
+        if (wipeStorage) { try { localStorage.removeItem('qe_api_alg'); } catch (_e) {} }
     },
     setActiveCredentialsFor(email) {  // legacy-naam; werkt alleen nog op de (lege) map
         const c = this.USER_API_KEYS[String(email || '').toLowerCase().trim()] || null;
@@ -84,8 +100,10 @@ const RobawsAPI = {
             ['verkoopfacturen',          'sales-invoices?limit=1'],
         ];
         const out = [];
-        console.log('[Kluis-zelftest] start — hybride model: gewoon verkeer = gedeelde key'
-            + (this.hasPersonalKey() ? ', eigen key = alleen goedkeuren' : ', geen eigen key (goedkeuren = alleen Rolf)'));
+        const algBron = this.isApiAccountActief() ? 'API-account (kluis)' : 'bundel-key (OVERGANGSMODUS — Rolfs account!)';
+        console.log('[Kluis-zelftest] start — hybride model: gewoon verkeer = ' + algBron
+            + (this.hasPersonalKey() ? ', eigen key = handtekening (goedkeuren/mailen)' : ', geen eigen key'));
+        out.push('[algemeen] ' + algBron);
         for (const [naam, ep] of probes) {
             try {
                 const r = await this.get(ep, { bypassCache: true });  // gedeelde key, live + vers
@@ -95,7 +113,8 @@ const RobawsAPI = {
             }
             await new Promise(r => setTimeout(r, 400));  // rustig aan (burst)
         }
-        // Persoonlijke key: alleen het goedkeuren-recht testen.
+        // Persoonlijke key: alleen de identiteits-rechten testen
+        // (goedkeuren + mailen — v332: mails vertrekken ook op eigen naam).
         if (this.hasPersonalKey()) {
             try {
                 const r = await this._personalFetch('GET', 'approval-requests?limit=1');
@@ -103,6 +122,7 @@ const RobawsAPI = {
             } catch (e) {
                 out.push('[eigen key] goedkeuringen → FOUT: ' + ((e && e.message) || '?'));
             }
+            out.push('[eigen key] mails: vertrekken op eigen naam; mist de key het mail-recht dan valt de app terug op het kantoor-account (zie console bij het versturen)');
         }
         // v319: rate-headers — daglimiet-tegoed van de gedeelde key.
         try {
@@ -134,12 +154,32 @@ const RobawsAPI = {
             } catch (_e) {}
         }
         // v330 — HYBRIDE SLEUTELS: al het gewone verkeer loopt ALTIJD op de
-        // gedeelde app-key (volle leesrechten, replica-recht, 20k-maatwerk-
-        // limiet). De persoonlijke kluis-key is enkel nog een HANDTEKENING
-        // voor identiteits-acties (goedkeuren/afkeuren) via _personalPair().
-        // Zo hoeven persoonlijke keys géén werknemers-/lees-rechten meer —
-        // en zien werknemers dus ook in Robaws-web niets extra.
-        return { key: this.API_KEY, secret: this.API_SECRET };
+        // ALGEMENE key; de persoonlijke kluis-key is enkel nog een
+        // HANDTEKENING voor identiteits-acties (goedkeuren/mailen) via
+        // _personalPair(). Zo hoeven persoonlijke keys géén werknemers-/
+        // lees-rechten meer — en zien werknemers in Robaws-web niets extra.
+        // v333 (regel Levi): de algemene key = het API-ACCOUNT uit de kluis
+        // (apikey:standaard, komt bij elke login mee als `algemeen`) — NOOIT
+        // Rolfs account. De bundel-key hieronder is alleen nog de terugval
+        // zolang de kluis geen standaard-entry heeft of vóór de eerste login
+        // op een nieuwe Worker (overgangsmodus).
+        if (!this._algKey) {
+            try {
+                const a = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
+                if (a && a.key && a.secret) { this._algKey = a.key; this._algSecret = a.secret; }
+            } catch (_e) {}
+        }
+        return {
+            key: this._algKey || this.API_KEY,
+            secret: this._algSecret || this.API_SECRET,
+        };
+    },
+
+    /** v333: draait het gewone verkeer op het API-account (kluis) of nog op
+     *  de bundel-key (Rolfs account — overgangsmodus)? */
+    isApiAccountActief() {
+        this._authPair();
+        return !!this._algKey;
     },
 
     /** v330: de persoonlijke kluis-key (of null) — alleen voor acties waar
@@ -731,8 +771,16 @@ const RobawsAPI = {
         const uid = (asUserId != null && asUserId !== '') ? String(asUserId) : null;
         const eigenKey = this.hasOwnKey();
 
-        if (!eigenKey && uid && uid !== String(this.KEY_OWNER_USER_ID)) {
-            throw new Error('deze goedkeuring wacht op jou persoonlijk; de app beslist met het kantoor-account en kan niet namens jou beslissen — keur goed/af in Robaws zelf');
+        // v333: draait het gewone verkeer op het API-account, dan bestaat de
+        // oude Rolf-uitzondering niet meer (beslissen met het API-account zou
+        // als "API"-gebruiker registreren = betekenisloos). Zonder eigen key
+        // dus altijd de duidelijke fout. In bundel-overgangsmodus (algemene
+        // key = Rolfs account) blijft de oude Rolf-regel gelden.
+        if (!eigenKey) {
+            const rolfModus = !this.isApiAccountActief();
+            if (!rolfModus || (uid && uid !== String(this.KEY_OWNER_USER_ID))) {
+                throw new Error('deze goedkeuring wacht op jou persoonlijk; er is nog geen eigen API-key actief voor jouw login — vraag een kluis-key aan of keur goed/af in Robaws zelf');
+            }
         }
 
         const res = eigenKey
@@ -1495,11 +1543,19 @@ const RobawsAPI = {
                 if (wres.status === 401) return { success: false, error: 'PIN onjuist' };
                 if (wres.status === 429) return { success: false, error: 'Te veel pogingen — probeer over een kwartier opnieuw.' };
                 if (wres.status === 403) return { success: false, error: 'Dit account is stopgezet. Neem contact op met kantoor.' };
+                // v333: de algemene key (API-account, apikey:standaard) komt
+                // bij elke login mee — dat is voortaan het gewone verkeer.
+                if (wres.ok && wj.algemeen && wj.algemeen.key && wj.algemeen.secret) {
+                    this.setAlgemeneCredentials(wj.algemeen.key, wj.algemeen.secret);
+                    console.log('[RobawsAPI] Algemene key = API-account (kluis)');
+                } else if (wres.ok) {
+                    this.clearAlgemeneCredentials(true);  // overgangsmodus: bundel-key
+                }
                 if (wres.ok && wj.key && wj.secret) {
                     this.setActiveCredentials(wj.key, wj.secret, emailLower, wj.soort);
                     console.log('[RobawsAPI] Eigen API-key actief (Worker-kluis' + (wj.soort === 'rol' ? ' · rol-key' : '') + ')');
                 } else if (wres.ok) {
-                    // Kluis kent deze werknemer (nog) niet → gedeelde key
+                    // Kluis kent deze werknemer (nog) niet → geen handtekening-key
                     this.clearActiveCredentials(true);
                 }
                 // 404 (niet gevonden): de gewone flow hieronder doet zijn
@@ -5756,7 +5812,23 @@ const RobawsAPI = {
             send: true,
         };
         if (o.cc) body.recipients.cc = (Array.isArray(o.cc) ? o.cc : [o.cc]).map(String);
-        const res = await this.post(String(resourcePath).replace(/\/+$/, '') + '/emails', body);
+        const pad = String(resourcePath).replace(/\/+$/, '') + '/emails';
+        // v332: mailen is een IDENTITEITS-actie (zoals goedkeuren) — met een
+        // eigen persoons-key vertrekt de mail op naam van de ingelogde
+        // gebruiker i.p.v. het kantoor-account (Rolf). Mist de key het
+        // mail-recht (401/403) → één terugval op de gedeelde key, zodat de
+        // aanvraag nooit strandt op een rechten-kwestie. Andere fouten
+        // (timeout/5xx) NOOIT herkansen met de andere key: dubbele-mail-risico.
+        let res;
+        if (this.hasOwnKey()) {
+            res = await this._personalFetch('POST', pad, body);
+            if (res.code === 401 || res.code === 403) {
+                console.warn('[RobawsAPI] mail met eigen key geweigerd (' + res.code + ') — key mist het mail-recht; terugval op kantoor-account');
+                res = await this.post(pad, body);
+            }
+        } else {
+            res = await this.post(pad, body);
+        }
         if (res.code !== 200 && res.code !== 201) {
             throw new Error('Mail versturen faalde (' + res.code + ')');
         }

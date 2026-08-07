@@ -498,6 +498,8 @@ const app = {
         try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', '', ''); } catch(_e) {}
         // v315: persoonlijke API-key wissen (volgende gebruiker krijgt zijn eigen key bij login)
         try { RobawsAPI.clearActiveCredentials(true); } catch(_e) {}
+        // v333: algemene API-account-key ook wissen (komt vers mee bij de volgende login)
+        try { RobawsAPI.clearAlgemeneCredentials(true); } catch(_e) {}
 
         // Wis enkel sleutels die user-gebonden zijn. Sleutels die voor
         // het apparaat zelf bedoeld zijn (NFC-tag mappings, app versie
@@ -4044,11 +4046,19 @@ const app = {
         this._renderMatAanvraagHistoriek();
     },
 
+    /** v331: historiek-sleutel PER GEBRUIKER — op een gedeeld toestel zag je
+     *  anders elkaars aanvragen (zelfde patroon als qe_pauze_<empId>). */
+    _matAanvraagKey() {
+        const empId = (this.currentUser && this.currentUser.robawsEmployeeId) || 'x';
+        return 'qe_mat_aanvragen_' + empId;
+    },
+
     _renderMatAanvraagHistoriek() {
         const box = document.getElementById('matAanvraagList');
         if (!box) return;
+        try { localStorage.removeItem('qe_mat_aanvragen'); } catch (_) {}  // v331: oude gedeelde lijst opruimen
         let lijst = [];
-        try { lijst = JSON.parse(localStorage.getItem('qe_mat_aanvragen') || '[]'); } catch (_) {}
+        try { lijst = JSON.parse(localStorage.getItem(this._matAanvraagKey()) || '[]'); } catch (_) {}
         if (!lijst.length) {
             box.innerHTML = '<p class="text-grey text-sm text-center">Nog geen aanvragen verstuurd vanaf dit toestel.</p>';
             return;
@@ -4088,9 +4098,10 @@ const app = {
                 to: plEmail,
             });
             try {
-                const lijst = JSON.parse(localStorage.getItem('qe_mat_aanvragen') || '[]');
+                const k = this._matAanvraagKey();  // v331: per gebruiker
+                const lijst = JSON.parse(localStorage.getItem(k) || '[]');
                 lijst.unshift({ ts: Date.now(), pl: plEmail, plNaam, werf, regels, dringend });
-                localStorage.setItem('qe_mat_aanvragen', JSON.stringify(lijst.slice(0, 20)));
+                localStorage.setItem(k, JSON.stringify(lijst.slice(0, 20)));
             } catch (_) {}
             const c = document.getElementById('matAanvraagRegels');
             if (c) { c.innerHTML = ''; this.addMateriaalRegel('matAanvraagRegels'); }
