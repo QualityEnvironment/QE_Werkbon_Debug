@@ -450,9 +450,10 @@
             <p class="text-grey text-sm text-center">Nog geen materialen toegevoegd</p>
         </div>
 
-        <!-- Materiaal ontbreekt melding -->
-        <button class="btn btn-outline btn-full" style="margin-top:16px;border-color:var(--qe-orange);color:var(--qe-orange);font-size:13px" onclick="app.openMissingMaterialReport()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 4 3 19h18z"/><path d="M12 10v4M12 17h.01"/></svg> Materiaal ontbreekt — meld aan kantoor
+        <!-- v329: materiaal bestellen (ex-"Materiaal ontbreekt") — regels bij de
+             werkbon; mail naar de order-verantwoordelijke bij het versturen -->
+        <button class="btn btn-outline btn-full" style="margin-top:16px;border-color:var(--qe-orange);color:var(--qe-orange);font-size:13px" onclick="app.openMateriaalBestelling()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 3 21 7.5v9L12 21 3 16.5v-9z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg> Materiaal bestellen
         </button>
     </div>
 
@@ -567,6 +568,12 @@
     <!-- v321: korting toevoegen (alleen technieker/bureel; JS verbergt voor monteurs) -->
     <button class="btn btn-outline btn-sm" id="btnWbKorting" onclick="app.openKortingSheet()"
         style="width:100%;margin:-6px 0 16px;display:none">+ Korting toevoegen</button>
+
+    <!-- v329: te bestellen materiaal (gaat mee bij versturen, naar de order-verantwoordelijke) -->
+    <div class="card mb-16" id="wbBestellingCard" style="display:none">
+        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:6px">Te bestellen materiaal <span style="font-size:11px">(wordt gemaild naar de projectleider bij versturen)</span></div>
+        <div id="wbBestellingRows" style="font-size:14px"></div>
+    </div>
 
     <!-- Opmerkingen -->
     <div class="card mb-16" id="wbNotesCard" style="display:none">
@@ -913,9 +920,28 @@
         <div id="verlofList"><div class="spinner"></div></div>
     </div>
 
-    <!-- MATERIAAL (placeholder) -->
+    <!-- MATERIAAL — bestelling aanvragen (v329) -->
     <div class="aanvraag-panel" id="aanvraagMateriaal" style="display:none">
-        <div class="mb-placeholder">Materiaal-aanvragen komen hier — binnenkort beschikbaar.</div>
+        <p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px">Vraag materiaal aan dat besteld moet worden. Je aanvraag gaat per mail naar de gekozen projectleider.</p>
+        <div class="card" style="padding:16px;margin-bottom:16px">
+            <div class="form-group"><label>Projectleider</label>
+                <select id="matAanvraagPl" class="form-input"></select></div>
+            <div class="form-group"><label>Werf / project</label>
+                <input type="text" id="matAanvraagWerf" class="form-input" placeholder="Kies of typ de werf..." list="matWerfSuggesties" autocomplete="off">
+                <datalist id="matWerfSuggesties"></datalist></div>
+            <div class="form-group"><label>Materiaal</label>
+                <div id="matAanvraagRegels"></div>
+                <button class="btn btn-outline btn-sm btn-full" onclick="app.addMateriaalRegel('matAanvraagRegels')">+ Nog materiaal toevoegen</button></div>
+            <div class="form-group"><label>Opmerking (optioneel)</label>
+                <textarea id="matAanvraagOpm" class="form-input" rows="2" placeholder="Extra info voor de projectleider..."></textarea></div>
+            <label style="display:flex;align-items:center;gap:10px;margin-bottom:14px;cursor:pointer">
+                <input type="checkbox" id="matAanvraagDringend" style="width:20px;height:20px">
+                <span style="font-size:14px">Dringend</span></label>
+            <div id="matAanvraagError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:8px;display:none"></div>
+            <button class="btn btn-primary btn-full" id="btnMatAanvraag" onclick="app.submitMateriaalAanvraag()">Aanvraag versturen</button>
+        </div>
+        <div class="section-header"><h2>Mijn aanvragen</h2></div>
+        <div id="matAanvraagList"></div>
     </div>
     <!-- MATERIEEL — verhuur/uitleen (v284) -->
     <div class="aanvraag-panel" id="aanvraagMaterieel" style="display:none">
@@ -1321,6 +1347,8 @@
     <div id="uaActions" style="display:none;flex-direction:column;gap:8px;margin-top:14px">
         <button class="btn btn-primary btn-full" id="uaExportBtn" onclick="app.exportUrenXlsx()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Exporteer Excel</button>
         <button class="btn btn-outline btn-full" id="uaRobawsBtn" onclick="app.uploadUrenXlsxNaarRobaws()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg> Naar Robaws (PC)</button>
+        <!-- v328: mail via Robaws' eigen e-mail-endpoint (afzender service@qe.be) -->
+        <button class="btn btn-outline btn-full" id="uaMailBtn" onclick="app.mailUrenXlsx()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 7L2 7"/></svg> Mail rapport</button>
     </div>
 </div>
 

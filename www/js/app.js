@@ -879,14 +879,89 @@ const app = {
         }
     },
 
-    /** Fase 2: mail de Excel naar de ingelogde gebruiker via de Cloudflare Worker. */
+    /** v328: mail het maandrapport via Robaws' EIGEN e-mail-endpoint (route B,
+     *  live getest 7 aug 2026 — afzender "Quality Environment <service@qe.be>").
+     *  Het endpoint ondersteunt géén bijlagen (attachments wordt stil
+     *  genegeerd; base64 én document-id beide getest), dus: de samenvatting
+     *  staat als tabel IN de mail en de volledige .xlsx gaat eerst als
+     *  document op de fiche (v311-route) — de mail verwijst ernaar.
+     *  Succesmelding pas na de bevestigde 2xx van upload én mail.
+     *  (De oude Worker/Resend-route _mailUrenViaWorker blijft slapend.) */
     async mailUrenXlsx() {
         if (!this._uaState) { this.toast('Genereer eerst een overzicht'); return; }
-        const email = (this.currentUser && this.currentUser.email) || '';
-        if (typeof this._mailUrenViaWorker === 'function') {
-            return this._mailUrenViaWorker(email);
+        const email = String((this.currentUser && this.currentUser.email) || '').trim();
+        if (!/@qe\.be$/i.test(email)) { this.toast('Je account heeft geen geldig @qe.be-adres', true); return; }
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) { this.toast('Geen werknemer-koppeling gevonden', true); return; }
+        const btn = document.getElementById('uaMailBtn');
+        if (btn) btn.disabled = true;
+        try {
+            this.toast('Rapport mailen…');
+            // 1. de volledige xlsx op de fiche zetten (de mail verwijst ernaar)
+            const sheets = QEUren.buildSheets(this._uaState);
+            const bytes = QEXlsx.build(sheets);
+            const blob = new Blob([bytes], { type: QEXlsx.MIME });
+            const fileName = QEUren.fileNameFor(this._uaState.ym);
+            const up = await RobawsAPI.uploadFile(`employees/${empId}/documents`, blob, fileName);
+            if (up.code !== 200 && up.code !== 201 && up.code !== 204) {
+                throw new Error('xlsx-upload naar de fiche faalde (' + up.code + ')');
+            }
+            // 2. de mail met de samenvatting in de body
+            const maand = (typeof QEUren.monthLabel === 'function') ? QEUren.monthLabel(this._uaState.ym) : this._uaState.ym;
+            await RobawsAPI.sendMailViaRobaws('employees/' + empId, {
+                subject: 'Klok-maandrapport ' + maand,
+                html: this._urenMailHtml(this._uaState, fileName),
+                to: email,
+            });
+            this.toast('✓ Rapport gemaild naar ' + email + ' — de xlsx staat op je fiche');
+        } catch (e) {
+            console.error('[UrenAnalyse] mailen faalde:', e);
+            this.toast('Mailen mislukt: ' + (e && e.message || ''), true);
+        } finally {
+            if (btn) btn.disabled = false;
         }
-        this.toast('Mailen wordt binnenkort geactiveerd — gebruik voorlopig “Exporteer Excel”.');
+    },
+
+    /** v328: compacte HTML-samenvatting van het maandrapport voor in de mail
+     *  (totalen per werknemer, gegroepeerd zoals de Excel). Inline styles —
+     *  mailclients strippen classes. */
+    _urenMailHtml(agg, fileName) {
+        const esc = (s) => this._escapeHtml(s);
+        const f1 = (n) => String(Math.round((n || 0) * 100) / 100).replace('.', ',');
+        const maand = (typeof QEUren.monthLabel === 'function') ? QEUren.monthLabel(agg.ym) : agg.ym;
+        const td = 'padding:6px 10px;border-bottom:1px solid #e3e6ea;font-size:13px';
+        const tdR = td + ';text-align:right;white-space:nowrap';
+        const th = 'padding:6px 10px;border-bottom:2px solid #26334b;font-size:11px;letter-spacing:.05em;color:#5f6b7c;text-align:left';
+        const thR = th + ';text-align:right';
+        let rows = '';
+        for (const [groep, lijst] of Object.entries(agg.groups || {})) {
+            if (!lijst || !lijst.length) continue;
+            rows += '<tr><td colspan="7" style="padding:14px 10px 4px;font-size:12px;font-weight:700;color:#26334b">'
+                + esc(String(groep).toUpperCase()) + '</td></tr>';
+            for (const p of lijst) {
+                rows += '<tr>'
+                    + '<td style="' + td + '"><strong>' + esc(p.name) + '</strong></td>'
+                    + '<td style="' + tdR + '">' + (p.count_days || 0) + '</td>'
+                    + '<td style="' + tdR + '">' + f1(p.tot_work) + '</td>'
+                    + '<td style="' + tdR + '">' + f1(p.tot_over) + '</td>'
+                    + '<td style="' + tdR + '"><strong>' + f1(p.tot_tot) + '</strong></td>'
+                    + '<td style="' + tdR + '">' + f1(p.tot_km) + '</td>'
+                    + '<td style="' + tdR + '">' + (p.count_late || 0) + ' / ' + (p.count_sick || 0) + '</td>'
+                    + '</tr>';
+            }
+        }
+        return '<p>Beste,</p>'
+            + '<p>Hierbij de samenvatting van het klok-maandrapport voor <strong>' + esc(maand) + '</strong>. '
+            + 'De volledige Excel (dag per dag) staat als document <strong>' + esc(fileName || '') + '</strong> '
+            + 'op je werknemersfiche in Robaws (Werknemers → jouw fiche → Documenten).</p>'
+            + '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;max-width:760px">'
+            + '<tr><th style="' + th + '">WERKNEMER</th><th style="' + thR + '">DAGEN</th>'
+            + '<th style="' + thR + '">WERKUREN</th><th style="' + thR + '">OVERUREN</th>'
+            + '<th style="' + thR + '">TOTAAL</th><th style="' + thR + '">KM</th>'
+            + '<th style="' + thR + '">LAAT/ZIEK</th></tr>'
+            + rows
+            + '</table>'
+            + '<p style="color:#78909c;font-size:12px">Automatisch verstuurd door de QE Werkbon-app via Robaws.</p>';
     },
 
     /** Bouw de .xlsx en laat de Cloudflare Worker ze mailen naar de gebruiker. */
@@ -3911,71 +3986,306 @@ const app = {
         this.renderMaterials();
     },
 
-    // Materiaal ontbreekt — melding naar kantoor
-    openMissingMaterialReport() {
-        if (!this.currentWO) return;
-        const client = this.currentWO.client || {};
-        const orderNr = this.currentWO.orderLogicId || this.currentWO.salesOrderId || '—';
+    // =====================================================================
+    // v329: MATERIAAL BESTELLEN — vrije regels (naam + aantal), Marble-mail
+    // via Robaws (service@qe.be). Twee modi:
+    //   - Aanvragen-tab: werknemer kiest zelf de projectleider; mail vertrekt
+    //     direct bij "Aanvraag versturen".
+    //   - Werkbon ("Materiaal bestellen"-knop, ex-"Materiaal ontbreekt"): de
+    //     regels worden bij de werkbon bewaard en gaan pas mee bij het
+    //     VERSTUREN van de werkbon — automatisch naar de verantwoordelijke
+    //     van de order (of de werfleider van het project).
+    // Bewust GEEN artikel-picker: bureel kiest de leverancier.
+    // =====================================================================
 
-        document.getElementById('modalContent').innerHTML = `
-            <h3 style="font-size:16px;margin-bottom:12px">${this.icon('alert', { size: 18, style: 'vertical-align:-3px' })} Materiaal ontbreekt</h3>
-            <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Laat het kantoor weten welk materiaal je nodig hebt. Er wordt een e-mail gestuurd.</p>
-            <div class="form-group">
-                <label>Welk materiaal ontbreekt?</label>
-                <input type="text" class="form-input" id="missingMatName" placeholder="Naam of beschrijving van het materiaal">
-            </div>
-            <div class="form-group">
-                <label>Aantal nodig</label>
-                <input type="number" class="form-input" id="missingMatQty" value="1" min="1" style="width:80px">
-            </div>
-            <div class="form-group">
-                <label>Extra opmerking (optioneel)</label>
-                <textarea class="form-input" id="missingMatNote" rows="2" placeholder="Bijv. dringend, specifiek merk..."></textarea>
-            </div>
-            <button class="btn btn-primary btn-full" onclick="app._sendMissingMaterial()">${this.icon('mail-send', { size: 16, style: 'vertical-align:-3px' })} Verstuur melding</button>
-        `;
-        this.openModal();
+    /** Regel-rij (naam + aantal + verwijderknop) toevoegen aan een container. */
+    addMateriaalRegel(containerId, naam, aantal) {
+        const c = document.getElementById(containerId || 'matAanvraagRegels');
+        if (!c) return;
+        const rij = document.createElement('div');
+        rij.className = 'mat-regel';
+        rij.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
+        rij.innerHTML = `
+            <input type="text" class="form-input mat-regel-naam" placeholder="Naam van het materiaal..." value="${this.escapeHtml(naam || '')}" style="flex:1;min-width:0">
+            <input type="number" class="form-input mat-regel-aantal" value="${aantal || 1}" min="1" inputmode="numeric" style="width:74px;text-align:center;flex:none">
+            <button class="btn btn-outline btn-sm" style="flex:none;width:38px;padding:8px 0" onclick="this.parentElement.remove()" aria-label="Regel verwijderen">✕</button>`;
+        c.appendChild(rij);
     },
 
-    _sendMissingMaterial() {
-        const name = document.getElementById('missingMatName').value.trim();
-        const qty = document.getElementById('missingMatQty').value || '1';
-        const note = document.getElementById('missingMatNote').value.trim();
+    /** Lees de ingevulde regels uit een container (lege namen genegeerd). */
+    _leesMateriaalRegels(containerId) {
+        const c = document.getElementById(containerId || 'matAanvraagRegels');
+        if (!c) return [];
+        return Array.from(c.querySelectorAll('.mat-regel')).map(r => ({
+            naam: (r.querySelector('.mat-regel-naam')?.value || '').trim(),
+            aantal: Math.max(1, parseInt(r.querySelector('.mat-regel-aantal')?.value, 10) || 1),
+        })).filter(r => r.naam);
+    },
 
-        if (!name) { this.toast('Vul het materiaal in'); return; }
+    /** Aanvragen-tab → Materiaal: dropdown, werf-suggesties, eerste regel. */
+    initMateriaalAanvraagTab() {
+        const sel = document.getElementById('matAanvraagPl');
+        if (sel && !sel.options.length) {
+            const bureel = Object.entries(RobawsAPI.EMPLOYEES)
+                .filter(([, e]) => e.role === 'bureel')
+                .sort((a, b) => a[1].name.localeCompare(b[1].name));
+            sel.innerHTML = '<option value="">Kies een projectleider...</option>' +
+                bureel.map(([em, e]) => `<option value="${this.escapeHtml(em)}">${this.escapeHtml(e.name)}</option>`).join('');
+        }
+        // werf-suggesties uit de geladen dagplanning
+        const dl = document.getElementById('matWerfSuggesties');
+        if (dl) {
+            const namen = [...new Set((this.workorders || []).map(w =>
+                ((w.client && w.client.name) || w.summary || '').trim()).filter(Boolean))];
+            dl.innerHTML = namen.slice(0, 15).map(n => `<option value="${this.escapeHtml(n)}">`).join('');
+        }
+        const c = document.getElementById('matAanvraagRegels');
+        if (c && !c.children.length) this.addMateriaalRegel('matAanvraagRegels');
+        this._renderMatAanvraagHistoriek();
+    },
 
-        const client = this.currentWO?.client || {};
-        const orderNr = this.currentWO?.orderLogicId || this.currentWO?.salesOrderId || '—';
-        const techName = this.currentUser?.name || 'Onbekend';
+    _renderMatAanvraagHistoriek() {
+        const box = document.getElementById('matAanvraagList');
+        if (!box) return;
+        let lijst = [];
+        try { lijst = JSON.parse(localStorage.getItem('qe_mat_aanvragen') || '[]'); } catch (_) {}
+        if (!lijst.length) {
+            box.innerHTML = '<p class="text-grey text-sm text-center">Nog geen aanvragen verstuurd vanaf dit toestel.</p>';
+            return;
+        }
+        box.innerHTML = lijst.slice(0, 15).map(a => `
+            <div class="card" style="margin-bottom:10px;padding:13px 16px">
+                <div style="display:flex;justify-content:space-between;gap:8px">
+                    <div style="font-size:14px;font-weight:600">${this.escapeHtml(a.werf || 'Algemeen')}${a.dringend ? ' <span style="font-size:10.5px;font-weight:700;color:var(--amber2,#A65E12);letter-spacing:0.5px">DRINGEND</span>' : ''}</div>
+                    <div style="font-size:12px;color:var(--qe-grey);flex:none">${this.escapeHtml(new Date(a.ts).toLocaleDateString('nl-BE'))}</div>
+                </div>
+                <div style="font-size:12.5px;color:var(--qe-grey);margin-top:3px">Naar ${this.escapeHtml(a.plNaam || a.pl || '?')} · ${a.regels.map(r => this.escapeHtml(r.naam) + ' (' + r.aantal + ')').join(', ')}</div>
+            </div>`).join('');
+    },
 
-        // Bouw e-mail via mailto: link
-        const subject = `Materiaal ontbreekt — ${name} — Order ${orderNr}`;
-        const body = [
-            `Beste,`,
-            ``,
-            `Technieker ${techName} meldt dat volgend materiaal ontbreekt:`,
-            ``,
-            `Materiaal: ${name}`,
-            `Aantal: ${qty}`,
-            `Klant: ${client.name || 'Onbekend'}`,
-            `Order: ${orderNr}`,
-            note ? `Opmerking: ${note}` : '',
-            ``,
-            `Met vriendelijke groeten,`,
-            techName,
-        ].filter(l => l !== undefined).join('\n');
-
-        window.open(`mailto:info@qe.be?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
-
-        // Sla ook op in localStorage als backup
+    /** Aanvragen-tab: direct versturen naar de gekozen projectleider. */
+    async submitMateriaalAanvraag() {
+        const err = document.getElementById('matAanvraagError');
+        const toon = (m) => { if (err) { err.textContent = m; err.style.display = 'block'; } };
+        if (err) err.style.display = 'none';
+        const plEmail = (document.getElementById('matAanvraagPl')?.value || '').trim();
+        const werf = (document.getElementById('matAanvraagWerf')?.value || '').trim();
+        const regels = this._leesMateriaalRegels('matAanvraagRegels');
+        const opm = (document.getElementById('matAanvraagOpm')?.value || '').trim();
+        const dringend = !!document.getElementById('matAanvraagDringend')?.checked;
+        if (!plEmail) { toon('Kies eerst een projectleider.'); return; }
+        if (!regels.length) { toon('Vul minstens één materiaalregel in.'); return; }
+        const btn = document.getElementById('btnMatAanvraag');
+        if (this._matAanvraagBusy) return;
+        this._matAanvraagBusy = true;
+        if (btn) { btn.disabled = true; btn.textContent = 'Versturen…'; }
         try {
-            const reports = JSON.parse(localStorage.getItem('qe_missing_materials') || '[]');
-            reports.push({ name, qty, note, orderNr, client: client.name, tech: techName, date: new Date().toISOString() });
-            localStorage.setItem('qe_missing_materials', JSON.stringify(reports));
-        } catch(e) {}
+            const plNaam = (RobawsAPI.EMPLOYEES[plEmail] && RobawsAPI.EMPLOYEES[plEmail].name) || plEmail;
+            const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+            await RobawsAPI.sendMailViaRobaws('employees/' + empId, {
+                subject: (dringend ? '⚠ DRINGEND — ' : '') + 'Materiaal bestellen' + (werf ? ' — ' + werf : ''),
+                html: this._materiaalMailHtml({ regels, opm, dringend, werf, plNaam }),
+                to: plEmail,
+            });
+            try {
+                const lijst = JSON.parse(localStorage.getItem('qe_mat_aanvragen') || '[]');
+                lijst.unshift({ ts: Date.now(), pl: plEmail, plNaam, werf, regels, dringend });
+                localStorage.setItem('qe_mat_aanvragen', JSON.stringify(lijst.slice(0, 20)));
+            } catch (_) {}
+            const c = document.getElementById('matAanvraagRegels');
+            if (c) { c.innerHTML = ''; this.addMateriaalRegel('matAanvraagRegels'); }
+            const opmEl = document.getElementById('matAanvraagOpm');
+            if (opmEl) opmEl.value = '';
+            const drEl = document.getElementById('matAanvraagDringend');
+            if (drEl) drEl.checked = false;
+            this._renderMatAanvraagHistoriek();
+            this.toast('✓ Aanvraag gemaild naar ' + plNaam);
+        } catch (e) {
+            toon('Versturen mislukt: ' + (e && e.message || '?') + ' — controleer je verbinding en probeer opnieuw.');
+        } finally {
+            this._matAanvraagBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Aanvraag versturen'; }
+        }
+    },
 
+    /** Werkbon-modus: regels bewaren bij de werkbon (mail gaat pas mee bij
+     *  het versturen van de werkbon, naar de order-verantwoordelijke). */
+    openMateriaalBestelling() {
+        if (!this.currentWO) return;
+        const data = this.woData[this.currentWO.id] || {};
+        const best = data.bestelling || { regels: [], opm: '', dringend: false };
+        document.getElementById('modalContent').innerHTML = `
+            <h3 style="font-size:16px;margin-bottom:6px">${this.icon('package', { size: 18, style: 'vertical-align:-3px' })} Materiaal bestellen</h3>
+            <p style="font-size:13px;color:var(--qe-grey);margin-bottom:12px">Wordt bij het versturen van de werkbon automatisch gemaild naar de verantwoordelijke van de order/werf.</p>
+            <div class="form-group">
+                <label>Materiaal</label>
+                <div id="wbBestelRegels"></div>
+                <button class="btn btn-outline btn-sm btn-full" onclick="app.addMateriaalRegel('wbBestelRegels')">+ Nog materiaal toevoegen</button>
+            </div>
+            <div class="form-group">
+                <label>Opmerking (optioneel)</label>
+                <textarea class="form-input" id="wbBestelOpm" rows="2" placeholder="Bijv. specifiek merk, afmetingen...">${this.escapeHtml(best.opm || '')}</textarea>
+            </div>
+            <label style="display:flex;align-items:center;gap:10px;margin-bottom:14px;cursor:pointer">
+                <input type="checkbox" id="wbBestelDringend" style="width:20px;height:20px" ${best.dringend ? 'checked' : ''}>
+                <span style="font-size:14px">Dringend</span>
+            </label>
+            <button class="btn btn-primary btn-full" onclick="app._saveMateriaalBestelling()">Bewaren bij deze werkbon</button>
+            ${best.regels && best.regels.length ? '<button class="btn btn-outline btn-full" style="margin-top:8px;color:var(--qe-red);border-color:var(--qe-red)" onclick="app._wisMateriaalBestelling()">Bestelling verwijderen</button>' : ''}
+        `;
+        this.openModal();
+        const rijen = (best.regels && best.regels.length) ? best.regels : [null];
+        rijen.forEach(r => this.addMateriaalRegel('wbBestelRegels', r && r.naam, r && r.aantal));
+    },
+
+    _saveMateriaalBestelling() {
+        if (!this.currentWO) return;
+        const regels = this._leesMateriaalRegels('wbBestelRegels');
+        if (!regels.length) { this.toast('Vul minstens één materiaalregel in', true); return; }
+        const data = this.woData[this.currentWO.id];
+        data.bestelling = {
+            regels,
+            opm: (document.getElementById('wbBestelOpm')?.value || '').trim(),
+            dringend: !!document.getElementById('wbBestelDringend')?.checked,
+        };
+        this._saveWoData();
         this.closeModal();
-        this.toast('Melding verstuurd naar kantoor');
+        this.toast('📦 Bestelling bewaard — gaat mee bij het versturen van de werkbon');
+    },
+
+    _wisMateriaalBestelling() {
+        if (!this.currentWO) return;
+        const data = this.woData[this.currentWO.id];
+        delete data.bestelling;
+        this._saveWoData();
+        this.closeModal();
+        this.toast('Bestelling verwijderd');
+    },
+
+    /** Bij het versturen van de werkbon: bestelling mailen naar de
+     *  verantwoordelijke van de order (terugval: werfleider project).
+     *  Best effort — een mailfout blokkeert de werkbon nooit, maar wordt
+     *  wél eerlijk gemeld. */
+    async _verstuurMateriaalBestelling(wo, workOrderId, data) {
+        const best = data && data.bestelling;
+        if (!best || !best.regels || !best.regels.length) return;
+        try {
+            const v = await RobawsAPI.getOrderVerantwoordelijke(wo.salesOrderId);
+            if (!v || !v.email) {
+                this.toast('⚠ Materiaal-bestelling NIET gemaild: geen verantwoordelijke met e-mail gevonden op de order — geef de bestelling door aan bureel', true);
+                return;
+            }
+            const orderRef = wo.orderLogicId || wo.salesOrderId || '';
+            const klant = (wo.client && wo.client.name) || '';
+            await RobawsAPI.sendMailViaRobaws('work-orders/' + workOrderId, {
+                subject: (best.dringend ? '⚠ DRINGEND — ' : '') + 'Materiaal bestellen — ' + (klant || 'werf') + (orderRef ? ' (order ' + orderRef + ')' : ''),
+                html: this._materiaalMailHtml({
+                    regels: best.regels, opm: best.opm, dringend: best.dringend,
+                    werf: klant, orderRef, plNaam: v.name,
+                }),
+                to: v.email,
+            });
+            delete data.bestelling;
+            this._saveWoData();
+            this.toast('📦 Bestelling gemaild naar ' + (v.name || v.email));
+        } catch (e) {
+            console.warn('[App] materiaal-bestelmail faalde:', e && e.message);
+            this.toast('⚠ Werkbon verstuurd, maar de materiaal-bestelmail mislukte (' + (e && e.message || '?') + ') — geef de bestelling door aan bureel', true);
+        }
+    },
+
+    // ---------------- Marble-mailtemplates (e-mail-safe tabellen) ----------------
+
+    /** Gedeeld Marble-kader: crème vlak, kaart met hairline, QE-kop. */
+    _marbleMailFrame(titel, subtitel, inhoud) {
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        return '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="' + f + 'background-color:#F4F2ED;border-collapse:collapse"><tbody><tr><td align="center" style="padding:26px 12px">' +
+            '<table cellpadding="0" cellspacing="0" border="0" width="600" style="' + f + 'width:600px;max-width:600px;border-collapse:collapse"><tbody>' +
+            '<tr><td style="background-color:#FDFCFA;border:1px solid #DCD9D0;padding:24px 28px 20px">' +
+                '<div style="' + f + 'font-size:11px;font-weight:700;letter-spacing:2px;color:#F99D3E">QE · WERKBON</div>' +
+                '<div style="' + f + 'font-size:25px;line-height:31px;color:#26334B;margin-top:8px;letter-spacing:-0.5px">' + titel + '</div>' +
+                (subtitel ? '<div style="' + f + 'font-size:13.5px;line-height:20px;color:#85847C;margin-top:6px">' + subtitel + '</div>' : '') +
+            '</td></tr>' +
+            '<tr><td style="height:12px;line-height:12px;font-size:0">&nbsp;</td></tr>' +
+            '<tr><td style="background-color:#FDFCFA;border:1px solid #DCD9D0;padding:22px 28px">' + inhoud + '</td></tr>' +
+            '<tr><td style="' + f + 'padding:14px 6px;font-size:11px;line-height:17px;color:#A3A29A">Automatisch verstuurd door de QE Werkbon-app · Quality Environment · Deuzeldlaan 36, 2900 Schoten</td></tr>' +
+            '</tbody></table></td></tr></tbody></table>';
+    },
+
+    _marbleMailRij(label, waarde) {
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        return '<tr><td style="' + f + 'padding:7px 0;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:1px solid #E9E6DE;width:36%;vertical-align:top">' + label + '</td>' +
+            '<td style="' + f + 'padding:7px 0;font-size:14px;color:#26334B;border-bottom:1px solid #E9E6DE">' + waarde + '</td></tr>';
+    },
+
+    /** De materiaal-bestelmail (Marble-stijl). */
+    _materiaalMailHtml(o) {
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        const aanvrager = (this.currentUser && this.currentUser.name) || 'Onbekend';
+        const datum = new Date().toLocaleDateString('nl-BE');
+        let inhoud = '';
+        if (o.dringend) {
+            inhoud += '<div style="' + f + 'background-color:#F7E9D8;border:1px solid #E9CBA6;color:#A65E12;font-size:12px;font-weight:700;letter-spacing:1.5px;padding:10px 14px;margin-bottom:18px">DRINGEND — GRAAG ZO SNEL MOGELIJK BESTELLEN</div>';
+        }
+        if (o.orderRef) {
+            inhoud += '<div style="' + f + 'font-size:14.5px;line-height:22px;color:#3A4356;margin-bottom:16px">Te bestellen voor <strong style="color:#26334B">' + esc(o.werf || 'deze werf') + '</strong> — order/project <strong style="color:#26334B">' + esc(o.orderRef) + '</strong>.</div>';
+        }
+        inhoud += '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-bottom:18px"><tbody>' +
+            this._marbleMailRij('AANGEVRAAGD DOOR', esc(aanvrager)) +
+            (o.werf && !o.orderRef ? this._marbleMailRij('WERF / PROJECT', esc(o.werf)) : '') +
+            this._marbleMailRij('DATUM', esc(datum)) +
+            '</tbody></table>';
+        inhoud += '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-bottom:6px"><tbody>' +
+            '<tr><td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B">MATERIAAL</td>' +
+            '<td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B;text-align:right;width:70px">AANTAL</td></tr>' +
+            (o.regels || []).map(r =>
+                '<tr><td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE">' + esc(r.naam) + '</td>' +
+                '<td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE;text-align:right;font-weight:700">' + esc(r.aantal) + '</td></tr>'
+            ).join('') +
+            '</tbody></table>';
+        if (o.opm) {
+            inhoud += '<div style="' + f + 'margin-top:16px"><div style="font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;margin-bottom:5px">OPMERKING</div>' +
+                '<div style="' + f + 'font-size:14px;line-height:21px;color:#3A4356">' + esc(o.opm) + '</div></div>';
+        }
+        const sub = o.orderRef
+            ? 'Deze aanvraag hangt als correspondentie aan de werkbon in Robaws.'
+            : 'Aangevraagd via de Aanvragen-tab in de app.';
+        return this._marbleMailFrame('Materiaal bestellen', sub, inhoud);
+    },
+
+    /** De geen-factuur-melding voor de zaakvoerder (Marble-stijl). */
+    _geenFactuurMailHtml(wo, workOrderId) {
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        const klant = (wo.client && wo.client.name) || 'Onbekend';
+        const orderRef = wo.orderLogicId || wo.salesOrderId || '—';
+        const tech = (this.currentUser && this.currentUser.name) || 'Onbekend';
+        const inhoud =
+            '<div style="' + f + 'font-size:14.5px;line-height:22px;color:#3A4356;margin-bottom:16px">Er is zonet een werkbon verstuurd met <strong style="color:#26334B">"Geen factuur maken"</strong> aangevinkt. Ter info — deze werkbon hangt als correspondentie aan dit bericht in Robaws.</div>' +
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tbody>' +
+            this._marbleMailRij('KLANT', esc(klant)) +
+            this._marbleMailRij('ORDER', esc(orderRef)) +
+            this._marbleMailRij('TECHNIEKER', esc(tech)) +
+            this._marbleMailRij('DATUM', esc(new Date().toLocaleDateString('nl-BE'))) +
+            '</tbody></table>';
+        return this._marbleMailFrame('Werk uitgevoerd zonder factuur', 'Melding voor de zaakvoerder', inhoud);
+    },
+
+    /** v329: melding aan de zaakvoerder bij "Geen factuur maken" — best
+     *  effort, blokkeert de werkbon nooit. */
+    async _verstuurGeenFactuurMelding(wo, workOrderId) {
+        try {
+            await RobawsAPI.sendMailViaRobaws('work-orders/' + workOrderId, {
+                subject: 'Werk zonder factuur — ' + ((wo.client && wo.client.name) || 'klant onbekend'),
+                html: this._geenFactuurMailHtml(wo, workOrderId),
+                to: 'rolf@qe.be',
+            });
+            console.log('[App] geen-factuur-melding gemaild naar rolf@qe.be');
+        } catch (e) {
+            console.warn('[App] geen-factuur-melding faalde:', e && e.message);
+            this.toast('⚠ Melding "geen factuur" aan Rolf kon niet gemaild worden — geef het even door', true);
+        }
     },
 
     renderMaterials() {
@@ -5375,6 +5685,22 @@ const app = {
         document.getElementById('wbClientName').textContent = client.name || 'Onbekend';
         document.getElementById('wbDate').textContent = this.currentDate.toLocaleDateString('nl-BE');
 
+        // v329: te bestellen materiaal tonen (gaat mee bij het versturen)
+        const bestCard = document.getElementById('wbBestellingCard');
+        const bestRows = document.getElementById('wbBestellingRows');
+        const best = data.bestelling;
+        if (bestCard && bestRows) {
+            if (best && best.regels && best.regels.length) {
+                bestRows.innerHTML =
+                    (best.dringend ? '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.5px;color:var(--amber2,#A65E12);margin-bottom:6px">DRINGEND</div>' : '') +
+                    best.regels.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid var(--qe-hairline,#ECEEF2)"><span>${this.escapeHtml(r.naam)}</span><span style="font-weight:600;flex:none">${r.aantal}×</span></div>`).join('') +
+                    (best.opm ? `<div style="font-size:12.5px;color:var(--qe-grey);margin-top:6px">${this.escapeHtml(best.opm)}</div>` : '');
+                bestCard.style.display = 'block';
+            } else {
+                bestCard.style.display = 'none';
+            }
+        }
+
         // BTW badge op het overzicht
         const vatPctBadge = client.vatPercentage ?? null;
         const vatNameBadge = client.vatTariffName || (vatPctBadge !== null ? `${vatPctBadge}%` : null);
@@ -6339,9 +6665,15 @@ const app = {
             // === STAP 2: Foto's + handtekening ===
             await this._uploadPhotosAndSignature(data, workOrderId, signatureName, signatureData);
 
+            // v329: materiaal-bestelling mailen naar de order-verantwoordelijke
+            // (vóór de geen-factuur-vertakking — geldt voor beide paden).
+            await this._verstuurMateriaalBestelling(wo, workOrderId, data);
+
             // v197: "Geen factuur maken" → werkbon is verstuurd, factuur-stap overslaan
             // (garantie / terugkomwerk door gebreken).
             if (document.getElementById('wbNoInvoice') && document.getElementById('wbNoInvoice').checked) {
+                // v329: zaakvoerder verwittigen — werk zonder factuur.
+                await this._verstuurGeenFactuurMelding(wo, workOrderId);
                 this._markWOSubmitted(data, wo.id);
                 this._submitInProgress = false;
                 this.toast('Werkbon verstuurd — geen factuur aangemaakt');
@@ -6813,6 +7145,9 @@ const app = {
             }
 
             this.toast('Werkbon verstuurd');
+
+            // v329: eventuele materiaal-bestelling mee mailen (ook monteurs).
+            await this._verstuurMateriaalBestelling(wo, workOrderId, data);
 
             // Data resetten en terug naar planning — v252: op de SNAPSHOT-id
             // (this.currentWO kon intussen een andere werkbon zijn; dan werd
@@ -8826,6 +9161,7 @@ const app = {
             if (p) p.style.display = (t === tab) ? 'block' : 'none';
         });
         if (tab === 'verlof') { this._renderVerlofBudget(); this.loadMyVerlof(); }
+        else if (tab === 'materiaal') { this.initMateriaalAanvraagTab(); }  // v329
         else if (tab === 'materieel') { this.loadMaterieel(); }
     },
 

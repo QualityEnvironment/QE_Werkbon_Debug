@@ -5673,6 +5673,89 @@ const RobawsAPI = {
         return putRes;
     },
 
+    /**
+     * v328: mail versturen via Robaws' eigen e-mail-endpoint
+     * (POST /{resource}/{id}/emails — route B, live getest 7 aug 2026).
+     * - Afzender = het gekoppelde Robaws-mailaccount: "Quality Environment
+     *   <service@qe.be>" — ongeacht welke API-key.
+     * - De mail hangt als correspondentie aan de resource (werkbon/fiche/
+     *   project).
+     * - LET OP: bijlagen ondersteunt het endpoint NIET — een attachments-veld
+     *   wordt stil genegeerd (zowel base64 als document-id, beide live
+     *   getest). Bijlage nodig? Zet het bestand als document op de resource
+     *   en verwijs ernaar in de body.
+     * - Gooit bij non-2xx (foolproof-lijn: succes = het staat zo in Robaws).
+     * @param {string} resourcePath  bv. 'employees/1' of 'work-orders/3700'
+     * @param {Object} opts  { subject, html, to (string|array), cc? }
+     * @returns {string|null} het Robaws-mail-id
+     */
+    async sendMailViaRobaws(resourcePath, opts) {
+        const o = opts || {};
+        const to = Array.isArray(o.to) ? o.to : [o.to];
+        if (!to.length || !to[0]) throw new Error('Geen ontvanger opgegeven');
+        const body = {
+            subject: String(o.subject || '').slice(0, 250),
+            body: String(o.html || ''),
+            recipients: { to: to.map(String) },
+            send: true,
+        };
+        if (o.cc) body.recipients.cc = (Array.isArray(o.cc) ? o.cc : [o.cc]).map(String);
+        const res = await this.post(String(resourcePath).replace(/\/+$/, '') + '/emails', body);
+        if (res.code !== 200 && res.code !== 201) {
+            throw new Error('Mail versturen faalde (' + res.code + ')');
+        }
+        return (res.data && res.data.id) || null;
+    },
+
+    /**
+     * v329: de verantwoordelijke (Robaws-user) van een order opzoeken — voor
+     * de materiaal-bestelmail. Volgorde: order.assignedUser (heeft e-mail in
+     * de UserDTO) → terugval project.siteManager → terugval EMPLOYEES-map op
+     * het userId. Retourneert {userId, name, email} (email kan '' zijn) of
+     * null als er niets te vinden is.
+     */
+    async getOrderVerantwoordelijke(salesOrderId) {
+        if (!salesOrderId) return null;
+        const pak = (u) => {
+            if (!u) return null;
+            return {
+                userId: String(u.id || ''),
+                name: u.fullName || u.name || '',
+                email: String(u.email || '').trim().toLowerCase(),
+            };
+        };
+        const zoekMap = (userId) => {
+            for (const [em, e] of Object.entries(this.EMPLOYEES)) {
+                if (String(e.userId) === String(userId)) {
+                    return { userId: String(userId), name: e.name, email: em };
+                }
+            }
+            return null;
+        };
+        try {
+            const res = await this.get(`sales-orders/${salesOrderId}?include=assignedUser,project`, { bypassCache: true });
+            if (res.code !== 200 || !res.data) return null;
+            const so = res.data;
+            let v = pak(so.assignedUser);
+            if ((!v || !v.email) && so.assignedUserId) v = zoekMap(so.assignedUserId) || v;
+            if (v && v.email) return v;
+            // terugval: werfleider van het gekoppelde project
+            const pid = so.projectId || (so.project && so.project.id);
+            if (pid) {
+                const pr = await this.get(`projects/${pid}?include=siteManager`, { bypassCache: true });
+                if (pr.code === 200 && pr.data) {
+                    let s = pak(pr.data.siteManager);
+                    if ((!s || !s.email) && pr.data.siteManagerId) s = zoekMap(pr.data.siteManagerId) || s;
+                    if (s && s.email) return s;
+                }
+            }
+            return v;
+        } catch (e) {
+            console.warn('[RobawsAPI] getOrderVerantwoordelijke faalde:', e && e.message);
+            return null;
+        }
+    },
+
     /** Update Tijd-keuze (bv. naar "Ziek"). v59: GET-then-PUT. */
     async setTimeRegistrationTijd(workOrderId, tijdLabel) {
         const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
