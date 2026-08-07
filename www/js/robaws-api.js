@@ -5822,8 +5822,13 @@ const RobawsAPI = {
         let res;
         if (this.hasOwnKey()) {
             res = await this._personalFetch('POST', pad, body);
-            if (res.code === 401 || res.code === 403) {
-                console.warn('[RobawsAPI] mail met eigen key geweigerd (' + res.code + ') — key mist het mail-recht; terugval op kantoor-account');
+            // v334: óók 404 = rechten-terugval. Een key zonder leesrecht op de
+            // resource krijgt geen 403 maar 404 (resource "bestaat niet" voor
+            // die key — de stille-rechten-les). 404 = er is niets verstuurd,
+            // dus terugvallen op de algemene key is veilig (geen dubbele
+            // mail); de aanvrager staat sowieso met naam in de mail zelf.
+            if (res.code === 401 || res.code === 403 || res.code === 404) {
+                console.warn('[RobawsAPI] mail met eigen key geweigerd (' + res.code + ') — key mist het mail-/leesrecht op deze resource; terugval op de algemene key');
                 res = await this.post(pad, body);
             }
         } else {
