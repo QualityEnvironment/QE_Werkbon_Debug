@@ -8525,6 +8525,25 @@ const app = {
         }
     },
 
+    _autoRegelsHtml(regels) {
+        // "ALS/WACHT/DAN/ANDERS/MAAR/LET OP …" — kaal en leesbaar, prefix in kleur
+        return (regels || []).map(r => {
+            const m = String(r).match(/^(ALS|WACHT|DAN|ANDERS|MAAR|LET OP|Draait)\b/);
+            const p = m ? m[0] : '';
+            const rest = p ? String(r).slice(p.length) : String(r);
+            const kleur = p === 'DAN' ? 'var(--green2,#3E7A54)' : (p === 'LET OP' ? 'var(--red2,#B4372F)' :
+                (p === 'ALS' ? 'var(--purple2,#6A2C91)' : 'var(--amber2,#A65E12)'));
+            return '<div style="display:flex;gap:7px;padding:5px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:12.5px;line-height:1.45">' +
+                (p ? '<span style="flex-shrink:0;font-weight:700;font-size:10.5px;letter-spacing:.04em;color:' + kleur + ';padding-top:1.5px;min-width:52px">' + p + '</span>' : '') +
+                '<span style="color:var(--txt2,#3A4356)">' + this.escapeHtml(rest.trim()) + '</span></div>';
+        }).join('');
+    },
+
+    toggleAutoRegels(id) {
+        const b = document.getElementById(id);
+        if (b) b.style.display = b.style.display === 'none' ? 'block' : 'none';
+    },
+
     _autoFlowsRender(data) {
         const el = document.getElementById('autoFlowList');
         if (!el) return;
@@ -8535,12 +8554,13 @@ const app = {
                 d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
         };
         const STANDEN = [['uit', 'Uit'], ['meekijk', 'Meekijk'], ['aan', 'Aan']];
-        el.innerHTML = data.flows.map(f => {
+        const kaarten = data.flows.map((f, i) => {
             const isFout = f.stand === 'fout';
+            const regelsId = 'autoRg' + i;
             const knoppen = STANDEN.map(([w, label]) => {
                 const actief = f.stand === w;
                 const kleur = w === 'aan' ? 'var(--green2,#3E7A54)' : (w === 'meekijk' ? 'var(--amber2,#A65E12)' : 'var(--qe-grey)');
-                return '<button onclick="app.setAutoFlow(\'' + f.key + '\',\'' + w + '\')" style="flex:1;padding:8px 4px;font-size:12.5px;font-weight:600;font-family:var(--font);cursor:pointer;' +
+                return '<button onclick="event.stopPropagation();app.setAutoFlow(\'' + f.key + '\',\'' + w + '\')" style="flex:1;padding:8px 4px;font-size:12.5px;font-weight:600;font-family:var(--font);cursor:pointer;' +
                     'border:1px solid ' + (actief ? kleur : 'var(--b1,#DCD9D0)') + ';border-radius:8px;' +
                     'background:' + (actief ? (w === 'aan' ? 'var(--gwash,#EDF3EE)' : (w === 'meekijk' ? 'var(--awash2,#F7E9D8)' : 'var(--wash,#EFEDE6)')) : 'var(--card,#FDFCFA)') + ';' +
                     'color:' + (actief ? kleur : 'var(--g2,#5F5E56)') + '">' + label + '</button>';
@@ -8550,16 +8570,34 @@ const app = {
             if (f.snel) sub.push('elke minuut');
             if (f.wachtrij) sub.push(f.wachtrij + ' in wachtrij');
             sub.push(f.acties + ' acties · laatste: ' + fmt(f.laatsteActie));
-            return '<div class="card" style="margin-bottom:10px;padding:14px 16px">' +
+            return '<div class="card" style="margin-bottom:10px;padding:14px 16px;cursor:pointer" onclick="app.toggleAutoRegels(\'' + regelsId + '\')">' +
                 '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px">' +
                 '  <div style="font-size:14.5px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(f.naam) + '</div>' +
-                (isFout ? '<span style="flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--red2,#B4372F)">FOUT — GEPAUZEERD</span>' : '') +
+                (isFout ? '<span style="flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--red2,#B4372F)">FOUT — GEPAUZEERD</span>'
+                        : '<span style="flex-shrink:0;font-size:13px;color:var(--g3,#A3A29A)">▾</span>') +
                 '</div>' +
                 '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-bottom:10px">' + this.escapeHtml(sub.join(' · ')) + '</div>' +
                 (f.laatsteFout ? '<div style="font-size:11.5px;color:var(--red2,#B4372F);margin:-4px 0 10px">' + this.escapeHtml(f.laatsteFout) + '</div>' : '') +
+                '<div id="' + regelsId + '" style="display:none;margin:0 0 12px;padding:4px 0 2px">' + this._autoRegelsHtml(f.regels) + '</div>' +
                 '<div style="display:flex;gap:8px">' + knoppen + '</div>' +
                 '</div>';
-        }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen flows.</div>';
+        }).join('');
+
+        // v339: de 5 klantmail-flows die bewust in Robaws zelf draaien
+        const natief = (data.natief || []).map((n, i) => {
+            const regelsId = 'autoNat' + i;
+            return '<div class="card" style="margin-bottom:10px;padding:13px 16px;cursor:pointer;background:var(--wash,#EFEDE6)" onclick="app.toggleAutoRegels(\'' + regelsId + '\')">' +
+                '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">' +
+                '  <div style="font-size:14px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(n.naam) + '</div>' +
+                '  <span style="flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--purple2,#6A2C91)">IN ROBAWS</span>' +
+                '</div>' +
+                '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:3px">' + this.escapeHtml(n.reden) + '</div>' +
+                '<div id="' + regelsId + '" style="display:none;margin-top:8px">' + this._autoRegelsHtml(n.regels) + '</div>' +
+                '</div>';
+        }).join('');
+
+        el.innerHTML = (kaarten || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen flows.</div>') +
+            (natief ? '<div style="font-size:12px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--g1,#85847C);margin:16px 0 10px">Bewust in Robaws (5 gratis slots)</div>' + natief : '');
     },
 
     async setAutoFlow(key, stand) {
