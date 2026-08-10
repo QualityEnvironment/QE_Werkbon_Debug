@@ -9978,26 +9978,37 @@ const app = {
     },
 
     async _suggestLinksFromPdf(invoiceId, inv) {
+        // v341: de scan zweeg bij élk pad (klaar, geen PDF, fout) — nu logt
+        // elke stap naar de console met [FactuurRef] én toont het scherm een
+        // klein regeltje wanneer er gezocht maar niets gevonden is.
+        const log = (m) => { try { console.log('[FactuurRef] ' + m); } catch (_) {} };
         try {
             if (!invoiceId || !inv) return;
             const lines = (inv.lineItems || []).filter(l => l.type === 'LINE');
-            if (!lines.length) return;
+            if (!lines.length) { log('geen lijnen — scan overgeslagen'); return; }
             const needProject = !lines.every(l => l.projectId);
             const needOrder = !lines.every(l => l.salesOrderId);
-            if (!needProject && !needOrder) return;
+            if (!needProject && !needOrder) {
+                log('alle lijnen hebben al een project én order — niets te doen');
+                return;
+            }
+            log('scan gestart (project nodig: ' + needProject + ', order nodig: ' + needOrder + ')');
             // v340: tekstbronnen = lijn-omschrijvingen + PDF (indien aanwezig).
-            // Zo werkt de naam-herkenning ook op facturen zonder tekst-PDF.
             let text = ' ' + lines.map(l => l.description || '').join(' ');
+            const lijnLen = text.length;
             const docId = await RobawsAPI.getPurchaseInvoiceDocumentId(invoiceId);
             if (docId) {
                 try {
                     const doc = await RobawsAPI.getDocumentUrl(docId);
                     if (doc && doc.blob) {
-                        try { text += ' ' + await this._extractPdfText(doc.blob); } catch (_e) {}
+                        try {
+                            text += ' ' + await this._extractPdfText(doc.blob);
+                            log('PDF-tekst gelezen: ' + (text.length - lijnLen) + ' tekens');
+                        } catch (e) { log('PDF-tekst MISLUKT: ' + ((e && e.message) || '?')); }
                         if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
-                    }
-                } catch (_e) { /* PDF optioneel */ }
-            }
+                    } else { log('PDF-download gaf niets terug'); }
+                } catch (e) { log('PDF-download MISLUKT: ' + ((e && e.message) || '?')); }
+            } else { log('geen document aan deze factuur gekoppeld'); }
             const uniq = (re) => Array.from(new Set((text.match(re) || []).map(m => m.toUpperCase().replace(/[\s-]/g, ''))));
             const suggestions = [];
             if (needProject) {
@@ -10006,9 +10017,10 @@ const app = {
                     if (proj) { suggestions.push({ kind: 'project', id: proj.id, logicId: proj.logicId, name: proj.name }); break; }
                 }
                 // v340: geen P-nummer gevonden → PROJECTNAAM herkennen
-                // (leveranciers zetten de werfnaam als referentie, niet ons nummer)
                 if (!suggestions.some(s => s.kind === 'project')) {
                     const hit = await this._matchProjectNaam(text);
+                    log(hit ? 'projectnaam herkend: "' + hit.name + '" (' + hit.logicId + ')'
+                            : 'geen projectnaam herkend in ' + text.length + ' tekens tekst');
                     if (hit) suggestions.push({ kind: 'project', id: hit.id, logicId: hit.logicId, name: hit.name, via: 'naam' });
                 }
             }
@@ -10018,8 +10030,20 @@ const app = {
                     if (ord) { suggestions.push({ kind: 'order', id: ord.id, logicId: ord.logicId, name: ord.name }); break; }
                 }
             }
-            if (suggestions.length) this._showRefSuggestion(invoiceId, suggestions);
-        } catch (_e) { /* suggestie is optioneel — stil falen */ }
+            if (suggestions.length) {
+                this._showRefSuggestion(invoiceId, suggestions);
+            } else {
+                // zichtbaar maken DAT er gezocht is (alleen als er iets te
+                // koppelen viel) — anders blijft falen onzichtbaar
+                const host = document.getElementById('factuurRefSuggest');
+                if (host && this._factuurInvoiceId === String(invoiceId)) {
+                    host.innerHTML = '<div style="font-size:11.5px;color:var(--qe-grey);margin:-4px 0 12px;text-align:center">' +
+                        '🔍 Geen project of order herkend op de factuur</div>';
+                }
+            }
+        } catch (e) {
+            log('scan-FOUT: ' + ((e && e.message) || e));
+        }
     },
 
     /** v340: projectnaam herkennen in factuurtekst. Bewust streng —
