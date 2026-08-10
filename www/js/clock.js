@@ -1612,14 +1612,16 @@ window.QEClock = {
         // Geval 1: lopende L&L → afsluiten via PUT op de open time-entry.
         if (session.llActive) {
             const llStart = session.llStartTime;
-            // v76: L&L duur altijd naar BOVEN afgerond op kwartier, minimum 15 min.
-            // Werknemer krijgt voor 7 min laden toch een volle kwartier.
+            // v338 (vraag Levi): L&L rondt af op 5 MINUTEN i.p.v. een kwartier.
+            // Duur nog steeds naar BOVEN (7 min laden = 10 min betaald), met
+            // een minimum van 5 min zodat een scan altijd iets oplevert.
+            // (v76-regel was: naar boven op 15, minimum 15.)
             const startMinRaw = toMinutes(llStart);
             const endMinRaw = toMinutes(time);
             const actualDuration = Math.max(0, endMinRaw - startMinRaw);
-            const billableDuration = Math.max(15, Math.ceil(actualDuration / 15) * 15);
+            const billableDuration = Math.max(5, Math.ceil(actualDuration / 5) * 5);
             // Start blijft op 5 min afgerond (dichtbij de werkelijkheid).
-            // End = start + billable_duration (zo blijft het kwartier-veelvoud).
+            // End = start + billable_duration (zo blijft het 5-min-veelvoud).
             let startMinForDisplay = round5(startMinRaw);
             let endMinForDisplay = startMinForDisplay + billableDuration;
             // v251: over middernacht → binnen de dag houden. fromMinutes wrapte

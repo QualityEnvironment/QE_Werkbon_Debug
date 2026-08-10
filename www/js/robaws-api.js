@@ -5989,25 +5989,53 @@ const RobawsAPI = {
         // waardoor Robaws de werknemer van het L&L-blok wiste ("naam ontbreekt
         // bij het tijdsblok"). Nu: de bestaande entry vers ophalen en alle
         // scalars behouden; de wijzigingen gaan er overheen.
+        // v338: eerst een DIRECTE GET op de entry (bewezen: bestaat en is
+        // kleiner/betrouwbaarder dan de lijst — die kon de entry missen zodra
+        // er meer dan 100 regels op de werkbon staan). Lijst = terugval.
+        const scalarsUit = (found) => {
+            const b = {};
+            const DROP = ['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
+                'deletedAt', 'archivedAt', 'lockedAt', '_metadata'];
+            for (const [k, v] of Object.entries(found)) {
+                if (DROP.includes(k)) continue;
+                // expansie-objecten (article/hourType/employee) droppen;
+                // tijd-objecten {hour,minute} en scalars behouden
+                if (v !== null && typeof v === 'object' && !('hour' in v)) continue;
+                b[k] = v;
+            }
+            return b;
+        };
         let base = null;
         try {
-            const exRes = await this.get(`work-orders/${workOrderId}/time-entries?limit=100`, { bypassCache: true });
-            const items = (exRes.data && (exRes.data.items || exRes.data)) || [];
-            const found = items.find(t => String(t.id) === String(teId));
-            if (found) {
-                base = {};
-                const DROP = ['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy',
-                    'deletedAt', 'archivedAt', 'lockedAt', '_metadata'];
-                for (const [k, v] of Object.entries(found)) {
-                    if (DROP.includes(k)) continue;
-                    // expansie-objecten (article/hourType/employee) droppen;
-                    // tijd-objecten {hour,minute} en scalars behouden
-                    if (v !== null && typeof v === 'object' && !('hour' in v)) continue;
-                    base[k] = v;
-                }
-            }
-        } catch (_) { /* terugval: minimale body hieronder */ }
-        const body = base || {};
+            const one = await this.get(`work-orders/${workOrderId}/time-entries/${teId}`, { bypassCache: true });
+            const d = one.data && (one.data.data || one.data);
+            if (one.code === 200 && d && d.id != null) base = scalarsUit(d);
+        } catch (_) { /* terugval hieronder */ }
+        if (!base) {
+            try {
+                const exRes = await this.get(`work-orders/${workOrderId}/time-entries?limit=100`, { bypassCache: true });
+                const items = (exRes.data && (exRes.data.items || exRes.data)) || [];
+                const found = items.find(t => String(t.id) === String(teId));
+                if (found) base = scalarsUit(found);
+            } catch (_) { /* terugval: minimale body hieronder */ }
+        }
+        if (!base) {
+            // Laatste vangnet: zonder verse entry zou een full-replace de
+            // kostprijs en de werknemer wissen (dát is de "L&L mist data"-
+            // klacht). Hard falen kan hier niet — de open entry blijft dan
+            // staan en de fallback-POST maakt een tweede regel. Dus vullen we
+            // de dragende velden zelf: werknemer uit de sessie, kostprijs vers
+            // uit het artikel.
+            console.warn('[RobawsAPI] L&L-entry ' + teId + ' niet vers ophaalbaar — kostprijs uit het artikel halen');
+            base = {};
+            try {
+                const art = await this.get('articles/' + this.WERKUUR_ARTICLE_IDS.ladenLossen, { bypassCache: true });
+                const a = (art.data && (art.data.data || art.data)) || {};
+                if (a.costPrice != null) base.costPrice = a.costPrice;
+                if (a.salePrice != null) base.salePrice = a.salePrice;
+            } catch (_) { /* dan zonder — beter een blok met tijden dan geen blok */ }
+        }
+        const body = base;
         if (!body.employeeId && employeeId != null) body.employeeId = String(employeeId);
         body.articleId = String(this.WERKUUR_ARTICLE_IDS.ladenLossen);
         body.hourTypeId = String(llHourType);

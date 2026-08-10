@@ -15429,17 +15429,23 @@ const app = {
 
         const ov = document.createElement('div');
         ov.id = 'wachtSheet';
-        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);display:flex;flex-direction:column;justify-content:flex-end';
+        // v337: GEEN geneste vh-scrollbox meer. In de Android file://-WebView
+        // wordt een vh-hoogte op het injectiemoment tegen een nog-0-hoog
+        // containing block gerekend → de flex-kolom klapte in tot 0px en de
+        // sheet bleef "dicht" (kop zichtbaar, lijst niet). Zelfde les als de
+        // factuur-project-picker: laat de sheet ZELF scrollen, rijen kaal erin.
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
         ov.innerHTML =
-            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));max-height:78vh;display:flex;flex-direction:column">' +
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div id="wachtSheetCard" style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
             '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
             '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Wachtdienst</div>' +
             '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Wie heeft de wacht?</div></div>' +
             '    <button onclick="document.getElementById(\'wachtSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
             '  </div>' +
-            '  <div style="overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0">' + rijen + '</div>' +
+            rijen +
             '  <div style="font-size:11.5px;color:var(--qe-grey);margin-top:10px;line-height:1.5">De wacht wordt door het bureau gepland. Klopt iets niet? Bel het bureau.</div>' +
-            '</div>';
+            '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
     },
