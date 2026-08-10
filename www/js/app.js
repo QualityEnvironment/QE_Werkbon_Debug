@@ -8504,10 +8504,90 @@ const app = {
         return 'technieker';
     },
 
+    // =========================================================
+    // v339: AUTOMATIONS-PANEEL (Beheer, bureel) — Worker-flows met
+    // drie standen: Uit · Meekijk · Aan. Togglen = POST naar de
+    // Worker met de persoonlijke kluis-key als bewijs; de cron leest
+    // de stand elke ronde → omzetten werkt binnen de minuut.
+    // =========================================================
+    async loadAutoFlows() {
+        const el = document.getElementById('autoFlowList');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/automations-status', {}, 8000);
+            const data = await r.json();
+            if (!data || !Array.isArray(data.flows)) throw new Error('onverwacht antwoord');
+            this._autoFlowsRender(data);
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--qe-grey)">Automations niet bereikbaar (' +
+                this.escapeHtml((e && e.message) || '?') + ') — oude Worker of geen internet.</div>';
+        }
+    },
+
+    _autoFlowsRender(data) {
+        const el = document.getElementById('autoFlowList');
+        if (!el) return;
+        const fmt = (iso) => {
+            if (!iso) return 'nog nooit';
+            const d = new Date(iso);
+            return d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' ' +
+                d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+        };
+        const STANDEN = [['uit', 'Uit'], ['meekijk', 'Meekijk'], ['aan', 'Aan']];
+        el.innerHTML = data.flows.map(f => {
+            const isFout = f.stand === 'fout';
+            const knoppen = STANDEN.map(([w, label]) => {
+                const actief = f.stand === w;
+                const kleur = w === 'aan' ? 'var(--green2,#3E7A54)' : (w === 'meekijk' ? 'var(--amber2,#A65E12)' : 'var(--qe-grey)');
+                return '<button onclick="app.setAutoFlow(\'' + f.key + '\',\'' + w + '\')" style="flex:1;padding:8px 4px;font-size:12.5px;font-weight:600;font-family:var(--font);cursor:pointer;' +
+                    'border:1px solid ' + (actief ? kleur : 'var(--b1,#DCD9D0)') + ';border-radius:8px;' +
+                    'background:' + (actief ? (w === 'aan' ? 'var(--gwash,#EDF3EE)' : (w === 'meekijk' ? 'var(--awash2,#F7E9D8)' : 'var(--wash,#EFEDE6)')) : 'var(--card,#FDFCFA)') + ';' +
+                    'color:' + (actief ? kleur : 'var(--g2,#5F5E56)') + '">' + label + '</button>';
+            }).join('');
+            const sub = [];
+            if (f.wachtDagen) sub.push('wacht ' + f.wachtDagen + ' d');
+            if (f.snel) sub.push('elke minuut');
+            if (f.wachtrij) sub.push(f.wachtrij + ' in wachtrij');
+            sub.push(f.acties + ' acties · laatste: ' + fmt(f.laatsteActie));
+            return '<div class="card" style="margin-bottom:10px;padding:14px 16px">' +
+                '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:4px">' +
+                '  <div style="font-size:14.5px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(f.naam) + '</div>' +
+                (isFout ? '<span style="flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--red2,#B4372F)">FOUT — GEPAUZEERD</span>' : '') +
+                '</div>' +
+                '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-bottom:10px">' + this.escapeHtml(sub.join(' · ')) + '</div>' +
+                (f.laatsteFout ? '<div style="font-size:11.5px;color:var(--red2,#B4372F);margin:-4px 0 10px">' + this.escapeHtml(f.laatsteFout) + '</div>' : '') +
+                '<div style="display:flex;gap:8px">' + knoppen + '</div>' +
+                '</div>';
+        }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen flows.</div>';
+    },
+
+    async setAutoFlow(key, stand) {
+        const paar = RobawsAPI._personalPair ? RobawsAPI._personalPair() : null;
+        if (!paar || !paar.key) {
+            this.toast('Alleen met een eigen kluis-key — vraag Levi', true);
+            return;
+        }
+        try {
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/automations-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: paar.key, secret: paar.secret, flows: { [key]: stand } }),
+            }, 8000);
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+            this.toast(stand === 'aan' ? 'Automation AAN' : (stand === 'meekijk' ? 'Automation op Meekijk' : 'Automation uit'));
+            this.loadAutoFlows();
+        } catch (e) {
+            this.toast('Omzetten mislukt: ' + ((e && e.message) || '?'), true);
+        }
+    },
+
     async loadAdmin() {
         const list = document.getElementById('adminEmpList');
         if (!list) return;
         if (!this._adminIsBureel()) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen toegang.</p>'; return; }
+        this.loadAutoFlows();   // v339: automations-paneel parallel laden
         list.innerHTML = '<div class="spinner"></div>';
         try {
             const emps = await RobawsAPI.adminListEmployees();
