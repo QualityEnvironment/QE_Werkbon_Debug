@@ -1026,7 +1026,8 @@ const RobawsAPI = {
             const data = r.data || {};
             const items = data.items || (data.data && data.data.items) || [];
             for (const p of items) {
-                const naam = (p.planningName || p.name || p.title || '').trim();
+                const ev = p.extraFields && p.extraFields['Naam Project'];
+                const naam = ((p.planningName || p.name || p.title) || (ev && ev.stringValue) || '').trim();
                 if (naam) alles.push({ id: String(p.id), logicId: p.logicId || '', name: naam });
             }
             if (items.length < 100) break;
