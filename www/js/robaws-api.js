@@ -1014,6 +1014,27 @@ const RobawsAPI = {
         return true;
     },
 
+    /** v340: alle projecten (lite) voor naam-herkenning op facturen —
+     *  cache 1 uur; max 2 pagina's à 100 (ruim boven het actieve bestand). */
+    async getAllProjectsLite() {
+        const nu = Date.now();
+        if (this._projAllCache && (nu - this._projAllCache.at) < 3600e3) return this._projAllCache.items;
+        const alles = [];
+        for (let page = 0; page < 2; page++) {
+            const r = await this.get('projects?page=' + page + '&size=100');
+            if (r.code !== 200) break;
+            const data = r.data || {};
+            const items = data.items || (data.data && data.data.items) || [];
+            for (const p of items) {
+                const naam = (p.planningName || p.name || p.title || '').trim();
+                if (naam) alles.push({ id: String(p.id), logicId: p.logicId || '', name: naam });
+            }
+            if (items.length < 100) break;
+        }
+        this._projAllCache = { at: nu, items: alles };
+        return alles;
+    },
+
     /** Projecten zoeken voor de toewijs-picker (searchText + lokale filter). */
     async searchProjects(query, limit) {
         const q = query ? ('&searchText=' + encodeURIComponent(query)) : '';

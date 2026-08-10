@@ -9985,19 +9985,31 @@ const app = {
             const needProject = !lines.every(l => l.projectId);
             const needOrder = !lines.every(l => l.salesOrderId);
             if (!needProject && !needOrder) return;
+            // v340: tekstbronnen = lijn-omschrijvingen + PDF (indien aanwezig).
+            // Zo werkt de naam-herkenning ook op facturen zonder tekst-PDF.
+            let text = ' ' + lines.map(l => l.description || '').join(' ');
             const docId = await RobawsAPI.getPurchaseInvoiceDocumentId(invoiceId);
-            if (!docId) return;
-            const doc = await RobawsAPI.getDocumentUrl(docId);
-            if (!doc || !doc.blob) return;
-            let text = '';
-            try { text = await this._extractPdfText(doc.blob); } catch (_e) {}
-            if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
+            if (docId) {
+                try {
+                    const doc = await RobawsAPI.getDocumentUrl(docId);
+                    if (doc && doc.blob) {
+                        try { text += ' ' + await this._extractPdfText(doc.blob); } catch (_e) {}
+                        if (doc.blobUrl) { try { URL.revokeObjectURL(doc.blobUrl); } catch (_e) {} }
+                    }
+                } catch (_e) { /* PDF optioneel */ }
+            }
             const uniq = (re) => Array.from(new Set((text.match(re) || []).map(m => m.toUpperCase().replace(/[\s-]/g, ''))));
             const suggestions = [];
             if (needProject) {
                 for (const c of uniq(/\bP\s?-?\s?\d{6}\b/gi)) {
                     const proj = await RobawsAPI.getProjectByLogicId(c);
                     if (proj) { suggestions.push({ kind: 'project', id: proj.id, logicId: proj.logicId, name: proj.name }); break; }
+                }
+                // v340: geen P-nummer gevonden → PROJECTNAAM herkennen
+                // (leveranciers zetten de werfnaam als referentie, niet ons nummer)
+                if (!suggestions.some(s => s.kind === 'project')) {
+                    const hit = await this._matchProjectNaam(text);
+                    if (hit) suggestions.push({ kind: 'project', id: hit.id, logicId: hit.logicId, name: hit.name, via: 'naam' });
                 }
             }
             if (needOrder) {
@@ -10010,6 +10022,39 @@ const app = {
         } catch (_e) { /* suggestie is optioneel — stil falen */ }
     },
 
+    /** v340: projectnaam herkennen in factuurtekst. Bewust streng —
+     *  boekhouding verdraagt geen gok: (a) de volledige genormaliseerde
+     *  naam komt voor als doorlopende tekst, of (b) álle betekenis-
+     *  woorden van de naam (≥4 tekens, geen stopwoord) staan erin.
+     *  Korte/vage namen (<10 tekens of <2 woorden) doen nooit mee.
+     *  Bij meerdere hits wint de langste (meest specifieke) naam. */
+    async _matchProjectNaam(ruweTekst) {
+        const norm = (s) => String(s || '').toLowerCase()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const STOP = new Set(['deel', 'fase', 'lot', 'blok', 'gebouw', 'nieuwbouw', 'renovatie',
+            'verbouwing', 'project', 'werf', 'school', 'kerk', 'straat', 'laan', 'plein']);
+        const tekst = ' ' + norm(ruweTekst) + ' ';
+        if (tekst.length < 12) return null;
+        let projecten = [];
+        try { projecten = await RobawsAPI.getAllProjectsLite(); } catch (_e) { return null; }
+        const hits = [];
+        for (const p of projecten) {
+            const n = norm(p.name);
+            if (n.length < 10) continue;
+            const woorden = n.split(' ').filter(w => w.length >= 4 && !STOP.has(w));
+            if (n.split(' ').length < 2) continue;
+            if (tekst.includes(' ' + n + ' ') || tekst.includes(n)) {
+                hits.push({ p, score: n.length + 100 });      // volledige naam = sterkst
+            } else if (woorden.length >= 2 && woorden.every(w => tekst.includes(w))) {
+                hits.push({ p, score: woorden.join('').length });
+            }
+        }
+        if (!hits.length) return null;
+        hits.sort((a, b) => b.score - a.score);
+        return hits[0].p;
+    },
+
     _showRefSuggestion(invoiceId, suggestions) {
         if (this._factuurInvoiceId !== String(invoiceId)) return;
         const host = document.getElementById('factuurRefSuggest');
@@ -10018,7 +10063,12 @@ const app = {
         const rows = suggestions.map((s, i) => {
             const noun = s.kind === 'order' ? 'verkooporder' : 'project';
             const naam = (s.name || '').trim();
-            return `<div style="font-size:12.5px;color:var(--ink,#1A237E);line-height:1.4${i ? ';margin-top:12px' : ''}">📎 Referentie <b>${this.escapeHtml(s.logicId)}</b> gevonden in de PDF${naam ? (' → ' + noun + ' <b>' + this.escapeHtml(naam) + '</b>') : ''}.</div>
+            // v340: naam-herkenning heeft een eigen boodschap — er stond geen
+            // P-nummer op de factuur, de wérfnaam is herkend.
+            const kop = s.via === 'naam'
+                ? `📎 Projectnaam <b>${this.escapeHtml(naam)}</b> (${this.escapeHtml(s.logicId)}) herkend op de factuur.`
+                : `📎 Referentie <b>${this.escapeHtml(s.logicId)}</b> gevonden in de PDF${naam ? (' → ' + noun + ' <b>' + this.escapeHtml(naam) + '</b>') : ''}.`;
+            return `<div style="font-size:12.5px;color:var(--ink,#1A237E);line-height:1.4${i ? ';margin-top:12px' : ''}">${kop}</div>
             <button class="btn btn-primary btn-sm btn-full" style="margin-top:8px" onclick="app.applyRefSuggestion(${i})">Koppel alle lijnen aan ${this.escapeHtml(s.logicId)}</button>`;
         }).join('');
         host.innerHTML = `<div class="card" style="margin-bottom:12px;padding:14px 16px;border:1.5px solid var(--qe-green,#3E7A54)">${rows}</div>`;
