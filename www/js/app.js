@@ -8578,7 +8578,10 @@ const app = {
                 '</div>' +
                 '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-bottom:10px">' + this.escapeHtml(sub.join(' · ')) + '</div>' +
                 (f.laatsteFout ? '<div style="font-size:11.5px;color:var(--red2,#B4372F);margin:-4px 0 10px">' + this.escapeHtml(f.laatsteFout) + '</div>' : '') +
-                '<div id="' + regelsId + '" style="display:none;margin:0 0 12px;padding:4px 0 2px">' + this._autoRegelsHtml(f.regels) + '</div>' +
+                '<div id="' + regelsId + '" style="display:none;margin:0 0 12px;padding:4px 0 2px">' + this._autoRegelsHtml(f.regels) +
+                '  <button onclick="event.stopPropagation();app.openAutoLog(\'' + f.key + '\',\'' + this.escapeHtml(f.naam).replace(/'/g, '&#39;') + '\')" ' +
+                'style="margin-top:10px;width:100%;padding:9px;font-size:12.5px;font-weight:600;font-family:var(--font);cursor:pointer;border:1px solid var(--b2,#CAC7BE);border-radius:8px;background:none;color:var(--ink,#26334B)">Open logs</button>' +
+                '</div>' +
                 '<div style="display:flex;gap:8px">' + knoppen + '</div>' +
                 '</div>';
         }).join('');
@@ -8598,6 +8601,50 @@ const app = {
 
         el.innerHTML = (kaarten || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen flows.</div>') +
             (natief ? '<div style="font-size:12px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--g1,#85847C);margin:16px 0 10px">Bewust in Robaws (5 gratis slots)</div>' + natief : '');
+    },
+
+    /** v342: logboek van één automation — regels uit de Worker-ring-buffer.
+     *  Overlay volgens het v337-patroon: de overlay zelf scrollt (geen
+     *  geneste vh-box — WebView-les). */
+    async openAutoLog(key, naam) {
+        const oud = document.getElementById('autoLogSheet');
+        if (oud) oud.remove();
+        let regels = [];
+        let fout = null;
+        try {
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/automations-log?flow=' + encodeURIComponent(key), {}, 8000);
+            const j = await r.json();
+            regels = (j && j.regels) || [];
+        } catch (e) { fout = (e && e.message) || '?'; }
+        const fmt = (iso) => {
+            const d = new Date(iso);
+            return d.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' ' +
+                d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+        };
+        const rijen = fout
+            ? '<div style="padding:18px 4px;text-align:center;color:var(--red2,#B4372F);font-size:13px">Logboek niet bereikbaar (' + this.escapeHtml(fout) + ')</div>'
+            : (regels.length ? regels.map(x =>
+                '<div style="padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0)">' +
+                '<div style="font-size:10.5px;color:var(--g3,#A3A29A);font-variant-numeric:tabular-nums">' + fmt(x.t) + ' · ' + this.escapeHtml(x.m || '') + '</div>' +
+                '<div style="font-size:12.5px;color:var(--txt2,#3A4356);line-height:1.45;word-break:break-word">' + this.escapeHtml(x.r || '') + '</div></div>'
+            ).join('')
+            : '<div style="padding:18px 4px;text-align:center;color:var(--qe-grey);font-size:13px">Nog geen logregels — deze flow heeft nog niets gedaan of gezien.<br>Meekijk-regels verschijnen hier zodra er iets gebeurt.</div>');
+        const ov = document.createElement('div');
+        ov.id = 'autoLogSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Logboek</div>' +
+            '    <div style="font-size:18px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">' + this.escapeHtml(naam || key) + '</div></div>' +
+            '    <button onclick="document.getElementById(\'autoLogSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            rijen +
+            '  <div style="font-size:11px;color:var(--qe-grey);margin-top:10px;line-height:1.5">Laatste 100 regels van deze flow (nieuwste eerst). Volledige technische logs: Cloudflare-dashboard → Workers → qe-mollie-webhook → Logs.</div>' +
+            '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
     },
 
     async setAutoFlow(key, stand) {
