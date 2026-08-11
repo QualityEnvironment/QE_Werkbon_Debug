@@ -622,6 +622,11 @@ const app = {
         // Body-class zetten zodat CSS elementen kan verbergen voor monteurs
         document.body.classList.toggle('monteur-mode', this.isMonteur());
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
+        // v346: Logistiek-tab alleen voor bureel
+        try {
+            const nl = document.getElementById('navLogistiek');
+            if (nl) nl.style.display = (this.currentUser && this.currentUser.role === 'bureel') ? '' : 'none';
+        } catch (_e) {}
         // Avatar in header laden
         this.refreshAvatar();
         this.buildDateStrip();
@@ -805,6 +810,9 @@ const app = {
             const _wu = RobawsAPI.getLoggedInUser();
             const _isBureel = !!(_wu && _wu.role === 'bureel');
             werknSection.style.display = (_isBureel || this._isUrenAnalyseAllowed()) ? '' : 'none';
+            // v344: Automations-rij (Instellingen-groep) — alleen bureel
+            const autoRow = document.getElementById('pgRowAutomations');
+            if (autoRow) autoRow.style.display = _isBureel ? '' : 'none';
         }
 
         this.navigate('screenProfile');
@@ -8668,11 +8676,195 @@ const app = {
         }
     },
 
+    // =========================================================
+    // v346: LOGISTIEK (bureel) — Voertuigen & keuringen.
+    // Registratie leeft op Materieel: naam = nummerplaat, merk in
+    // brand, chauffeur in assignedEmployeeId, datums in extravelden
+    // "Laatste keuring" / "Keuring geldig tot" (DATE).
+    // =========================================================
+    _isVoertuig(m) { return /\d-[A-Z]{2,3}-\d{2,3}/i.test(String(m.name || '')); },
+
+    _keuringVeld(m, naam) {
+        const f = m.extraFields && m.extraFields[naam];
+        return f ? (f.dateValue ?? f.stringValue ?? f.value ?? null) : null;
+    },
+
+    /** groen (>60 d) · oranje (≤60 d) · rood (≤30 d) · verlopen */
+    _keuringStatus(geldigTot) {
+        if (!geldigTot) return { key: 'onbekend', kleur: 'var(--g3,#A3A29A)', label: 'geen datum' };
+        const dagen = Math.floor((new Date(geldigTot + 'T12:00:00') - new Date()) / 86400e3);
+        if (dagen < 0)   return { key: 'verlopen', kleur: 'var(--red2,#B4372F)', label: 'VERLOPEN', dagen };
+        if (dagen <= 30) return { key: 'rood',     kleur: 'var(--red2,#B4372F)', label: 'nog ' + dagen + ' d', dagen };
+        if (dagen <= 60) return { key: 'oranje',   kleur: 'var(--amber,#D97E24)', label: 'nog ' + dagen + ' d', dagen };
+        return { key: 'groen', kleur: 'var(--green2,#3E7A54)', label: 'nog ' + dagen + ' d', dagen };
+    },
+
+    openLogistiek() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this.navigate('screenLogistiek');
+    },
+
+    openVoertuigen() {
+        this.navigate('screenVoertuigen', true);
+        this.loadVoertuigen();
+    },
+
+    async loadVoertuigen() {
+        const el = document.getElementById('voertuigenList');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const [mats, emps, planningen] = await Promise.all([
+                RobawsAPI.getMaterials({ bypassCache: true }),
+                RobawsAPI.getActiveEmployees().catch(() => []),
+                RobawsAPI.getKeuringPlanningen().catch(() => []),
+            ]);
+            this._voertuigEmps = emps;
+            this._keuringPlanningen = planningen;
+            const voertuigen = mats.filter(m => this._isVoertuig(m));
+            this._voertuigen = {};
+            voertuigen.forEach(v => { this._voertuigen[v.id] = v; });
+            // sorteren: urgentste eerst (verlopen → kortste resterend → geen datum achteraan)
+            voertuigen.sort((a, b) => {
+                const ga = this._keuringVeld(a, 'Keuring geldig tot') || '9999-12-31';
+                const gb = this._keuringVeld(b, 'Keuring geldig tot') || '9999-12-31';
+                return ga.localeCompare(gb);
+            });
+            const fmt = (iso) => iso ? new Date(iso + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+            el.innerHTML = voertuigen.map(v => {
+                const gt = this._keuringVeld(v, 'Keuring geldig tot');
+                const st = this._keuringStatus(gt);
+                const verlopen = st.key === 'verlopen';
+                const chauffeur = this._voertuigChauffeur(v);
+                const gepland = this._keuringGeplandVoor(v.name);
+                return '<div class="card" style="margin-bottom:10px;padding:14px 16px;cursor:pointer;' +
+                    (verlopen ? 'background:var(--rwash,#F6E7E5);border-color:var(--red2,#B4372F)' : '') +
+                    '" onclick="app.openVoertuig(\'' + v.id + '\')">' +
+                    '<div style="display:flex;align-items:center;gap:12px">' +
+                    '  <span style="flex-shrink:0;width:11px;height:11px;border-radius:50%;background:' + st.kleur + '"></span>' +
+                    '  <div style="flex:1;min-width:0">' +
+                    '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(v.name || '') + '</div>' +
+                    '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + this.escapeHtml((v.brand || '') + (chauffeur ? ' · ' + chauffeur.name : '')) + '</div>' +
+                    '  </div>' +
+                    '  <div style="flex-shrink:0;text-align:right">' +
+                    '    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:' + (verlopen ? 'var(--red2,#B4372F)' : 'var(--ink,#26334B)') + '">' + fmt(gt) + '</div>' +
+                    '    <div style="font-size:11px;color:' + st.kleur + ';font-weight:600">' + st.label + (gepland ? ' · 📅 gepland' : '') + '</div>' +
+                    '  </div></div></div>';
+            }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen voertuigen in Materieel.</div>';
+            const sub = document.getElementById('logVoertuigenSub');
+            if (sub) {
+                const acties = voertuigen.filter(v => ['verlopen', 'rood', 'oranje'].includes(this._keuringStatus(this._keuringVeld(v, 'Keuring geldig tot')).key)).length;
+                sub.textContent = voertuigen.length + ' voertuigen' + (acties ? ' · ' + acties + ' keuring(en) op komst' : '');
+            }
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
+        }
+    },
+
+    _voertuigChauffeur(v) {
+        const id = String(v.assignedEmployeeId || '');
+        if (!id) return null;
+        return (this._voertuigEmps || []).find(e => String(e.id) === id) || null;
+    },
+
+    _keuringGeplandVoor(plaat) {
+        const p = String(plaat || '');
+        return (this._keuringPlanningen || []).find(x => (x.summary || '').includes(p)) || null;
+    },
+
+    openVoertuig(materialId) {
+        const v = (this._voertuigen || {})[materialId];
+        if (!v) return;
+        const oud = document.getElementById('voertuigSheet');
+        if (oud) oud.remove();
+        const gt = this._keuringVeld(v, 'Keuring geldig tot');
+        const lk = this._keuringVeld(v, 'Laatste keuring');
+        const st = this._keuringStatus(gt);
+        const chauffeur = this._voertuigChauffeur(v);
+        const gepland = this._keuringGeplandVoor(v.name);
+        const fmt = (iso) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
+        const emps = (this._voertuigEmps || []);
+        const opties = emps.map(e => '<option value="' + e.id + '"' + (chauffeur && String(e.id) === String(chauffeur.id) ? ' selected' : '') + '>' + this.escapeHtml(e.name) + '</option>').join('');
+        const rij = (l, w, kleur) => '<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px"><span style="color:var(--g2,#5F5E56)">' + l + '</span><span style="font-weight:600;font-variant-numeric:tabular-nums;' + (kleur ? 'color:' + kleur : '') + '">' + w + '</span></div>';
+        const vandaag = new Date().toISOString().slice(0, 10);
+        const ov = document.createElement('div');
+        ov.id = 'voertuigSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + st.kleur + '">' + st.label + '</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">' + this.escapeHtml(v.name || '') + '</div></div>' +
+            '    <button onclick="document.getElementById(\'voertuigSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            rij('Merk', this.escapeHtml(v.brand || '—')) +
+            rij('Chauffeur', this.escapeHtml(chauffeur ? chauffeur.name : '—')) +
+            rij('Laatste keuring', fmt(lk)) +
+            rij('Geldig tot', fmt(gt), st.key === 'verlopen' ? 'var(--red2,#B4372F)' : null) +
+            (gepland ? rij('📅 Keuring gepland', fmt(gepland.startDate)) : '') +
+            '  <div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Keuring inplannen</div>' +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="vkDatum" class="form-input" style="flex:1" min="' + vandaag + '">' +
+            '    <select id="vkWie" class="form-input" style="flex:1.3">' + opties + '</select>' +
+            '  </div>' +
+            '  <button class="btn btn-primary btn-full" style="margin-top:10px" onclick="app.planKeuring(\'' + v.id + '\')">Inplannen (06:45 · Keuring Deurne)</button>' +
+            '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Keuring uitgevoerd?</div>' +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="vkGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
+            '    <button class="btn btn-outline" style="flex:1.3" onclick="app.keuringUitgevoerd(\'' + v.id + '\')">Registreren (+1 jaar geldig)</button>' +
+            '  </div>' +
+            '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+    },
+
+    async planKeuring(materialId) {
+        const v = (this._voertuigen || {})[materialId];
+        const datum = (document.getElementById('vkDatum') || {}).value;
+        const wieId = (document.getElementById('vkWie') || {}).value;
+        if (!v || !datum) { this.toast('Kies eerst een datum', true); return; }
+        const wie = (this._voertuigEmps || []).find(e => String(e.id) === String(wieId));
+        if (!wie) { this.toast('Kies een werknemer', true); return; }
+        if (this._planKeuringBusy) return;
+        this._planKeuringBusy = true;
+        try {
+            await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.id, employeeName: wie.name, plaat: v.name });
+            this.toast('Keuring gepland op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' voor ' + wie.name);
+            const s = document.getElementById('voertuigSheet'); if (s) s.remove();
+            this.loadVoertuigen();
+        } catch (e) {
+            this.toast('Inplannen mislukt: ' + ((e && e.message) || '?'), true);
+        } finally { this._planKeuringBusy = false; }
+    },
+
+    async keuringUitgevoerd(materialId) {
+        const v = (this._voertuigen || {})[materialId];
+        const datum = (document.getElementById('vkGedaan') || {}).value;
+        if (!v || !datum) { this.toast('Kies de keuringsdatum', true); return; }
+        if (this._planKeuringBusy) return;
+        this._planKeuringBusy = true;
+        try {
+            const geldigTot = await RobawsAPI.setMaterialKeuring(materialId, datum);
+            this.toast('Keuring geregistreerd — geldig tot ' + new Date(geldigTot + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short', year: 'numeric' }));
+            const s = document.getElementById('voertuigSheet'); if (s) s.remove();
+            this.loadVoertuigen();
+        } catch (e) {
+            this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
+        } finally { this._planKeuringBusy = false; }
+    },
+
+    /** v344: Automations heeft een eigen scherm onder Instellingen. */
+    openAutomations() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this.navigate('screenAutomations', true);
+        this.loadAutoFlows();
+    },
+
     async loadAdmin() {
         const list = document.getElementById('adminEmpList');
         if (!list) return;
         if (!this._adminIsBureel()) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen toegang.</p>'; return; }
-        this.loadAutoFlows();   // v339: automations-paneel parallel laden
         list.innerHTML = '<div class="spinner"></div>';
         try {
             const emps = await RobawsAPI.adminListEmployees();

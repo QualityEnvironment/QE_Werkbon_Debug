@@ -1069,6 +1069,17 @@
             <div id="roleSwitchNote" style="font-size:12px;color:var(--amber2);margin:-6px 0 12px;display:none;font-weight:500"></div>
         </div>
 
+        <!-- v344: Automations — eigen scherm (alleen bureel ziet deze rij) -->
+        <div class="card mb-prowcard" id="pgRowAutomations" style="margin-bottom:14px;padding:4px 18px;display:none">
+            <div class="mb-prow" style="border-bottom:none" onclick="app.openAutomations()">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Automations</div>
+                    <div class="mb-prow-s">Robaws-workflows op de QE-server aan/uit</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
+
         <!-- PIN wijzigen: inklapbaar zoals het prototype -->
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
@@ -1233,17 +1244,42 @@
         </div>
     </div>
     <div id="adminEmpList"><div class="spinner"></div></div>
+</div>
 
-    <!-- v339: Automations-paneel (Worker-flows aan/uit, bureel-only) -->
-    <div class="section-header" style="margin-top:18px"><h2>Automations</h2></div>
+<!-- ========== SCREEN: AUTOMATIONS (v344 — eigen scherm, bureel) ========== -->
+<div class="screen" id="screenAutomations">
+    <div class="section-header"><h2>Automations</h2></div>
     <div class="card" style="margin-bottom:12px">
         <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
             Zelfgebouwde Robaws-workflows op de QE-server. <b>Meekijk</b> = de flow
             logt wat hij zou doen zonder iets te schrijven — zet een nieuwe flow
             eerst een paar dagen op Meekijk. Omzetten werkt binnen de minuut.
+            Tik een kaart aan voor de logica en de logs.
         </div>
     </div>
     <div id="autoFlowList"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: LOGISTIEK (v346 — hub, alleen bureel) ========== -->
+<div class="screen" id="screenLogistiek">
+    <div class="section-header"><h2>Logistiek</h2></div>
+    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openVoertuigen()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:600;color:var(--ink)">Voertuigen</div>
+            <div id="logVoertuigenSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Vloot &amp; keuringen</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
+    <div style="font-size:12px;color:var(--g3);text-align:center;margin-top:18px">Meer logistiek volgt hier later.</div>
+</div>
+
+<!-- ========== SCREEN: VOERTUIGEN (v346) ========== -->
+<div class="screen" id="screenVoertuigen">
+    <div class="section-header"><h2>Voertuigen</h2></div>
+    <div id="voertuigenList"><div class="spinner"></div></div>
 </div>
 
 <!-- ========== SCREEN: CORRECTIE ========== -->
@@ -1382,6 +1418,12 @@
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
         Klaar
+    </button>
+    <button class="nav-item" data-screen="screenLogistiek" id="navLogistiek" style="display:none" onclick="app.openLogistiek()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+        </svg>
+        Logistiek
     </button>
     <button class="nav-item" data-screen="screenAanvragen" onclick="app.navigate('screenAanvragen')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

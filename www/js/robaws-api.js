@@ -119,6 +119,29 @@ const RobawsAPI = {
             }
             await new Promise(r => setTimeout(r, 400));  // rustig aan (burst)
         }
+        // v345: SCHRIJFRECHTEN-proef zonder iets aan te maken — een lege POST
+        // geeft 400/422 als de machtiging er is (validatie faalt pas ná de
+        // rechten-check) en 403 als ze mist. Les van 10 aug: drie
+        // rechten-gaten doken pas in het veld op (users-lezen,
+        // aankoopfacturen-lezen, verkoopfacturen-WIJZIGEN bij de technieker).
+        const schrijfProbes = [
+            ['verkoopfactuur maken (rechten-proef)', 'sales-invoices'],
+            ['taak maken (rechten-proef)', 'tasks'],
+        ];
+        for (const [naam, ep] of schrijfProbes) {
+            try {
+                const r = await this.post(ep, {});
+                const ok = (r.code === 400 || r.code === 422);
+                out.push('[gedeeld] ' + naam + ' → ' + r.code + (ok ? ' ✓ (machtiging aanwezig)' :
+                    (r.code === 403 ? ' ✗ MACHTIGING MIST — aanzetten in Robaws' : ' ? onverwacht')));
+            } catch (e) {
+                const msg = String((e && e.message) || '?');
+                const code = (msg.match(/\b(400|403|422)\b/) || [])[1];
+                out.push('[gedeeld] ' + naam + ' → ' + (code === '403' ? '403 ✗ MACHTIGING MIST — aanzetten in Robaws'
+                    : (code ? code + ' ✓ (machtiging aanwezig)' : 'FOUT: ' + msg.slice(0, 60))));
+            }
+            await new Promise(r => setTimeout(r, 400));
+        }
         // Persoonlijke key: alleen de identiteits-rechten testen
         // (goedkeuren + mailen — v332: mails vertrekken ook op eigen naam).
         if (this.hasPersonalKey()) {
@@ -1236,6 +1259,53 @@ const RobawsAPI = {
             offset += SIZE;
         }
         return all;
+    },
+
+    // =============================================
+    // v346: VOERTUIGEN & KEURINGEN (Logistiek-tab)
+    // =============================================
+    KEURING_PLANNING_TYPE_ID: '51',   // planningstype "Keuring" (gemeten)
+
+    /** Keuring-datums van een voertuig bijwerken: laatste = gekozen datum,
+     *  geldig tot = +1 jaar. Merge-PATCH — live bewezen (backfill 10 aug). */
+    async setMaterialKeuring(materialId, laatsteISO) {
+        const [y, m, d] = String(laatsteISO).slice(0, 10).split('-').map(Number);
+        const geldigTot = (y + 1) + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const res = await this.patchMerge('materials/' + materialId, { extraFields: {
+            'Laatste keuring':    { type: 'DATE', group: 'Keuring', dateValue: String(laatsteISO).slice(0, 10) },
+            'Keuring geldig tot': { type: 'DATE', group: 'Keuring', dateValue: geldigTot },
+        } });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return geldigTot;
+    },
+
+    /** Keuring inplannen: dagplanning type "Keuring", 06:45-08:00 lokale
+     *  tijd, adres Keuring Deurne. POST live bewezen (proef 10 aug). */
+    async createKeuringPlanning({ datumISO, employeeId, employeeName, plaat }) {
+        const dag = String(datumISO).slice(0, 10);
+        const start = new Date(dag + 'T06:45:00');
+        const eind = new Date(dag + 'T08:00:00');
+        const res = await this.post('planning-items', {
+            planningTypeId: this.KEURING_PLANNING_TYPE_ID,
+            employeeIds: [String(employeeId)],
+            summary: employeeName + ' - Keuring ' + plaat,
+            startDate: start.toISOString(),
+            endDate: eind.toISOString(),
+            address: { addressLine1: 'Keuring Deurne', city: 'Deurne', country: 'BE' },
+        });
+        if (res.code !== 200 && res.code !== 201) throw new Error('Robaws gaf status ' + res.code);
+        return (res.data && res.data.id) || null;
+    },
+
+    /** Geplande keuringen (komende 120 d) — client-side op type gefilterd
+     *  (planningTypeId-filter werkt niet server-side; wacht-les v314). */
+    async getKeuringPlanningen() {
+        const van = new Date(); const tot = new Date(Date.now() + 120 * 24 * 3600e3);
+        const iso = (d) => d.toISOString().slice(0, 10);
+        const r = await this.get('planning-items?fromDate=' + iso(van) + '&toDate=' + iso(tot) + '&limit=100', { bypassCache: true });
+        if (r.code !== 200) return [];
+        const items = (r.data && (r.data.items || [])) || [];
+        return items.filter(p => String(p.planningTypeId) === this.KEURING_PLANNING_TYPE_ID);
     },
 
     async _getMaterieelFresh(materialId) {
