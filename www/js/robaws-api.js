@@ -1385,6 +1385,15 @@ const RobawsAPI = {
         return String(id);
     },
 
+    /** v357: HTML-document (onderhoudsregistratie) op een materiaal zetten.
+     *  Zelfde route als de foto-upload; text/html i.p.v. afbeelding. */
+    async uploadMaterialHtml(materialId, html, fileName) {
+        const file = new File([new Blob([html], { type: 'text/html' })], fileName, { type: 'text/html' });
+        const res = await this.uploadFile('materials/' + materialId + '/documents', file, fileName);
+        if (res.code !== 200 && res.code !== 201) throw new Error('Upload gaf status ' + res.code);
+        return (res.data && res.data.id) || null;
+    },
+
     /** v352: foto (dataURL) als document op een materiaal zetten.
      *  POST /materials/{id}/documents live bewezen (upload+delete-proef 12 aug).
      *  Geeft het document-id terug; gooit bij non-2xx. */

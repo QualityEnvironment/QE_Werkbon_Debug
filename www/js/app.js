@@ -9121,36 +9121,53 @@ const app = {
         return l ? l.name : null;
     },
 
-    _gsKaart(m) {
+    /** v356: item-rij binnen een open groepskaart. sub = 'locatie' | 'soort'
+     *  (per-soort-weergave toont de locatie onder de naam — vraag Levi;
+     *  per-locatie-weergave toont daar de soort, anders staat er 2× hetzelfde). */
+    _gsRij(m, sub) {
         const st = this._gsStatus(m);
-        const verlopen = st.key === 'verlopen';
         const gepland = this._keuringVeld(m, 'Keuring ingepland op');
-        const loc = this._gsLocNaam(m.stockLocationId);
         const BLAUW = '#3D6EA8';
         const volgOnd = this._gsVolgendOnderhoud(m);
         const ondLaat = volgOnd && volgOnd <= new Date().toISOString().slice(0, 10);
-        const sub = [m.brand, m.serialNumber ? 'SN ' + m.serialNumber : null, loc].filter(Boolean).join(' · ');
-        return '<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer;' +
-            (verlopen ? 'background:var(--rwash,#F6E7E5);border-color:var(--red2,#B4372F)' : '') +
-            '" onclick="app.openGereedschapItem(\'' + m.id + '\')">' +
-            '<div style="display:flex;align-items:center;gap:11px">' +
+        const subTekst = sub === 'soort'
+            ? (this._gsSoort(m) || 'Zonder soort')
+            : (this._gsLocNaam(m.stockLocationId) || 'Geen locatie');
+        return '<div style="display:flex;align-items:center;gap:11px;padding:11px 2px;border-top:1px solid var(--l2,#EBE8E0);cursor:pointer" onclick="event.stopPropagation();app.openGereedschapItem(\'' + m.id + '\')">' +
             '  <span style="flex-shrink:0;width:10px;height:10px;border-radius:50%;background:' + (gepland ? BLAUW : st.kleur) + '"></span>' +
             '  <div style="flex:1;min-width:0">' +
-            '    <div style="font-size:14.5px;font-weight:600;color:var(--ink,#26334B);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(m.name || '') + '</div>' +
-            (sub ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(sub) + '</div>' : '') +
+            '    <div style="font-size:14px;font-weight:600;color:var(--ink,#26334B);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(m.name || '') + '</div>' +
+            '    <div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(subTekst) + '</div>' +
             '  </div>' +
-            '  <div style="flex-shrink:0;font-size:11px;font-weight:600;color:' + st.kleur + '">' + st.label + '</div>' +
-            '</div>' +
-            ((gepland || ondLaat) ? '<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--l2,#EBE8E0);font-size:11.5px;font-weight:600;color:' + (gepland ? BLAUW : 'var(--amber,#D97E24)') + '">' +
-                (gepland ? '📅 Keuring ingepland op ' + this.escapeHtml(new Date(gepland + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' })) : '🔧 Onderhoud over tijd (tegen ' + this.escapeHtml(new Date(volgOnd + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' })) + ')') +
-            '</div>' : '') +
+            '  <div style="flex-shrink:0;font-size:11px;font-weight:600;color:' + st.kleur + '">' + (ondLaat ? '🔧 ' : '') + st.label + '</div>' +
             '</div>';
+    },
+
+    gsToggleGroep(idx) {
+        const g = (this._gsGroepen || [])[idx];
+        if (!g) return;
+        this._gsOpen = this._gsOpen || {};
+        this._gsOpen[g.key] = !this._gsOpen[g.key];
+        this._gsRender();
+    },
+
+    /** Ergste keuringsstatus in een groep → kleur van het groepskaart-lichtje. */
+    _gsGroepKleur(items) {
+        const volgorde = ['verlopen', 'rood', 'nooit', 'oranje', 'groen', 'onbekend', 'vrij', 'uit'];
+        let beste = null, besteIdx = 99;
+        for (const m of items) {
+            const st = this._gsStatus(m);
+            const i = volgorde.indexOf(st.key);
+            if (i >= 0 && i < besteIdx) { besteIdx = i; beste = st; }
+        }
+        return beste ? beste.kleur : 'var(--g3,#A3A29A)';
     },
 
     _gsRender() {
         const el = document.getElementById('gereedschapList');
         if (!el || !this._gsItems) return;
         const s = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
+        this._gsOpen = this._gsOpen || {};
         let items = this._gsItems.slice();
         if (s.filter) items = items.filter(m => this._gsSoort(m) === s.filter);
         if (s.zoek) {
@@ -9161,33 +9178,46 @@ const app = {
         // urgentste eerst binnen elke groep
         const rang = { verlopen: 0, nooit: 1, rood: 2, oranje: 3, groen: 4, onbekend: 5, vrij: 6, uit: 7 };
         const sorteer = (arr) => arr.sort((a, b) => (rang[this._gsStatus(a).key] ?? 9) - (rang[this._gsStatus(b).key] ?? 9) || String(a.name || '').localeCompare(String(b.name || '')));
+        // v356: groepen worden openklikbare KAARTEN (Logistiek-hub-stijl);
+        // per-soort-rijen tonen de locatie, per-locatie-rijen de soort.
         const groepen = [];
         if (s.weergave === 'locatie') {
             // volgorde van de stocklocatie-lijst (magazijnen eerst), rest achteraan
             for (const loc of (this._gsLocs || [])) {
                 const in1 = actief.filter(m => String(m.stockLocationId) === String(loc.id));
-                if (in1.length) groepen.push({ kop: loc.name, items: sorteer(in1) });
+                if (in1.length) groepen.push({ key: 'l:' + loc.id, kop: loc.name, items: sorteer(in1), sub: 'soort' });
             }
             const zonder = actief.filter(m => !m.stockLocationId || !this._gsLocNaam(m.stockLocationId));
-            if (zonder.length) groepen.push({ kop: 'Zonder locatie', items: sorteer(zonder) });
+            if (zonder.length) groepen.push({ key: 'l:geen', kop: 'Zonder locatie', items: sorteer(zonder), sub: 'soort' });
         } else {
             const soorten = [...new Set(actief.map(m => this._gsSoort(m)).filter(Boolean))].sort();
             for (const soort of soorten) {
-                groepen.push({ kop: soort, items: sorteer(actief.filter(m => this._gsSoort(m) === soort)) });
+                groepen.push({ key: 's:' + soort, kop: soort, items: sorteer(actief.filter(m => this._gsSoort(m) === soort)), sub: 'locatie' });
             }
             const zonder = actief.filter(m => !this._gsSoort(m));
-            if (zonder.length) groepen.push({ kop: 'Zonder soort', items: sorteer(zonder) });
+            if (zonder.length) groepen.push({ key: 's:geen', kop: 'Zonder soort', items: sorteer(zonder), sub: 'locatie' });
         }
-        let html = groepen.map(g =>
-            '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C);margin:14px 2px 8px">' +
-            this.escapeHtml(g.kop) + ' <span style="font-weight:500;color:var(--g3,#A3A29A)">(' + g.items.length + ')</span></div>' +
-            g.items.map(m => this._gsKaart(m)).join('')
-        ).join('');
         if (uitDienst.length) {
-            html += '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g3,#A3A29A);margin:14px 2px 8px">Buiten dienst (' + uitDienst.length + ')</div>' +
-                sorteer(uitDienst).map(m => this._gsKaart(m)).join('');
+            groepen.push({ key: 'uit', kop: 'Buiten dienst', items: sorteer(uitDienst), sub: s.weergave === 'locatie' ? 'soort' : 'locatie', uit: true });
         }
-        el.innerHTML = html || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen gereedschap gevonden' + (s.zoek || s.filter ? ' voor deze zoekopdracht/filter.' : ' — voeg toe met "+ Nieuw".') + '</div>';
+        this._gsGroepen = groepen;
+        el.innerHTML = groepen.map((g, idx) => {
+            const open = !!s.zoek || !!this._gsOpen[g.key];   // zoeken = alles open
+            const acties = g.uit ? 0 : g.items.filter(m => ['verlopen', 'rood', 'oranje', 'nooit'].includes(this._gsStatus(m).key)).length;
+            const kleur = g.uit ? 'var(--g3,#A3A29A)' : this._gsGroepKleur(g.items);
+            return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
+                '<div style="display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer" onclick="app.gsToggleGroep(' + idx + ')">' +
+                '  <span style="flex-shrink:0;width:11px;height:11px;border-radius:50%;background:' + kleur + '"></span>' +
+                '  <div style="flex:1;min-width:0">' +
+                '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(g.kop) + '</div>' +
+                '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + g.items.length + ' stuks' +
+                (acties ? ' · <span style="color:var(--amber,#D97E24);font-weight:600">' + acties + ' keuring(en) op komst</span>' : '') + '</div>' +
+                '  </div>' +
+                '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
+                '</div>' +
+                (open ? '<div style="padding:0 16px 4px">' + g.items.map(m => this._gsRij(m, g.sub)).join('') + '</div>' : '') +
+                '</div>';
+        }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen gereedschap gevonden' + (s.zoek || s.filter ? ' voor deze zoekopdracht/filter.' : ' — voeg toe met "+ Nieuw".') + '</div>';
     },
 
     openGereedschapItem(id) {
@@ -9260,10 +9290,9 @@ const app = {
             '  <input type="file" id="vkBewijsCamera" accept="image/*" capture="environment" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
             '  <input type="file" id="vkBewijsGalerij" accept="image/*" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
             kop('Onderhoud uitgevoerd?') +
-            '  <div style="display:flex;gap:8px;margin-top:8px">' +
-            '    <input type="date" id="gsOndGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
-            '    <button class="btn btn-outline" style="flex:1.3" onclick="app.gereedschapOnderhoudUitgevoerd(\'' + m.id + '\')">Registreren</button>' +
-            '  </div>' +
+            // v357: intern onderhoud = volwaardig formulier + ondertekend
+            // verslag in de bestanden van het materieel (voorlegbaar bij keuring)
+            '  <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.openOnderhoudFormulier(\'' + m.id + '\')">🔧 Onderhoud registreren</button>' +
             '  <button class="btn btn-outline btn-full" style="margin-top:16px;color:' + (uit ? 'var(--green2,#3E7A54)' : 'var(--red2,#B4372F)') + '" onclick="app.gereedschapStatusToggle(\'' + m.id + '\')">' +
             (uit ? '↩︎ Terug in dienst zetten' : '⛔ Buiten dienst zetten') + '</button>' +
             '</div></div>';
@@ -9315,11 +9344,215 @@ const app = {
         }, null);
     },
 
-    gereedschapOnderhoudUitgevoerd(id) {
-        const datum = (document.getElementById('gsOndGedaan') || {}).value;
-        if (!datum) { this.toast('Kies de onderhoudsdatum', true); return; }
-        this._gsActie(() => RobawsAPI.setMaterialOnderhoud(id, datum),
-            'Onderhoud geregistreerd op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }));
+    // ---------- v357: onderhoudsformulier (intern onderhoud, met verslag) ----------
+
+    /** Volwaardig onderhoudsformulier: wanneer/wie/wat/resultaat + naam &
+     *  handtekening → Marble-document in de bestanden van het materieel,
+     *  voorlegbaar bij een keuring of controle. Fullscreen overlay
+     *  (v272-les: bottom-sheets verdwijnen achter het toetsenbord). */
+    openOnderhoudFormulier(materialId) {
+        const m = (this._gsAlles || {})[materialId];
+        if (!m) return;
+        const oud = document.getElementById('onderhoudSheet');
+        if (oud) oud.remove();
+        this._ohDocId = null;
+        const vandaag = new Date().toISOString().slice(0, 10);
+        const mijnNaam = (this.currentUser && this.currentUser.name) || '';
+        const lbl = (t) => '<label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">' + t + '</label>';
+        const ov = document.createElement('div');
+        ov.id = 'onderhoudSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99992;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="max-width:560px;margin:0 auto;padding:18px 16px calc(30px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:2px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent,#F99D3E)">Onderhoudsregistratie</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">' + this.escapeHtml(m.name || '') + '</div></div>' +
+            '    <button onclick="document.getElementById(\'onderhoudSheet\').remove()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <div style="font-size:12.5px;color:var(--g1,#85847C);margin-bottom:4px">Dit verslag wordt als document bij het materieel in Robaws bewaard, zodat we het bij een keuring of controle kunnen voorleggen.</div>' +
+            lbl('Datum uitvoering') +
+            '  <input type="date" id="ohDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '">' +
+            lbl('Uitgevoerd door') +
+            '  <input type="text" id="ohDoor" class="form-input" style="width:100%" value="' + this.escapeHtml(mijnNaam) + '">' +
+            lbl('Soort onderhoud') +
+            '  <select id="ohSoort" class="form-input" style="width:100%">' +
+            '    <option>Periodiek onderhoud</option><option>Reiniging</option><option>Herstelling</option><option>Vervanging onderdelen</option><option>Inspectie &amp; test</option>' +
+            '  </select>' +
+            lbl('Uitgevoerde werkzaamheden *') +
+            '  <textarea id="ohWerk" class="form-input" rows="3" style="width:100%;resize:vertical" placeholder="Wat is er gedaan? Bv. koolborstels vervangen, boorkop gereinigd en gesmeerd, snoer en stekker gecontroleerd…"></textarea>' +
+            lbl('Vervangen onderdelen / gebruikte materialen') +
+            '  <textarea id="ohOnderdelen" class="form-input" rows="2" style="width:100%;resize:vertical" placeholder="Optioneel"></textarea>' +
+            lbl('Bevindingen / staat van het toestel') +
+            '  <textarea id="ohBevindingen" class="form-input" rows="2" style="width:100%;resize:vertical" placeholder="Optioneel"></textarea>' +
+            lbl('Resultaat') +
+            '  <select id="ohResultaat" class="form-input" style="width:100%">' +
+            '    <option value="ok">In orde — klaar voor gebruik</option>' +
+            '    <option value="opvolgen">Werkt, maar opvolging nodig</option>' +
+            '    <option value="buiten">Buiten dienst — niet meer gebruiken</option>' +
+            '  </select>' +
+            lbl('Naam ondertekenaar *') +
+            '  <input type="text" id="ohNaam" class="form-input" style="width:100%" value="' + this.escapeHtml(mijnNaam) + '">' +
+            lbl('Handtekening *') +
+            '  <div style="background:#fff;border:1px solid var(--b1,#DDD8CC);border-radius:10px;overflow:hidden">' +
+            '    <canvas id="ohSigCanvas" style="width:100%;height:150px;display:block;touch-action:none;cursor:crosshair"></canvas>' +
+            '  </div>' +
+            '  <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="app.ohSigClear()">Wissen</button>' +
+            '  <button class="btn btn-primary btn-full" id="ohVerstuurBtn" style="margin-top:16px" onclick="app.onderhoudVersturen(\'' + m.id + '\')">Onderhoud registreren</button>' +
+            '</div>';
+        document.body.appendChild(ov);
+        setTimeout(() => this._ohSigInit(), 100);
+    },
+
+    /** Eigen handtekening-pad (patroon van initSignatureCanvas, eigen state
+     *  zodat de werkbon-handtekening onaangeroerd blijft). */
+    _ohSigInit() {
+        const canvas = document.getElementById('ohSigCanvas');
+        if (!canvas) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 3);
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        ctx.strokeStyle = '#001E45';
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        this._ohSigCtx = ctx;
+        this._ohSigHas = false;
+        const getPos = (e) => {
+            const r = canvas.getBoundingClientRect();
+            const t = e.touches ? e.touches[0] : e;
+            return { x: t.clientX - r.left, y: t.clientY - r.top };
+        };
+        const self = this;
+        let bezig = false;
+        const start = (e) => { e.preventDefault(); bezig = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+        const move = (e) => { if (!bezig) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); self._ohSigHas = true; };
+        const end = () => { bezig = false; };
+        canvas.addEventListener('touchstart', start, { passive: false });
+        canvas.addEventListener('touchmove', move, { passive: false });
+        canvas.addEventListener('touchend', end);
+        canvas.addEventListener('mousedown', start);
+        canvas.addEventListener('mousemove', move);
+        canvas.addEventListener('mouseup', end);
+        canvas.addEventListener('mouseleave', end);
+    },
+
+    ohSigClear() {
+        const c = document.getElementById('ohSigCanvas');
+        if (!c || !this._ohSigCtx) return;
+        this._ohSigCtx.clearRect(0, 0, c.width, c.height);
+        this._ohSigHas = false;
+    },
+
+    /** Het onderhoudsverslag als zelfstandig Marble-document (zelfde stijl
+     *  als de materiaal-mail; handtekening inline als base64). */
+    _onderhoudDocHtml(m, d) {
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const multi = (s) => esc(s).replace(/\n/g, '<br>');
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        const fmtD = (iso) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
+        const rij = (l, w) => this._marbleMailRij(l, w);
+        const RESULTAAT = { ok: 'In orde — klaar voor gebruik', opvolgen: 'Werkt, maar opvolging nodig', buiten: 'BUITEN DIENST — niet meer gebruiken' };
+        const cyclus = this._gsCyclus(m, 'Onderhoudscyclus');
+        let volgend = null;
+        if (cyclus) {
+            const [y, mm, dd] = d.datum.split('-').map(Number);
+            const dt = new Date(y, (mm - 1) + Math.round(cyclus), dd);
+            volgend = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+        }
+        const blokKop = (t) => '<div style="' + f + 'font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B;padding-bottom:8px;margin:18px 0 2px">' + t + '</div>';
+        const tekstBlok = (t) => '<div style="' + f + 'font-size:14px;line-height:21px;color:#26334B;padding:10px 0 4px">' + multi(t) + '</div>';
+        const inhoud =
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tbody>' +
+            rij('TOESTEL', esc(m.name || '')) +
+            rij('SOORT', esc(this._gsSoort(m) || '—')) +
+            rij('MERK', esc(m.brand || '—')) +
+            rij('SERIENUMMER', esc(m.serialNumber || '—')) +
+            rij('LOCATIE', esc(this._gsLocNaam(m.stockLocationId) || '—')) +
+            rij('ROBAWS-ID', '#' + esc(m.id)) +
+            '</tbody></table>' +
+            blokKop('ONDERHOUD') +
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tbody>' +
+            rij('DATUM UITVOERING', esc(fmtD(d.datum))) +
+            rij('UITGEVOERD DOOR', esc(d.door)) +
+            rij('SOORT ONDERHOUD', esc(d.soort)) +
+            rij('RESULTAAT', esc(RESULTAAT[d.resultaat] || d.resultaat)) +
+            (volgend ? rij('VOLGEND ONDERHOUD TEGEN', esc(fmtD(volgend)) + ' <span style="color:#85847C">(cyclus ' + esc(cyclus) + ' mnd)</span>') : '') +
+            '</tbody></table>' +
+            blokKop('UITGEVOERDE WERKZAAMHEDEN') + tekstBlok(d.werk) +
+            (d.onderdelen ? blokKop('VERVANGEN ONDERDELEN / MATERIALEN') + tekstBlok(d.onderdelen) : '') +
+            (d.bevindingen ? blokKop('BEVINDINGEN / STAAT VAN HET TOESTEL') + tekstBlok(d.bevindingen) : '') +
+            blokKop('ONDERTEKENING') +
+            '<div style="' + f + 'font-size:13px;color:#3A4356;padding:10px 0 6px">Ondertekend door <strong style="color:#26334B">' + esc(d.naam) + '</strong> op ' + esc(d.tijdstip) + '</div>' +
+            '<div style="border:1px solid #DCD9D0;background:#FFFFFF;padding:8px;max-width:340px"><img src="' + d.sigDataUrl + '" alt="Handtekening" style="display:block;width:100%"></div>';
+        const kern =
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="' + f + 'background-color:#F4F2ED;border-collapse:collapse"><tbody><tr><td align="center" style="padding:26px 12px">' +
+            '<table cellpadding="0" cellspacing="0" border="0" width="600" style="' + f + 'width:600px;max-width:600px;border-collapse:collapse"><tbody>' +
+            '<tr><td style="background-color:#FDFCFA;border:1px solid #DCD9D0;padding:24px 28px 20px">' +
+                '<div style="' + f + 'font-size:11px;font-weight:700;letter-spacing:2px;color:#F99D3E">QE · ONDERHOUDSREGISTER</div>' +
+                '<div style="' + f + 'font-size:25px;line-height:31px;color:#26334B;margin-top:8px;letter-spacing:-0.5px">Onderhoudsregistratie</div>' +
+                '<div style="' + f + 'font-size:13.5px;line-height:20px;color:#85847C;margin-top:6px">' + esc(m.name || '') + ' · ' + esc(fmtD(d.datum)) + '</div>' +
+            '</td></tr>' +
+            '<tr><td style="height:12px;line-height:12px;font-size:0">&nbsp;</td></tr>' +
+            '<tr><td style="background-color:#FDFCFA;border:1px solid #DCD9D0;padding:22px 28px">' + inhoud + '</td></tr>' +
+            '<tr><td style="' + f + 'padding:14px 6px;font-size:11px;line-height:17px;color:#A3A29A">Onderhoudsregister · geregistreerd via de QE Werkbon-app · Quality Environment · Deuzeldlaan 36, 2900 Schoten</td></tr>' +
+            '</tbody></table></td></tr></tbody></table>';
+        return '<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>' + esc('Onderhoud ' + (m.name || '') + ' ' + d.datum) + '</title>' +
+            '<style>body{margin:0}@media print{body{background:#fff}}</style></head><body>' + kern + '</body></html>';
+    },
+
+    async onderhoudVersturen(materialId) {
+        const m = (this._gsAlles || {})[materialId];
+        if (!m) return;
+        const v = (id) => (document.getElementById(id) || {}).value || '';
+        const d = {
+            datum: v('ohDatum'),
+            door: v('ohDoor').trim(),
+            soort: v('ohSoort'),
+            werk: v('ohWerk').trim(),
+            onderdelen: v('ohOnderdelen').trim(),
+            bevindingen: v('ohBevindingen').trim(),
+            resultaat: v('ohResultaat'),
+            naam: v('ohNaam').trim(),
+            tijdstip: new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        };
+        if (!d.datum) { this.toast('Kies de datum van uitvoering', true); return; }
+        if (!d.door) { this.toast('Vul in wie het onderhoud heeft uitgevoerd', true); return; }
+        if (!d.werk) { this.toast('Beschrijf de uitgevoerde werkzaamheden', true); return; }
+        if (!d.naam) { this.toast('Vul de naam van de ondertekenaar in', true); return; }
+        const sig = document.getElementById('ohSigCanvas');
+        if (!sig || !this._ohSigHas) { this.toast('Handtekening ontbreekt', true); return; }
+        d.sigDataUrl = sig.toDataURL('image/png');
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        const btn = document.getElementById('ohVerstuurBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Bezig…'; }
+        try {
+            // Verslag eerst veiligstellen, dan pas de datums (zelfde
+            // volgorde-principe als het keuringsbewijs); docId-vlag voorkomt
+            // een dubbel document bij een herkansing.
+            if (!this._ohDocId) {
+                const naam = 'Onderhoud ' + (m.name || materialId) + ' ' + d.datum + '.html';
+                this._ohDocId = (await RobawsAPI.uploadMaterialHtml(materialId, this._onderhoudDocHtml(m, d), naam)) || 'ok';
+            }
+            await RobawsAPI.setMaterialOnderhoud(materialId, d.datum);
+            if (d.resultaat === 'buiten') {
+                try { await RobawsAPI.setMaterialStatus(materialId, 'inactief'); }
+                catch (e2) { console.warn('[Onderhoud] buiten dienst zetten faalde:', e2 && e2.message); }
+            }
+            this.toast('Onderhoud geregistreerd — verslag bewaard bij het materieel ✓');
+            const s1 = document.getElementById('onderhoudSheet'); if (s1) s1.remove();
+            const s2 = document.getElementById('gereedschapSheet'); if (s2) s2.remove();
+            this.loadGereedschap();
+        } catch (e) {
+            this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
+        } finally {
+            this._gsBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Onderhoud registreren'; }
+        }
     },
 
     gereedschapStatusToggle(id) {
