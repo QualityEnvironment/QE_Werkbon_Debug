@@ -8714,13 +8714,15 @@ const app = {
         if (!el) return;
         el.innerHTML = '<div class="spinner"></div>';
         try {
-            const [mats, emps, planningen] = await Promise.all([
+            // v351: "gepland" komt uit de velden op het voertuig zelf
+            // (Keuring/Onderhoud ingepland op) — de planning-items-scan is
+            // vervallen (het 120-dagen-venster haalde max 100 items op =
+            // ±5 dagen ver; daarom bleef de blauwe status onzichtbaar).
+            const [mats, emps] = await Promise.all([
                 RobawsAPI.getMaterials({ bypassCache: true }),
                 RobawsAPI.getActiveEmployees().catch(() => []),
-                RobawsAPI.getKeuringPlanningen().catch(() => []),
             ]);
             this._voertuigEmps = emps;
-            this._keuringPlanningen = planningen;
             const voertuigen = mats.filter(m => this._isVoertuig(m));
             this._voertuigen = {};
             voertuigen.forEach(v => { this._voertuigen[v.id] = v; });
@@ -8737,8 +8739,10 @@ const app = {
                 const st = this._keuringStatus(gt);
                 const verlopen = st.key === 'verlopen';
                 const chauffeur = this._voertuigChauffeur(v);
-                const gepland = this._keuringGeplandVoor(v.name);
-                const geplandDatum = gepland ? new Date(gepland.startDate).toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
+                const gepland = this._keuringVeld(v, 'Keuring ingepland op');
+                const geplandDatum = gepland ? new Date(gepland + 'T12:00:00').toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
+                const ondGepland = this._keuringVeld(v, 'Onderhoud ingepland op');
+                const ondDatum = ondGepland ? new Date(ondGepland + 'T12:00:00').toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
                 return '<div class="card" style="margin-bottom:10px;padding:14px 16px;cursor:pointer;' +
                     (verlopen ? 'background:var(--rwash,#F6E7E5);border-color:var(--red2,#B4372F)' : '') +
                     '" onclick="app.openVoertuig(\'' + v.id + '\')">' +
@@ -8752,7 +8756,11 @@ const app = {
                     '    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:' + (verlopen ? 'var(--red2,#B4372F)' : 'var(--ink,#26334B)') + '">' + fmt(gt) + '</div>' +
                     '    <div style="font-size:11px;color:' + st.kleur + ';font-weight:600">' + st.label + '</div>' +
                     '  </div></div>' +
-                    (gepland ? '<div style="margin-top:9px;padding-top:9px;border-top:1px solid ' + (verlopen ? 'rgba(180,55,47,0.25)' : 'var(--l2,#EBE8E0)') + ';font-size:12px;font-weight:600;color:' + BLAUW + '">📅 Keuring ingepland op ' + this.escapeHtml(geplandDatum) + '</div>' : '') +
+                    ((gepland || ondGepland) ? '<div style="margin-top:9px;padding-top:9px;border-top:1px solid ' + (verlopen ? 'rgba(180,55,47,0.25)' : 'var(--l2,#EBE8E0)') + ';font-size:12px;font-weight:600;color:' + BLAUW + '">' +
+                        (gepland ? '📅 Keuring ingepland op ' + this.escapeHtml(geplandDatum) : '') +
+                        (gepland && ondGepland ? '<br>' : '') +
+                        (ondGepland ? '🔧 Onderhoud ingepland op ' + this.escapeHtml(ondDatum) : '') +
+                    '</div>' : '') +
                     '</div>';
             }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen voertuigen in Materieel.</div>';
             const sub = document.getElementById('logVoertuigenSub');
@@ -8774,11 +8782,6 @@ const app = {
         return (this._voertuigEmps || []).find(e => String(e.employeeId) === id) || null;
     },
 
-    _keuringGeplandVoor(plaat) {
-        const p = String(plaat || '');
-        return (this._keuringPlanningen || []).find(x => (x.summary || '').includes(p)) || null;
-    },
-
     openVoertuig(materialId) {
         const v = (this._voertuigen || {})[materialId];
         if (!v) return;
@@ -8789,7 +8792,8 @@ const app = {
         const lo = this._keuringVeld(v, 'Laatste onderhoud');   // v347
         const st = this._keuringStatus(gt);
         const chauffeur = this._voertuigChauffeur(v);
-        const gepland = this._keuringGeplandVoor(v.name);
+        const gepland = this._keuringVeld(v, 'Keuring ingepland op');       // v351: uit het veld
+        const ondGepland = this._keuringVeld(v, 'Onderhoud ingepland op');  // v351
         const fmt = (iso) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
         const emps = (this._voertuigEmps || []);
         const opties = emps.map(e => '<option value="' + e.employeeId + '"' + (chauffeur && String(e.employeeId) === String(chauffeur.employeeId) ? ' selected' : '') + '>' + this.escapeHtml(e.name) + '</option>').join('');
@@ -8809,9 +8813,10 @@ const app = {
             rij('Merk', this.escapeHtml(v.brand || '—')) +
             rij('Chauffeur', this.escapeHtml(chauffeur ? chauffeur.name : '—')) +
             rij('Laatste onderhoud', fmt(lo)) +
+            (ondGepland ? rij('🔧 Onderhoud ingepland op', fmt(ondGepland), '#3D6EA8') : '') +
             rij('Laatste keuring', fmt(lk)) +
             rij('Geldig tot', fmt(gt), st.key === 'verlopen' ? 'var(--red2,#B4372F)' : null) +
-            (gepland ? rij('📅 Keuring gepland', fmt(gepland.startDate)) : '') +
+            (gepland ? rij('📅 Keuring ingepland op', fmt(gepland), '#3D6EA8') : '') +
             '  <div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Keuring inplannen</div>' +
             '  <div style="display:flex;gap:8px;margin-top:8px">' +
             '    <input type="date" id="vkDatum" class="form-input" style="flex:1" min="' + vandaag + '">' +
@@ -8830,6 +8835,11 @@ const app = {
             '  <div style="display:flex;gap:8px;margin-top:8px">' +
             '    <input type="date" id="vkGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
             '    <button class="btn btn-outline" style="flex:1.3" onclick="app.keuringUitgevoerd(\'' + v.id + '\')">Registreren (+1 jaar geldig)</button>' +
+            '  </div>' +
+            '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Onderhoud uitgevoerd?</div>' +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="vkOndGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
+            '    <button class="btn btn-outline" style="flex:1.3" onclick="app.onderhoudUitgevoerd(\'' + v.id + '\')">Registreren</button>' +
             '  </div>' +
             '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
@@ -8852,11 +8862,32 @@ const app = {
         this._planKeuringBusy = true;
         try {
             await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.employeeId, employeeName: wie.name, plaat: v.name, startTijd, eindTijd, locatie });
+            // v351: afspraak ook op het voertuig zetten (blauwe status);
+            // zachte fout — de dagplanning staat er dan al
+            try { await RobawsAPI.setMaterialKeuringGepland(materialId, datum); }
+            catch (e2) { console.warn('[Voertuigen] ingepland-veld zetten faalde:', e2 && e2.message); }
             this.toast('Keuring gepland op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' voor ' + wie.name);
             const s = document.getElementById('voertuigSheet'); if (s) s.remove();
             this.loadVoertuigen();
         } catch (e) {
             this.toast('Inplannen mislukt: ' + ((e && e.message) || '?'), true);
+        } finally { this._planKeuringBusy = false; }
+    },
+
+    /** v351: onderhoud uitgevoerd — laatste onderhoud zetten, ingepland-datum wissen. */
+    async onderhoudUitgevoerd(materialId) {
+        const v = (this._voertuigen || {})[materialId];
+        const datum = (document.getElementById('vkOndGedaan') || {}).value;
+        if (!v || !datum) { this.toast('Kies de onderhoudsdatum', true); return; }
+        if (this._planKeuringBusy) return;
+        this._planKeuringBusy = true;
+        try {
+            await RobawsAPI.setMaterialOnderhoud(materialId, datum);
+            this.toast('Onderhoud geregistreerd op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }));
+            const s = document.getElementById('voertuigSheet'); if (s) s.remove();
+            this.loadVoertuigen();
+        } catch (e) {
+            this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
         } finally { this._planKeuringBusy = false; }
     },
 

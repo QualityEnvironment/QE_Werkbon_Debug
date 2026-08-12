@@ -1283,16 +1283,38 @@ const RobawsAPI = {
     ],
 
     /** Keuring-datums van een voertuig bijwerken: laatste = gekozen datum,
-     *  geldig tot = +1 jaar. Merge-PATCH — live bewezen (backfill 10 aug). */
+     *  geldig tot = +1 jaar. v351: wist meteen "Keuring ingepland op" —
+     *  uitgevoerd = afspraak-status weg. Merge-PATCH (bewezen 10 aug). */
     async setMaterialKeuring(materialId, laatsteISO) {
         const [y, m, d] = String(laatsteISO).slice(0, 10).split('-').map(Number);
         const geldigTot = (y + 1) + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
         const res = await this.patchMerge('materials/' + materialId, { extraFields: {
-            'Laatste keuring':    { type: 'DATE', group: 'Keuring', dateValue: String(laatsteISO).slice(0, 10) },
-            'Keuring geldig tot': { type: 'DATE', group: 'Keuring', dateValue: geldigTot },
+            'Laatste keuring':      { type: 'DATE', group: 'Keuring', dateValue: String(laatsteISO).slice(0, 10) },
+            'Keuring geldig tot':   { type: 'DATE', group: 'Keuring', dateValue: geldigTot },
+            'Keuring ingepland op': { type: 'DATE', group: 'Keuring', dateValue: null },
         } });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return geldigTot;
+    },
+
+    /** v351: afspraak-datum op het voertuig zetten (bij inplannen). */
+    async setMaterialKeuringGepland(materialId, datumISO) {
+        const res = await this.patchMerge('materials/' + materialId, { extraFields: {
+            'Keuring ingepland op': { type: 'DATE', group: 'Keuring', dateValue: String(datumISO).slice(0, 10) },
+        } });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** v351: onderhoud uitgevoerd — laatste onderhoud zetten + de
+     *  ingepland-datum wissen. */
+    async setMaterialOnderhoud(materialId, laatsteISO) {
+        const res = await this.patchMerge('materials/' + materialId, { extraFields: {
+            'Laatste onderhoud':      { type: 'DATE', group: 'Keuring', dateValue: String(laatsteISO).slice(0, 10) },
+            'Onderhoud ingepland op': { type: 'DATE', group: 'Keuring', dateValue: null },
+        } });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
     },
 
     /** Keuring inplannen: dagplanning type "Keuring", gekozen tijden
