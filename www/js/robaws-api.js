@@ -1285,9 +1285,13 @@ const RobawsAPI = {
     /** Keuring-datums van een voertuig bijwerken: laatste = gekozen datum,
      *  geldig tot = +1 jaar. v351: wist meteen "Keuring ingepland op" —
      *  uitgevoerd = afspraak-status weg. Merge-PATCH (bewezen 10 aug). */
-    async setMaterialKeuring(materialId, laatsteISO) {
+    async setMaterialKeuring(materialId, laatsteISO, maanden) {
+        // v353: cyclus in maanden (veld "Keuringscyclus maanden"); default 12
+        // = het oude +1 jaar-gedrag. Datum-overloop (29 feb) normaliseert Date.
+        const mnd = Number(maanden) > 0 ? Math.round(Number(maanden)) : 12;
         const [y, m, d] = String(laatsteISO).slice(0, 10).split('-').map(Number);
-        const geldigTot = (y + 1) + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const dt = new Date(y, (m - 1) + mnd, d);
+        const geldigTot = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
         const res = await this.patchMerge('materials/' + materialId, { extraFields: {
             'Laatste keuring':      { type: 'DATE', group: 'Keuring', dateValue: String(laatsteISO).slice(0, 10) },
             'Keuring geldig tot':   { type: 'DATE', group: 'Keuring', dateValue: geldigTot },
@@ -1315,6 +1319,86 @@ const RobawsAPI = {
         } });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
+    },
+
+    // =============================================
+    // v353: GEREEDSCHAP (stocklocaties, verplaatsen, aanmaken)
+    // =============================================
+
+    /** Stocklocaties (19 stuks: magazijnen + camionetten + kasten).
+     *  Endpoint + POST/PATCH/DELETE live bewezen 12 aug. Volgorde = zoals
+     *  Robaws ze levert (magazijnen eerst) — die volgorde toont de app ook. */
+    async getStockLocations(opts) {
+        const r = await this.get('stock-locations?limit=100', opts);
+        if (r.code !== 200) throw new Error('Stocklocaties laden mislukt (' + r.code + ')');
+        const body = r.data || {};
+        return body.items || (Array.isArray(body) ? body : []);
+    },
+
+    /** Gereedschap verplaatsen: merge-PATCH van alleen stockLocationId
+     *  (live bewezen: naam/chauffeur/extraFields blijven intact).
+     *  null = geen locatie. */
+    async setMaterialStockLocation(materialId, stockLocationId) {
+        const res = await this.patchMerge('materials/' + materialId, {
+            stockLocationId: stockLocationId ? String(stockLocationId) : null,
+        });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Buiten dienst / terug in dienst ("actief"/"inactief" — beide live bewezen). */
+    async setMaterialStatus(materialId, status) {
+        const res = await this.patchMerge('materials/' + materialId, { status });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** Nieuw materieel vanuit de app. Patroon = werkbon-les: kale POST,
+     *  daarna merge-PATCH voor extraFields. Veldnamen zoals Levi ze 12 aug
+     *  aanmaakte: "Keuringsplicht"/"Onderhoudsplicht" (CHECKBOX — 'BOOLEAN'
+     *  als type-string geeft 400, gemeten). Type = vrije stringValue op het
+     *  SELECT-veld (live bewezen); group-property wordt door Robaws
+     *  genegeerd, dus weggelaten. */
+    async createMaterial({ name, brand, serialNumber, stockLocationId, type, keuringsplichtig, onderhoudsplichtig }) {
+        const res = await this.post('materials', {
+            name: String(name || '').trim(),
+            brand: String(brand || '').trim() || null,
+            serialNumber: String(serialNumber || '').trim() || null,
+            stockLocationId: stockLocationId ? String(stockLocationId) : null,
+            status: 'actief',
+        });
+        if (res.code !== 200 && res.code !== 201) throw new Error('Aanmaken gaf status ' + res.code);
+        const id = res.data && res.data.id;
+        if (!id) throw new Error('Aanmaken gaf geen id terug');
+        const extra = {};
+        if (type) extra['Type'] = { type: 'SELECT', stringValue: String(type) };
+        if (keuringsplichtig !== undefined && keuringsplichtig !== null) {
+            extra['Keuringsplicht'] = { type: 'CHECKBOX', booleanValue: !!keuringsplichtig };
+        }
+        if (onderhoudsplichtig !== undefined && onderhoudsplichtig !== null) {
+            extra['Onderhoudsplicht'] = { type: 'CHECKBOX', booleanValue: !!onderhoudsplichtig };
+        }
+        if (Object.keys(extra).length) {
+            const p = await this.patchMerge('materials/' + id, { extraFields: extra });
+            if (p.code !== 200 && p.code !== 201 && p.code !== 204) console.warn('[Gereedschap] extravelden zetten faalde op #' + id + ' (' + p.code + ')');
+        }
+        return String(id);
+    },
+
+    /** v352: foto (dataURL) als document op een materiaal zetten.
+     *  POST /materials/{id}/documents live bewezen (upload+delete-proef 12 aug).
+     *  Geeft het document-id terug; gooit bij non-2xx. */
+    async uploadMaterialDocument(materialId, dataUrl, fileName) {
+        let base64 = String(dataUrl || '');
+        if (base64.includes(',')) base64 = base64.split(',')[1];
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+        const contentType = /\.png$/i.test(fileName) ? 'image/png' : 'image/jpeg';
+        const file = new File([new Blob([bytes], { type: contentType })], fileName, { type: contentType });
+        const res = await this.uploadFile('materials/' + materialId + '/documents', file, fileName);
+        if (res.code !== 200 && res.code !== 201) throw new Error('Upload gaf status ' + res.code);
+        return (res.data && res.data.id) || null;
     },
 
     /** Keuring inplannen: dagplanning type "Keuring", gekozen tijden

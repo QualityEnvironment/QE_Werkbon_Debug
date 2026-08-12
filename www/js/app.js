@@ -8787,6 +8787,7 @@ const app = {
         if (!v) return;
         const oud = document.getElementById('voertuigSheet');
         if (oud) oud.remove();
+        this._vkBewijs = null;   // v352: foto keuringsbewijs — per sheet opnieuw
         const gt = this._keuringVeld(v, 'Keuring geldig tot');
         const lk = this._keuringVeld(v, 'Laatste keuring');
         const lo = this._keuringVeld(v, 'Laatste onderhoud');   // v347
@@ -8836,6 +8837,15 @@ const app = {
             '    <input type="date" id="vkGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
             '    <button class="btn btn-outline" style="flex:1.3" onclick="app.keuringUitgevoerd(\'' + v.id + '\')">Registreren (+1 jaar geldig)</button>' +
             '  </div>' +
+            // v352: foto van het keuringsbewijs (verplicht) — camera of galerij,
+            // komt als document op het voertuig te staan
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'camera\')">📷 Bewijs fotograferen</button>' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'galerij\')">🖼️ Uit galerij</button>' +
+            '  </div>' +
+            '  <div id="vkBewijsStatus" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12.5px;min-height:24px"></div>' +
+            '  <input type="file" id="vkBewijsCamera" accept="image/*" capture="environment" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
+            '  <input type="file" id="vkBewijsGalerij" accept="image/*" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
             '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Onderhoud uitgevoerd?</div>' +
             '  <div style="display:flex;gap:8px;margin-top:8px">' +
             '    <input type="date" id="vkOndGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
@@ -8844,6 +8854,86 @@ const app = {
             '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
+        this._vkBewijsRender();   // v352: default-status ("nog geen foto")
+    },
+
+    /** v352: kiezer openen voor de keuringsbewijs-foto (camera of galerij). */
+    vkBewijsKies(bron) {
+        const el = document.getElementById(bron === 'camera' ? 'vkBewijsCamera' : 'vkBewijsGalerij');
+        if (el) el.click();
+    },
+
+    /** v352: gekozen foto inlezen + verkleinen; upload gebeurt pas bij Registreren. */
+    async vkBewijsGekozen(input) {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+            if (file.type && !/^image\//i.test(file.type)) { this.toast('Kies een foto (afbeelding)', true); return; }
+            const raw = await new Promise((resolve, reject) => {
+                const r = new FileReader();
+                r.onload = () => resolve(r.result);
+                r.onerror = () => reject(r.error);
+                r.readAsDataURL(file);
+            });
+            // Moet écht een afbeelding zijn (zelfde eis als de profielfoto, v312)
+            await new Promise((resolve, reject) => {
+                const i = new Image();
+                i.onload = resolve; i.onerror = reject;
+                i.src = raw;
+            });
+            const dataUrl = await this._downscaleBewijs(raw);
+            this._vkBewijs = { dataUrl, naam: file.name || 'keuringsbewijs.jpg', docId: null };
+            this._vkBewijsRender();
+        } catch (e) {
+            this.toast('Dat bestand is geen leesbare foto', true);
+        } finally { input.value = ''; }
+    },
+
+    vkBewijsWis() {
+        this._vkBewijs = null;
+        this._vkBewijsRender();
+    },
+
+    _vkBewijsRender() {
+        const el = document.getElementById('vkBewijsStatus');
+        if (!el) return;
+        if (this._vkBewijs && this._vkBewijs.dataUrl) {
+            el.innerHTML =
+                '<img src="' + this._vkBewijs.dataUrl + '" style="width:34px;height:34px;object-fit:cover;border-radius:6px;border:1px solid var(--b1,#DDD8CC)" alt="">' +
+                '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--green2,#39784B);font-weight:600">Foto keuringsbewijs toegevoegd ✓</span>' +
+                '<button onclick="app.vkBewijsWis()" style="border:none;background:none;font-size:18px;line-height:1;color:var(--g2,#5F5E56);padding:2px 6px;cursor:pointer">&times;</button>';
+        } else {
+            el.innerHTML = '<span style="color:var(--g2,#5F5E56)">Foto van het keuringsbewijs — verplicht bij registratie</span>';
+        }
+    },
+
+    /** v352: verklein een bewijs-foto naar max 1600px JPEG 0.85 — groter dan de
+     *  avatar-640 (v312) omdat het attest leesbaar moet blijven; bij elke fout
+     *  gewoon het origineel. */
+    _downscaleBewijs(dataUrl) {
+        return new Promise((resolve) => {
+            try {
+                const img = new Image();
+                img.onload = () => {
+                    try {
+                        const MAX = 1600;
+                        let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+                        if (!w || !h) return resolve(dataUrl);
+                        if (w > MAX || h > MAX) {
+                            const f = MAX / Math.max(w, h);
+                            w = Math.round(w * f); h = Math.round(h * f);
+                        }
+                        const c = document.createElement('canvas');
+                        c.width = w; c.height = h;
+                        c.getContext('2d').drawImage(img, 0, 0, w, h);
+                        const out = c.toDataURL('image/jpeg', 0.85);
+                        resolve(out && out.length > 100 && out.length < dataUrl.length ? out : dataUrl);
+                    } catch (_e) { resolve(dataUrl); }
+                };
+                img.onerror = () => resolve(dataUrl);
+                img.src = dataUrl;
+            } catch (_e) { resolve(dataUrl); }
+        });
     },
 
     async planKeuring(materialId) {
@@ -8895,16 +8985,501 @@ const app = {
         const v = (this._voertuigen || {})[materialId];
         const datum = (document.getElementById('vkGedaan') || {}).value;
         if (!v || !datum) { this.toast('Kies de keuringsdatum', true); return; }
+        // v352: foto van het keuringsbewijs is verplicht (vraag Levi 12 aug)
+        if (!this._vkBewijs || !this._vkBewijs.dataUrl) {
+            this.toast('Voeg eerst een foto van het keuringsbewijs toe', true);
+            return;
+        }
         if (this._planKeuringBusy) return;
         this._planKeuringBusy = true;
         try {
-            const geldigTot = await RobawsAPI.setMaterialKeuring(materialId, datum);
+            // Eerst het bewijs veiligstellen, dan pas de datums zetten: faalt de
+            // upload, dan is er niets geregistreerd en kan de knop gewoon
+            // opnieuw. De docId-vlag voorkomt een dubbele foto als alleen de
+            // registratie-stap een herkansing nodig heeft.
+            if (!this._vkBewijs.docId) {
+                const naam = 'Keuringsbewijs ' + (v.name || materialId) + ' ' + datum + '.jpg';
+                this._vkBewijs.docId = (await RobawsAPI.uploadMaterialDocument(materialId, this._vkBewijs.dataUrl, naam)) || 'ok';
+            }
+            // v353: cyclus uit het veld (leeg = 12 mnd, het oude +1 jaar)
+            const geldigTot = await RobawsAPI.setMaterialKeuring(materialId, datum, this._gsCyclus(v, 'Keuringscyclus maanden'));
             this.toast('Keuring geregistreerd — geldig tot ' + new Date(geldigTot + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short', year: 'numeric' }));
             const s = document.getElementById('voertuigSheet'); if (s) s.remove();
             this.loadVoertuigen();
         } catch (e) {
             this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
         } finally { this._planKeuringBusy = false; }
+    },
+
+    // =============================================
+    // v353: GEREEDSCHAP (Logistiek — bureel)
+    // =============================================
+
+    /** Getal uit een extraveld (alle Robaws-waardevarianten; "Geheel getal"
+     *  = integerValue, live gemeten 12 aug). */
+    _gsCyclus(m, veldnaam) {
+        const f = m && m.extraFields && m.extraFields[veldnaam];
+        if (!f) return null;
+        const v = f.integerValue ?? f.decimalValue ?? f.intValue ?? f.numberValue ?? f.value ?? f.stringValue ?? null;
+        const n = Number(v);
+        return isFinite(n) && n > 0 ? n : null;
+    },
+
+    /** Keuringsplichtig? (veld "Keuringsplicht", CHECKBOX — naam zoals Levi
+     *  hem 12 aug aanmaakte). Veld leeg/afwezig → terugval: item mét
+     *  keuringsdatum behandelen als plichtig (zo blijft alles werken vóór
+     *  de backfill), zonder datum als niet-plichtig (grijs, geen alarm). */
+    _gsPlichtig(m) {
+        const f = m && m.extraFields && m.extraFields['Keuringsplicht'];
+        if (f && (f.booleanValue !== undefined && f.booleanValue !== null)) return !!f.booleanValue;
+        if (f && f.stringValue) return /^(ja|true|1)$/i.test(String(f.stringValue).trim());
+        return !!this._keuringVeld(m, 'Keuring geldig tot');
+    },
+
+    /** Onderhoudsplichtig? (veld "Onderhoudsplicht", CHECKBOX — eigen
+     *  toevoeging Levi 12 aug). Afwezig = geen onderhouds-opvolging. */
+    _gsOndPlicht(m) {
+        const f = m && m.extraFields && m.extraFields['Onderhoudsplicht'];
+        if (f && (f.booleanValue !== undefined && f.booleanValue !== null)) return !!f.booleanValue;
+        if (f && f.stringValue) return /^(ja|true|1)$/i.test(String(f.stringValue).trim());
+        return false;
+    },
+
+    _gsSoort(m) {
+        const t = m && m.extraFields && m.extraFields['Type'];
+        return (t ? (t.stringValue ?? t.value ?? null) : null) || null;
+    },
+
+    /** Status-object voor een gereedschapskaart (lichtje + label). */
+    _gsStatus(m) {
+        if (String(m.status || '') === 'inactief') return { key: 'uit', kleur: 'var(--g3,#A3A29A)', label: 'buiten dienst' };
+        if (!this._gsPlichtig(m)) return { key: 'vrij', kleur: 'var(--g3,#A3A29A)', label: 'geen keuring nodig' };
+        const gt = this._keuringVeld(m, 'Keuring geldig tot');
+        if (!gt) return { key: 'nooit', kleur: 'var(--amber,#D97E24)', label: 'nog niet gekeurd' };
+        return this._keuringStatus(gt);
+    },
+
+    /** Volgend onderhoud (ISO) als er een cyclus én een laatste onderhoud is.
+     *  (Veldnaam "Onderhoudscyclus" — zonder 'maanden', zoals aangemaakt.) */
+    _gsVolgendOnderhoud(m) {
+        const cyclus = this._gsCyclus(m, 'Onderhoudscyclus');
+        const laatste = this._keuringVeld(m, 'Laatste onderhoud');
+        if (!cyclus || !laatste) return null;
+        const [y, mm, d] = String(laatste).slice(0, 10).split('-').map(Number);
+        const dt = new Date(y, (mm - 1) + Math.round(cyclus), d);
+        return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+    },
+
+    openGereedschap() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this._gsState = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
+        this.navigate('screenGereedschap', true);
+        this.loadGereedschap();
+    },
+
+    gsZet(k, v) {
+        this._gsState = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
+        this._gsState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
+        this._gsRender();
+    },
+
+    async loadGereedschap() {
+        const el = document.getElementById('gereedschapList');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const [mats, locs] = await Promise.all([
+                RobawsAPI.getMaterials({ bypassCache: true }),
+                RobawsAPI.getStockLocations().catch(() => []),
+            ]);
+            this._gsItems = mats.filter(m => !this._isVoertuig(m));
+            this._gsLocs = locs;
+            this._gsAlles = {};
+            this._gsItems.forEach(m => { this._gsAlles[m.id] = m; });
+            // soort-filter vullen (distinct, in gebruik)
+            const soorten = [...new Set(this._gsItems.map(m => this._gsSoort(m)).filter(Boolean))].sort();
+            const sel = document.getElementById('gsFilter');
+            if (sel) {
+                const cur = (this._gsState && this._gsState.filter) || '';
+                sel.innerHTML = '<option value="">Alle soorten</option>' +
+                    soorten.map(s => '<option value="' + this.escapeHtml(s) + '"' + (s === cur ? ' selected' : '') + '>' + this.escapeHtml(s) + '</option>').join('');
+            }
+            this._gsRender();
+            const sub = document.getElementById('logGereedschapSub');
+            if (sub) {
+                const actief = this._gsItems.filter(m => String(m.status || '') !== 'inactief');
+                const acties = actief.filter(m => ['verlopen', 'rood', 'oranje', 'nooit'].includes(this._gsStatus(m).key)).length;
+                sub.textContent = actief.length + ' stuks' + (acties ? ' · ' + acties + ' keuring(en) op komst' : '');
+            }
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
+        }
+    },
+
+    _gsLocNaam(id) {
+        const l = (this._gsLocs || []).find(s => String(s.id) === String(id));
+        return l ? l.name : null;
+    },
+
+    _gsKaart(m) {
+        const st = this._gsStatus(m);
+        const verlopen = st.key === 'verlopen';
+        const gepland = this._keuringVeld(m, 'Keuring ingepland op');
+        const loc = this._gsLocNaam(m.stockLocationId);
+        const BLAUW = '#3D6EA8';
+        const volgOnd = this._gsVolgendOnderhoud(m);
+        const ondLaat = volgOnd && volgOnd <= new Date().toISOString().slice(0, 10);
+        const sub = [m.brand, m.serialNumber ? 'SN ' + m.serialNumber : null, loc].filter(Boolean).join(' · ');
+        return '<div class="card" style="margin-bottom:8px;padding:12px 14px;cursor:pointer;' +
+            (verlopen ? 'background:var(--rwash,#F6E7E5);border-color:var(--red2,#B4372F)' : '') +
+            '" onclick="app.openGereedschapItem(\'' + m.id + '\')">' +
+            '<div style="display:flex;align-items:center;gap:11px">' +
+            '  <span style="flex-shrink:0;width:10px;height:10px;border-radius:50%;background:' + (gepland ? BLAUW : st.kleur) + '"></span>' +
+            '  <div style="flex:1;min-width:0">' +
+            '    <div style="font-size:14.5px;font-weight:600;color:var(--ink,#26334B);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(m.name || '') + '</div>' +
+            (sub ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(sub) + '</div>' : '') +
+            '  </div>' +
+            '  <div style="flex-shrink:0;font-size:11px;font-weight:600;color:' + st.kleur + '">' + st.label + '</div>' +
+            '</div>' +
+            ((gepland || ondLaat) ? '<div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--l2,#EBE8E0);font-size:11.5px;font-weight:600;color:' + (gepland ? BLAUW : 'var(--amber,#D97E24)') + '">' +
+                (gepland ? '📅 Keuring ingepland op ' + this.escapeHtml(new Date(gepland + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' })) : '🔧 Onderhoud over tijd (tegen ' + this.escapeHtml(new Date(volgOnd + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' })) + ')') +
+            '</div>' : '') +
+            '</div>';
+    },
+
+    _gsRender() {
+        const el = document.getElementById('gereedschapList');
+        if (!el || !this._gsItems) return;
+        const s = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
+        let items = this._gsItems.slice();
+        if (s.filter) items = items.filter(m => this._gsSoort(m) === s.filter);
+        if (s.zoek) {
+            items = items.filter(m => ((m.name || '') + ' ' + (m.brand || '') + ' ' + (m.serialNumber || '')).toLowerCase().includes(s.zoek));
+        }
+        const actief = items.filter(m => String(m.status || '') !== 'inactief');
+        const uitDienst = items.filter(m => String(m.status || '') === 'inactief');
+        // urgentste eerst binnen elke groep
+        const rang = { verlopen: 0, nooit: 1, rood: 2, oranje: 3, groen: 4, onbekend: 5, vrij: 6, uit: 7 };
+        const sorteer = (arr) => arr.sort((a, b) => (rang[this._gsStatus(a).key] ?? 9) - (rang[this._gsStatus(b).key] ?? 9) || String(a.name || '').localeCompare(String(b.name || '')));
+        const groepen = [];
+        if (s.weergave === 'locatie') {
+            // volgorde van de stocklocatie-lijst (magazijnen eerst), rest achteraan
+            for (const loc of (this._gsLocs || [])) {
+                const in1 = actief.filter(m => String(m.stockLocationId) === String(loc.id));
+                if (in1.length) groepen.push({ kop: loc.name, items: sorteer(in1) });
+            }
+            const zonder = actief.filter(m => !m.stockLocationId || !this._gsLocNaam(m.stockLocationId));
+            if (zonder.length) groepen.push({ kop: 'Zonder locatie', items: sorteer(zonder) });
+        } else {
+            const soorten = [...new Set(actief.map(m => this._gsSoort(m)).filter(Boolean))].sort();
+            for (const soort of soorten) {
+                groepen.push({ kop: soort, items: sorteer(actief.filter(m => this._gsSoort(m) === soort)) });
+            }
+            const zonder = actief.filter(m => !this._gsSoort(m));
+            if (zonder.length) groepen.push({ kop: 'Zonder soort', items: sorteer(zonder) });
+        }
+        let html = groepen.map(g =>
+            '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C);margin:14px 2px 8px">' +
+            this.escapeHtml(g.kop) + ' <span style="font-weight:500;color:var(--g3,#A3A29A)">(' + g.items.length + ')</span></div>' +
+            g.items.map(m => this._gsKaart(m)).join('')
+        ).join('');
+        if (uitDienst.length) {
+            html += '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g3,#A3A29A);margin:14px 2px 8px">Buiten dienst (' + uitDienst.length + ')</div>' +
+                sorteer(uitDienst).map(m => this._gsKaart(m)).join('');
+        }
+        el.innerHTML = html || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen gereedschap gevonden' + (s.zoek || s.filter ? ' voor deze zoekopdracht/filter.' : ' — voeg toe met "+ Nieuw".') + '</div>';
+    },
+
+    openGereedschapItem(id) {
+        const m = (this._gsAlles || {})[id];
+        if (!m) return;
+        const oud = document.getElementById('gereedschapSheet');
+        if (oud) oud.remove();
+        this._vkBewijs = null;   // foto-flow (v352) — hergebruikt in deze sheet
+        const st = this._gsStatus(m);
+        const gt = this._keuringVeld(m, 'Keuring geldig tot');
+        const lk = this._keuringVeld(m, 'Laatste keuring');
+        const lo = this._keuringVeld(m, 'Laatste onderhoud');
+        const gepland = this._keuringVeld(m, 'Keuring ingepland op');
+        const ondGepland = this._keuringVeld(m, 'Onderhoud ingepland op');
+        const volgOnd = this._gsVolgendOnderhoud(m);
+        const loc = this._gsLocNaam(m.stockLocationId);
+        const cyclus = this._gsCyclus(m, 'Keuringscyclus maanden') || 12;
+        const uit = String(m.status || '') === 'inactief';
+        const fmt = (iso) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
+        const rij = (l, w, kleur) => '<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px"><span style="color:var(--g2,#5F5E56)">' + l + '</span><span style="font-weight:600;font-variant-numeric:tabular-nums;' + (kleur ? 'color:' + kleur : '') + '">' + w + '</span></div>';
+        const kop = (t) => '<div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">' + t + '</div>';
+        const vandaag = new Date().toISOString().slice(0, 10);
+        const locOpties = '<option value="">— Geen locatie —</option>' + (this._gsLocs || []).map(l =>
+            '<option value="' + l.id + '"' + (String(l.id) === String(m.stockLocationId) ? ' selected' : '') + '>' + this.escapeHtml(l.name) + '</option>').join('');
+        const BLAUW = '#3D6EA8';
+        const ov = document.createElement('div');
+        ov.id = 'gereedschapSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + st.kleur + '">' + st.label + '</div>' +
+            '    <div style="font-size:19px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">' + this.escapeHtml(m.name || '') + '</div></div>' +
+            '    <button onclick="document.getElementById(\'gereedschapSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            rij('Soort', this.escapeHtml(this._gsSoort(m) || '—')) +
+            rij('Merk', this.escapeHtml(m.brand || '—')) +
+            rij('Serienummer', this.escapeHtml(m.serialNumber || '—')) +
+            rij('Locatie', this.escapeHtml(loc || '—')) +
+            // Onderhoudsplicht zonder registratie = zichtbare amber-hint
+            (this._gsOndPlicht(m) && !lo
+                ? rij('Laatste onderhoud', 'nog niet geregistreerd', 'var(--amber,#D97E24)')
+                : rij('Laatste onderhoud', fmt(lo))) +
+            (volgOnd ? rij('Volgend onderhoud tegen', fmt(volgOnd), volgOnd <= vandaag ? 'var(--red2,#B4372F)' : null) : '') +
+            (ondGepland ? rij('🔧 Onderhoud ingepland op', fmt(ondGepland), BLAUW) : '') +
+            rij('Laatste keuring', fmt(lk)) +
+            rij('Geldig tot', fmt(gt), st.key === 'verlopen' ? 'var(--red2,#B4372F)' : null) +
+            (gepland ? rij('📅 Keuring ingepland op', fmt(gepland), BLAUW) : '') +
+            kop('Verplaatsen naar') +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <select id="gsLocSelect" class="form-input" style="flex:1.5">' + locOpties + '</select>' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.gereedschapVerplaats(\'' + m.id + '\')">Verplaatsen</button>' +
+            '  </div>' +
+            kop('Keuring inplannen') +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="gsPlanDatum" class="form-input" style="flex:1" min="' + vandaag + '">' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.gereedschapPlanKeuring(\'' + m.id + '\')">Inplannen</button>' +
+            '  </div>' +
+            kop('Keuring uitgevoerd?') +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="gsGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
+            '    <button class="btn btn-outline" style="flex:1.3" onclick="app.gereedschapKeuringUitgevoerd(\'' + m.id + '\')">Registreren (+' + cyclus + ' mnd)</button>' +
+            '  </div>' +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'camera\')">📷 Bewijs fotograferen</button>' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'galerij\')">🖼️ Uit galerij</button>' +
+            '  </div>' +
+            '  <div id="vkBewijsStatus" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12.5px;min-height:24px"></div>' +
+            '  <input type="file" id="vkBewijsCamera" accept="image/*" capture="environment" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
+            '  <input type="file" id="vkBewijsGalerij" accept="image/*" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
+            kop('Onderhoud uitgevoerd?') +
+            '  <div style="display:flex;gap:8px;margin-top:8px">' +
+            '    <input type="date" id="gsOndGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
+            '    <button class="btn btn-outline" style="flex:1.3" onclick="app.gereedschapOnderhoudUitgevoerd(\'' + m.id + '\')">Registreren</button>' +
+            '  </div>' +
+            '  <button class="btn btn-outline btn-full" style="margin-top:16px;color:' + (uit ? 'var(--green2,#3E7A54)' : 'var(--red2,#B4372F)') + '" onclick="app.gereedschapStatusToggle(\'' + m.id + '\')">' +
+            (uit ? '↩︎ Terug in dienst zetten' : '⛔ Buiten dienst zetten') + '</button>' +
+            '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        this._vkBewijsRender();
+    },
+
+    async _gsActie(fn, okTekst) {
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        try {
+            await fn();
+            if (okTekst) this.toast(okTekst);
+            const s = document.getElementById('gereedschapSheet'); if (s) s.remove();
+            this.loadGereedschap();
+        } catch (e) {
+            this.toast('Mislukt: ' + ((e && e.message) || '?'), true);
+        } finally { this._gsBusy = false; }
+    },
+
+    gereedschapVerplaats(id) {
+        const locId = (document.getElementById('gsLocSelect') || {}).value || '';
+        const naam = locId ? this._gsLocNaam(locId) : 'geen locatie';
+        this._gsActie(() => RobawsAPI.setMaterialStockLocation(id, locId || null), 'Verplaatst naar ' + naam);
+    },
+
+    gereedschapPlanKeuring(id) {
+        const datum = (document.getElementById('gsPlanDatum') || {}).value;
+        if (!datum) { this.toast('Kies eerst een datum', true); return; }
+        // Bewust alleen het veld (geen dagplanning): de keurder komt langs,
+        // er is geen station-afspraak zoals bij de voertuigen.
+        this._gsActie(() => RobawsAPI.setMaterialKeuringGepland(id, datum),
+            'Keuring ingepland op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }));
+    },
+
+    async gereedschapKeuringUitgevoerd(id) {
+        const m = (this._gsAlles || {})[id];
+        const datum = (document.getElementById('gsGedaan') || {}).value;
+        if (!m || !datum) { this.toast('Kies de keuringsdatum', true); return; }
+        if (!this._vkBewijs || !this._vkBewijs.dataUrl) { this.toast('Voeg eerst een foto van het keuringsbewijs toe', true); return; }
+        await this._gsActie(async () => {
+            if (!this._vkBewijs.docId) {
+                const naam = 'Keuringsbewijs ' + (m.name || id) + ' ' + datum + '.jpg';
+                this._vkBewijs.docId = (await RobawsAPI.uploadMaterialDocument(id, this._vkBewijs.dataUrl, naam)) || 'ok';
+            }
+            const geldigTot = await RobawsAPI.setMaterialKeuring(id, datum, this._gsCyclus(m, 'Keuringscyclus maanden'));
+            this.toast('Keuring geregistreerd — geldig tot ' + new Date(geldigTot + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short', year: 'numeric' }));
+        }, null);
+    },
+
+    gereedschapOnderhoudUitgevoerd(id) {
+        const datum = (document.getElementById('gsOndGedaan') || {}).value;
+        if (!datum) { this.toast('Kies de onderhoudsdatum', true); return; }
+        this._gsActie(() => RobawsAPI.setMaterialOnderhoud(id, datum),
+            'Onderhoud geregistreerd op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }));
+    },
+
+    gereedschapStatusToggle(id) {
+        const m = (this._gsAlles || {})[id];
+        if (!m) return;
+        const naarUit = String(m.status || '') !== 'inactief';
+        this._gsActie(() => RobawsAPI.setMaterialStatus(id, naarUit ? 'inactief' : 'actief'),
+            naarUit ? 'Buiten dienst gezet' : 'Terug in dienst');
+    },
+
+    // ---------- nieuw gereedschap ----------
+    openGereedschapNieuw() {
+        const oud = document.getElementById('gereedschapSheet');
+        if (oud) oud.remove();
+        const soorten = [...new Set((this._gsItems || []).map(m => this._gsSoort(m)).filter(Boolean))].sort();
+        const locOpties = '<option value="">— Geen locatie —</option>' + (this._gsLocs || []).map(l =>
+            '<option value="' + l.id + '">' + this.escapeHtml(l.name) + '</option>').join('');
+        const ov = document.createElement('div');
+        ov.id = 'gereedschapSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+            '    <div style="font-size:19px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">Nieuw gereedschap</div>' +
+            '    <button onclick="document.getElementById(\'gereedschapSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <input type="text" id="gsNieuwNaam" class="form-input" placeholder="Naam (bv. Hikoki Boormachine DH 3628DA)" style="width:100%;margin-bottom:8px">' +
+            '  <div style="display:flex;gap:8px;margin-bottom:8px">' +
+            '    <input type="text" id="gsNieuwMerk" class="form-input" placeholder="Merk" style="flex:1">' +
+            '    <input type="text" id="gsNieuwSN" class="form-input" placeholder="Serienummer" style="flex:1">' +
+            '  </div>' +
+            '  <select id="gsNieuwSoort" class="form-input" style="width:100%;margin-bottom:8px" onchange="document.getElementById(\'gsNieuwSoortVrij\').style.display = this.value === \'__nieuw__\' ? \'\' : \'none\'">' +
+            '    <option value="">— Soort kiezen —</option>' +
+            soorten.map(s => '<option value="' + this.escapeHtml(s) + '">' + this.escapeHtml(s) + '</option>').join('') +
+            '    <option value="__nieuw__">+ Nieuwe soort…</option>' +
+            '  </select>' +
+            '  <input type="text" id="gsNieuwSoortVrij" class="form-input" placeholder="Naam nieuwe soort (bv. 6. Ladders)" style="width:100%;margin-bottom:8px;display:none">' +
+            '  <select id="gsNieuwLoc" class="form-input" style="width:100%;margin-bottom:8px">' + locOpties + '</select>' +
+            '  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink,#26334B);margin:4px 2px 6px">' +
+            '    <input type="checkbox" id="gsNieuwPlichtig" checked style="width:18px;height:18px"> Keuringsplichtig' +
+            '  </label>' +
+            '  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink,#26334B);margin:0 2px 10px">' +
+            '    <input type="checkbox" id="gsNieuwOndPlicht" style="width:18px;height:18px"> Onderhoudsplichtig' +
+            '  </label>' +
+            '  <button class="btn btn-primary btn-full" onclick="app.gereedschapMaak()">Toevoegen</button>' +
+            '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+    },
+
+    async gereedschapMaak() {
+        const naam = (document.getElementById('gsNieuwNaam') || {}).value || '';
+        if (!naam.trim()) { this.toast('Vul een naam in', true); return; }
+        let soort = (document.getElementById('gsNieuwSoort') || {}).value || '';
+        if (soort === '__nieuw__') soort = ((document.getElementById('gsNieuwSoortVrij') || {}).value || '').trim();
+        await this._gsActie(async () => {
+            await RobawsAPI.createMaterial({
+                name: naam,
+                brand: (document.getElementById('gsNieuwMerk') || {}).value || '',
+                serialNumber: (document.getElementById('gsNieuwSN') || {}).value || '',
+                stockLocationId: (document.getElementById('gsNieuwLoc') || {}).value || null,
+                type: soort || null,
+                keuringsplichtig: !!((document.getElementById('gsNieuwPlichtig') || {}).checked),
+                onderhoudsplichtig: !!((document.getElementById('gsNieuwOndPlicht') || {}).checked),
+            });
+        }, 'Toegevoegd: ' + naam.trim());
+    },
+
+    // ---------- keurdag: meerdere items in één keer ----------
+    openKeurdag() {
+        const oud = document.getElementById('gereedschapSheet');
+        if (oud) oud.remove();
+        // Verse start = schone lei; heropening na een deels-mislukte run
+        // behoudt foto én afgevinkte items zodat alleen de rest opnieuw gaat.
+        if (!this._keurdagHeropend) { this._vkBewijs = null; this._keurdagKlaar = {}; }
+        this._keurdagHeropend = false;
+        this._keurdagKlaar = this._keurdagKlaar || {};
+        const items = (this._gsItems || []).filter(m => String(m.status || '') !== 'inactief' && this._gsPlichtig(m));
+        if (!items.length) { this.toast('Geen keuringsplichtig gereedschap gevonden', true); return; }
+        const vandaag = new Date().toISOString().slice(0, 10);
+        const rijen = items.map(m => {
+            const st = this._gsStatus(m);
+            const klaar = !!this._keurdagKlaar[m.id];
+            return '<label style="display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px;' + (klaar ? 'opacity:.5' : '') + '">' +
+                '<input type="checkbox" class="keurdagItem" value="' + m.id + '"' + (klaar ? ' disabled' : '') + ' style="width:18px;height:18px;flex-shrink:0">' +
+                '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink,#26334B)">' + this.escapeHtml(m.name || '') + (klaar ? ' ✓' : '') + '</span>' +
+                '<span style="flex-shrink:0;font-size:11px;font-weight:600;color:' + st.kleur + '">' + st.label + '</span>' +
+                '</label>';
+        }).join('');
+        const ov = document.createElement('div');
+        ov.id = 'gereedschapSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+            '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">' +
+            '    <div style="font-size:19px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">Keurdag registreren</div>' +
+            '    <button onclick="document.getElementById(\'gereedschapSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <div style="font-size:12.5px;color:var(--g2,#5F5E56);margin-bottom:10px">Vink aan wat de keurder vandaag heeft gekeurd — alles krijgt dezelfde datum, en de foto van het keuringsverslag komt op elk item.</div>' +
+            '  <input type="date" id="keurdagDatum" class="form-input" style="width:100%;margin-bottom:8px" value="' + vandaag + '" max="' + vandaag + '">' +
+            '  <div style="display:flex;gap:8px;margin-bottom:2px">' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'camera\')">📷 Verslag fotograferen</button>' +
+            '    <button class="btn btn-outline" style="flex:1" onclick="app.vkBewijsKies(\'galerij\')">🖼️ Uit galerij</button>' +
+            '  </div>' +
+            '  <div id="vkBewijsStatus" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12.5px;min-height:24px"></div>' +
+            '  <input type="file" id="vkBewijsCamera" accept="image/*" capture="environment" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
+            '  <input type="file" id="vkBewijsGalerij" accept="image/*" style="display:none" onchange="app.vkBewijsGekozen(this)">' +
+            '  <div style="max-height:40vh;overflow-y:auto;margin-top:8px">' + rijen + '</div>' +
+            '  <button class="btn btn-primary btn-full" id="keurdagBtn" style="margin-top:12px" onclick="app.keurdagRegistreer()">Keuringen registreren</button>' +
+            '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+        document.body.appendChild(ov);
+        this._vkBewijsRender();
+    },
+
+    async keurdagRegistreer() {
+        const datum = (document.getElementById('keurdagDatum') || {}).value;
+        const gekozen = [...document.querySelectorAll('.keurdagItem:checked')].map(c => c.value);
+        if (!datum) { this.toast('Kies de keuringsdatum', true); return; }
+        if (!gekozen.length) { this.toast('Vink minstens één item aan', true); return; }
+        if (!this._vkBewijs || !this._vkBewijs.dataUrl) { this.toast('Voeg eerst de foto van het keuringsverslag toe', true); return; }
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        const btn = document.getElementById('keurdagBtn');
+        const fouten = [];
+        let ok = 0;
+        try {
+            for (let i = 0; i < gekozen.length; i++) {
+                const id = gekozen[i];
+                const m = (this._gsAlles || {})[id];
+                if (!m || this._keurdagKlaar[id]) continue;
+                if (btn) btn.textContent = 'Bezig… ' + (i + 1) + '/' + gekozen.length;
+                try {
+                    const naam = 'Keuringsbewijs ' + (m.name || id) + ' ' + datum + '.jpg';
+                    await RobawsAPI.uploadMaterialDocument(id, this._vkBewijs.dataUrl, naam);
+                    await RobawsAPI.setMaterialKeuring(id, datum, this._gsCyclus(m, 'Keuringscyclus maanden'));
+                    this._keurdagKlaar[id] = true;
+                    ok++;
+                } catch (e) {
+                    fouten.push((m.name || id) + ': ' + ((e && e.message) || '?'));
+                }
+                // burst netjes houden (2 calls per item)
+                await new Promise(r => setTimeout(r, 250));
+            }
+        } finally {
+            this._gsBusy = false;
+            if (btn) btn.textContent = 'Keuringen registreren';
+        }
+        if (fouten.length) {
+            this.toast(ok + ' gelukt, ' + fouten.length + ' mislukt (' + fouten[0] + ') — tik opnieuw voor de rest', true);
+            this._keurdagHeropend = true;
+            this.openKeurdag();   // her-render: gelukte items staan afgevinkt, foto blijft
+        } else {
+            this._keurdagKlaar = {};
+            this.toast(ok + ' keuring(en) geregistreerd ✓');
+            const s = document.getElementById('gereedschapSheet'); if (s) s.remove();
+            this.loadGereedschap();
+        }
     },
 
     /** v344: Automations heeft een eigen scherm onder Instellingen. */
