@@ -1266,6 +1266,22 @@ const RobawsAPI = {
     // =============================================
     KEURING_PLANNING_TYPE_ID: '51',   // planningstype "Keuring" (gemeten)
 
+    /** v349: keuringsstations provincie Antwerpen (autoveiligheid.be,
+     *  adressen opgehaald 11 aug 2026). Deurne = de standaard. */
+    KEURING_LOCATIES: [
+        { naam: 'Deurne',               straat: 'Santvoortbeeklaan 34-36',      postcode: '2100', stad: 'Deurne' },
+        { naam: 'Antwerpen-Noorderlaan', straat: 'Noorderlaan 36',              postcode: '2060', stad: 'Antwerpen' },
+        { naam: 'Brasschaat',           straat: 'Sint-Jobsesteenweg 134',       postcode: '2930', stad: 'Brasschaat' },
+        { naam: 'Geel',                 straat: 'Lammerdries 7',                postcode: '2440', stad: 'Geel' },
+        { naam: 'Heist-op-den-Berg',    straat: 'Wouwerstraat 5A',              postcode: '2220', stad: 'Heist-op-den-Berg' },
+        { naam: 'Hoboken',              straat: 'P. Van den Eedenstraat 100',   postcode: '2660', stad: 'Hoboken' },
+        { naam: 'Kontich',              straat: 'Neerveld 3',                   postcode: '2550', stad: 'Kontich' },
+        { naam: 'Malle',                straat: 'Ambachtsstraat 17',            postcode: '2390', stad: 'Malle' },
+        { naam: 'Mechelen',             straat: 'Brusselsesteenweg 460',        postcode: '2800', stad: 'Mechelen' },
+        { naam: 'Turnhout',             straat: 'Veedijk 40',                   postcode: '2300', stad: 'Turnhout' },
+        { naam: 'Willebroek',           straat: 'Hoeikensstraat 1B',            postcode: '2830', stad: 'Willebroek' },
+    ],
+
     /** Keuring-datums van een voertuig bijwerken: laatste = gekozen datum,
      *  geldig tot = +1 jaar. Merge-PATCH — live bewezen (backfill 10 aug). */
     async setMaterialKeuring(materialId, laatsteISO) {
@@ -1282,17 +1298,19 @@ const RobawsAPI = {
     /** Keuring inplannen: dagplanning type "Keuring", gekozen tijden
      *  (default 06:45-08:00 lokaal), adres Keuring Deurne.
      *  POST live bewezen (proef 10 aug). */
-    async createKeuringPlanning({ datumISO, employeeId, employeeName, plaat, startTijd, eindTijd }) {
+    async createKeuringPlanning({ datumISO, employeeId, employeeName, plaat, startTijd, eindTijd, locatie }) {
         const dag = String(datumISO).slice(0, 10);
         const start = new Date(dag + 'T' + (startTijd || '06:45') + ':00');
         const eind = new Date(dag + 'T' + (eindTijd || '08:00') + ':00');
+        // v349: écht stationsadres (keuzemenu in de app); Deurne = default
+        const loc = locatie || this.KEURING_LOCATIES[0];
         const res = await this.post('planning-items', {
             planningTypeId: this.KEURING_PLANNING_TYPE_ID,
             employeeIds: [String(employeeId)],
             summary: employeeName + ' - Keuring ' + plaat,
             startDate: start.toISOString(),
             endDate: eind.toISOString(),
-            address: { addressLine1: 'Keuring Deurne', city: 'Deurne', country: 'BE' },
+            address: { addressLine1: loc.straat, postalCode: loc.postcode, city: loc.stad, country: 'BE' },
         });
         if (res.code !== 200 && res.code !== 201) throw new Error('Robaws gaf status ' + res.code);
         return (res.data && res.data.id) || null;

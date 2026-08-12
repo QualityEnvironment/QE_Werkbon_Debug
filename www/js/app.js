@@ -8818,7 +8818,10 @@ const app = {
             '    <span style="color:var(--g3,#A3A29A)">→</span>' +
             '    <input type="time" id="vkEind" class="form-input" style="flex:1" value="08:00">' +
             '  </div>' +
-            '  <button class="btn btn-primary btn-full" style="margin-top:10px" onclick="app.planKeuring(\'' + v.id + '\')">Inplannen (Keuring Deurne)</button>' +
+            '  <select id="vkLocatie" class="form-input" style="margin-top:8px;width:100%">' +
+            RobawsAPI.KEURING_LOCATIES.map((l, i) => '<option value="' + i + '">' + this.escapeHtml('Keuring ' + l.naam + ' — ' + l.straat + ', ' + l.postcode + ' ' + l.stad) + '</option>').join('') +
+            '  </select>' +
+            '  <button class="btn btn-primary btn-full" style="margin-top:10px" onclick="app.planKeuring(\'' + v.id + '\')">Keuring inplannen</button>' +
             '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Keuring uitgevoerd?</div>' +
             '  <div style="display:flex;gap:8px;margin-top:8px">' +
             '    <input type="date" id="vkGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
@@ -8839,10 +8842,12 @@ const app = {
         if (eindTijd <= startTijd) { this.toast('Einduur moet na het startuur liggen', true); return; }
         const wie = (this._voertuigEmps || []).find(e => String(e.employeeId) === String(wieId));
         if (!wie) { this.toast('Kies een werknemer', true); return; }
+        const locIdx = parseInt((document.getElementById('vkLocatie') || {}).value || '0', 10);
+        const locatie = RobawsAPI.KEURING_LOCATIES[locIdx] || RobawsAPI.KEURING_LOCATIES[0];
         if (this._planKeuringBusy) return;
         this._planKeuringBusy = true;
         try {
-            await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.employeeId, employeeName: wie.name, plaat: v.name, startTijd, eindTijd });
+            await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.employeeId, employeeName: wie.name, plaat: v.name, startTijd, eindTijd, locatie });
             this.toast('Keuring gepland op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' voor ' + wie.name);
             const s = document.getElementById('voertuigSheet'); if (s) s.remove();
             this.loadVoertuigen();
