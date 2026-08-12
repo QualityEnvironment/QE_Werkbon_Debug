@@ -1279,12 +1279,13 @@ const RobawsAPI = {
         return geldigTot;
     },
 
-    /** Keuring inplannen: dagplanning type "Keuring", 06:45-08:00 lokale
-     *  tijd, adres Keuring Deurne. POST live bewezen (proef 10 aug). */
-    async createKeuringPlanning({ datumISO, employeeId, employeeName, plaat }) {
+    /** Keuring inplannen: dagplanning type "Keuring", gekozen tijden
+     *  (default 06:45-08:00 lokaal), adres Keuring Deurne.
+     *  POST live bewezen (proef 10 aug). */
+    async createKeuringPlanning({ datumISO, employeeId, employeeName, plaat, startTijd, eindTijd }) {
         const dag = String(datumISO).slice(0, 10);
-        const start = new Date(dag + 'T06:45:00');
-        const eind = new Date(dag + 'T08:00:00');
+        const start = new Date(dag + 'T' + (startTijd || '06:45') + ':00');
+        const eind = new Date(dag + 'T' + (eindTijd || '08:00') + ':00');
         const res = await this.post('planning-items', {
             planningTypeId: this.KEURING_PLANNING_TYPE_ID,
             employeeIds: [String(employeeId)],

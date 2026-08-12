@@ -8762,9 +8762,12 @@ const app = {
     },
 
     _voertuigChauffeur(v) {
+        // v348: getActiveEmployees geeft employeeId (niet id) — de e.id-lees
+        // gaf undefined, waardoor de voorselectie faalde én de POST een
+        // "undefined"-werknemer kreeg (Robaws 400).
         const id = String(v.assignedEmployeeId || '');
         if (!id) return null;
-        return (this._voertuigEmps || []).find(e => String(e.id) === id) || null;
+        return (this._voertuigEmps || []).find(e => String(e.employeeId) === id) || null;
     },
 
     _keuringGeplandVoor(plaat) {
@@ -8779,12 +8782,13 @@ const app = {
         if (oud) oud.remove();
         const gt = this._keuringVeld(v, 'Keuring geldig tot');
         const lk = this._keuringVeld(v, 'Laatste keuring');
+        const lo = this._keuringVeld(v, 'Laatste onderhoud');   // v347
         const st = this._keuringStatus(gt);
         const chauffeur = this._voertuigChauffeur(v);
         const gepland = this._keuringGeplandVoor(v.name);
         const fmt = (iso) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
         const emps = (this._voertuigEmps || []);
-        const opties = emps.map(e => '<option value="' + e.id + '"' + (chauffeur && String(e.id) === String(chauffeur.id) ? ' selected' : '') + '>' + this.escapeHtml(e.name) + '</option>').join('');
+        const opties = emps.map(e => '<option value="' + e.employeeId + '"' + (chauffeur && String(e.employeeId) === String(chauffeur.employeeId) ? ' selected' : '') + '>' + this.escapeHtml(e.name) + '</option>').join('');
         const rij = (l, w, kleur) => '<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px"><span style="color:var(--g2,#5F5E56)">' + l + '</span><span style="font-weight:600;font-variant-numeric:tabular-nums;' + (kleur ? 'color:' + kleur : '') + '">' + w + '</span></div>';
         const vandaag = new Date().toISOString().slice(0, 10);
         const ov = document.createElement('div');
@@ -8800,6 +8804,7 @@ const app = {
             '  </div>' +
             rij('Merk', this.escapeHtml(v.brand || '—')) +
             rij('Chauffeur', this.escapeHtml(chauffeur ? chauffeur.name : '—')) +
+            rij('Laatste onderhoud', fmt(lo)) +
             rij('Laatste keuring', fmt(lk)) +
             rij('Geldig tot', fmt(gt), st.key === 'verlopen' ? 'var(--red2,#B4372F)' : null) +
             (gepland ? rij('📅 Keuring gepland', fmt(gepland.startDate)) : '') +
@@ -8808,7 +8813,12 @@ const app = {
             '    <input type="date" id="vkDatum" class="form-input" style="flex:1" min="' + vandaag + '">' +
             '    <select id="vkWie" class="form-input" style="flex:1.3">' + opties + '</select>' +
             '  </div>' +
-            '  <button class="btn btn-primary btn-full" style="margin-top:10px" onclick="app.planKeuring(\'' + v.id + '\')">Inplannen (06:45 · Keuring Deurne)</button>' +
+            '  <div style="display:flex;gap:8px;margin-top:8px;align-items:center">' +
+            '    <input type="time" id="vkStart" class="form-input" style="flex:1" value="06:45">' +
+            '    <span style="color:var(--g3,#A3A29A)">→</span>' +
+            '    <input type="time" id="vkEind" class="form-input" style="flex:1" value="08:00">' +
+            '  </div>' +
+            '  <button class="btn btn-primary btn-full" style="margin-top:10px" onclick="app.planKeuring(\'' + v.id + '\')">Inplannen (Keuring Deurne)</button>' +
             '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Keuring uitgevoerd?</div>' +
             '  <div style="display:flex;gap:8px;margin-top:8px">' +
             '    <input type="date" id="vkGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
@@ -8823,13 +8833,16 @@ const app = {
         const v = (this._voertuigen || {})[materialId];
         const datum = (document.getElementById('vkDatum') || {}).value;
         const wieId = (document.getElementById('vkWie') || {}).value;
+        const startTijd = (document.getElementById('vkStart') || {}).value || '06:45';
+        const eindTijd = (document.getElementById('vkEind') || {}).value || '08:00';
         if (!v || !datum) { this.toast('Kies eerst een datum', true); return; }
-        const wie = (this._voertuigEmps || []).find(e => String(e.id) === String(wieId));
+        if (eindTijd <= startTijd) { this.toast('Einduur moet na het startuur liggen', true); return; }
+        const wie = (this._voertuigEmps || []).find(e => String(e.employeeId) === String(wieId));
         if (!wie) { this.toast('Kies een werknemer', true); return; }
         if (this._planKeuringBusy) return;
         this._planKeuringBusy = true;
         try {
-            await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.id, employeeName: wie.name, plaat: v.name });
+            await RobawsAPI.createKeuringPlanning({ datumISO: datum, employeeId: wie.employeeId, employeeName: wie.name, plaat: v.name, startTijd, eindTijd });
             this.toast('Keuring gepland op ' + new Date(datum + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' }) + ' voor ' + wie.name);
             const s = document.getElementById('voertuigSheet'); if (s) s.remove();
             this.loadVoertuigen();
