@@ -8731,25 +8731,29 @@ const app = {
                 return ga.localeCompare(gb);
             });
             const fmt = (iso) => iso ? new Date(iso + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+            const BLAUW = '#3D6EA8';   // v350: "keuring ingepland"-status
             el.innerHTML = voertuigen.map(v => {
                 const gt = this._keuringVeld(v, 'Keuring geldig tot');
                 const st = this._keuringStatus(gt);
                 const verlopen = st.key === 'verlopen';
                 const chauffeur = this._voertuigChauffeur(v);
                 const gepland = this._keuringGeplandVoor(v.name);
+                const geplandDatum = gepland ? new Date(gepland.startDate).toLocaleDateString('nl-BE', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
                 return '<div class="card" style="margin-bottom:10px;padding:14px 16px;cursor:pointer;' +
                     (verlopen ? 'background:var(--rwash,#F6E7E5);border-color:var(--red2,#B4372F)' : '') +
                     '" onclick="app.openVoertuig(\'' + v.id + '\')">' +
                     '<div style="display:flex;align-items:center;gap:12px">' +
-                    '  <span style="flex-shrink:0;width:11px;height:11px;border-radius:50%;background:' + st.kleur + '"></span>' +
+                    '  <span style="flex-shrink:0;width:11px;height:11px;border-radius:50%;background:' + (gepland ? BLAUW : st.kleur) + '"></span>' +
                     '  <div style="flex:1;min-width:0">' +
                     '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + this.escapeHtml(v.name || '') + '</div>' +
                     '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + this.escapeHtml((v.brand || '') + (chauffeur ? ' · ' + chauffeur.name : '')) + '</div>' +
                     '  </div>' +
                     '  <div style="flex-shrink:0;text-align:right">' +
                     '    <div style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:' + (verlopen ? 'var(--red2,#B4372F)' : 'var(--ink,#26334B)') + '">' + fmt(gt) + '</div>' +
-                    '    <div style="font-size:11px;color:' + st.kleur + ';font-weight:600">' + st.label + (gepland ? ' · 📅 gepland' : '') + '</div>' +
-                    '  </div></div></div>';
+                    '    <div style="font-size:11px;color:' + st.kleur + ';font-weight:600">' + st.label + '</div>' +
+                    '  </div></div>' +
+                    (gepland ? '<div style="margin-top:9px;padding-top:9px;border-top:1px solid ' + (verlopen ? 'rgba(180,55,47,0.25)' : 'var(--l2,#EBE8E0)') + ';font-size:12px;font-weight:600;color:' + BLAUW + '">📅 Keuring ingepland op ' + this.escapeHtml(geplandDatum) + '</div>' : '') +
+                    '</div>';
             }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen voertuigen in Materieel.</div>';
             const sub = document.getElementById('logVoertuigenSub');
             if (sub) {
