@@ -486,9 +486,14 @@ window.QEClock = {
         // geblokkeerd om onbedoelde inclock te voorkomen. Toewijzingsmodus
         // is een uitzondering — die mag overal werken.
         const ALLOWED_SCAN_SCREENS = ['screenPlanning', 'screenClock', 'screenDagoverzicht'];
+        // v358: op de Logistiek-schermen mogen MATERIEEL-tags gescand worden
+        // (klok-tags blijven daar geblokkeerd — check verderop)
+        const LOGISTIEK_SCREENS = ['screenLogistiek', 'screenVoertuigen', 'screenGereedschap'];
         const onAllowedScreen = window.app
             && ALLOWED_SCAN_SCREENS.includes(window.app.currentScreen);
-        if (!onAllowedScreen && !this._pendingAssignment) {
+        const opLogistiek = window.app
+            && LOGISTIEK_SCREENS.includes(window.app.currentScreen);
+        if (!onAllowedScreen && !opLogistiek && !this._pendingAssignment) {
             if (window.app) {
                 app.toast('Scannen kan vanaf Planning, Klok of Uren');
             }
@@ -562,13 +567,32 @@ window.QEClock = {
             let tag = this.identifyTag(normalizedTagId);
             if (!tag) tag = this.identifyTag(tagId); // raw fallback
             if (!tag) {
-                // Tag-config nog niet zichtbaar? Forceer 1 reload + retry
+                // Tag-config nog niet zichtbaar? Forceer 1 reload + retry.
+                // BEWUST VÓÓR de materieel-route: de klok-identificatie moet
+                // altijd de verse kans krijgen — anders zou een net
+                // toegewezen camionet-tag bij een veldwerker als
+                // "materieel — niet beschikbaar" afketsen i.p.v. te klokken.
                 await this.loadTagConfig();
                 tag = this.identifyTag(normalizedTagId) || this.identifyTag(tagId);
+            }
+            if (!tag) {
+                // v358: geen klok-tag? Dan de MATERIEEL-tags proberen
+                // (extraveld "NFC-tag" op Materieel): bureel springt naar de
+                // fiche, monteurs/techniekers krijgen "Niet beschikbaar".
+                const materieel = window.app && typeof app.gereedschapTagScan === 'function'
+                    ? await app.gereedschapTagScan(normalizedTagId) : false;
+                if (materieel) return;
             }
 
             if (!tag) {
                 if (window.app) app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
+                return;
+            }
+
+            // v358: klok-tags doen niets vanaf de Logistiek-schermen — anders
+            // zou een camionet-tag daar per ongeluk in-/uitklokken.
+            if (opLogistiek) {
+                if (window.app) app.toast('Klokken kan niet vanaf Logistiek — ga naar het Klok-scherm');
                 return;
             }
 
@@ -1858,12 +1882,14 @@ window.QEClock = {
     // TAG TOEWIJZEN: eerst locatie kiezen, dan scannen
     // =============================================
 
-    /** Wachtende toewijzing: { fieldName, locationName } of null */
+    /** Wachtende toewijzing: { fieldName, locationName, saveFn? } of null.
+     *  v358: met saveFn slaat de scan op via die functie i.p.v. de
+     *  klok-tags op fiche 1 — zo liften materieel-tags op deze overlay mee. */
     _pendingAssignment: null,
 
     /** Start toewijzingsmodus: fullscreen scan-overlay */
-    startTagAssignment(fieldName, locationName) {
-        this._pendingAssignment = { fieldName, locationName };
+    startTagAssignment(fieldName, locationName, saveFn) {
+        this._pendingAssignment = { fieldName, locationName, saveFn };
 
         // Maak fullscreen overlay
         const overlay = document.createElement('div');
@@ -1943,8 +1969,13 @@ window.QEClock = {
         }
 
         try {
-            await RobawsAPI.saveNfcTagId(assignment.fieldName, tagId);
-            await this.loadTagConfig();
+            if (assignment.saveFn) {
+                // v358: materieel-tag (of andere niet-klok-toewijzing)
+                await assignment.saveFn(tagId);
+            } else {
+                await RobawsAPI.saveNfcTagId(assignment.fieldName, tagId);
+                await this.loadTagConfig();
+            }
             this._showAssignmentSuccess(assignment.locationName);
         } catch (e) {
             this._showAssignmentError(e.message);
@@ -2347,13 +2378,15 @@ window.QEClock = {
 
     _renderTagRow(icon, name, tagData, fieldName) {
         const tagId = tagData && tagData.tagId ? tagData.tagId : null;
+        // v359: camionet-tags uit Materieel dragen materialId i.p.v. fieldName
+        const materialId = tagData && tagData.materialId ? String(tagData.materialId) : '';
         const statusColor = tagId ? 'var(--qe-green)' : 'var(--qe-orange)';
         const statusText = tagId ? tagId.substring(0, 16) + (tagId.length > 16 ? '...' : '') : 'Niet ingesteld';
         const rowId = 'tagRow_' + (this._tagRowCounter++);
 
         // Sla fieldName en name op als data-attributen (veilig, geen escaping issues)
-        const clearBtn = tagId ? `<button data-action="clear" data-field="${this._htmlAttr(fieldName)}" style="font-size:11px;color:#E53935;background:none;border:none;cursor:pointer;padding:4px" title="Verwijder tag">✕</button>` : '';
-        const scanBtn = `<button data-action="assign" data-field="${this._htmlAttr(fieldName)}" data-name="${this._htmlAttr(name)}" style="font-size:11px;color:var(--qe-purple);background:none;border:1px solid var(--qe-purple);border-radius:6px;cursor:pointer;padding:4px 8px">📱 Scan</button>`;
+        const clearBtn = tagId ? `<button data-action="clear" data-field="${this._htmlAttr(fieldName)}" data-material-id="${this._htmlAttr(materialId)}" style="font-size:11px;color:#E53935;background:none;border:none;cursor:pointer;padding:4px" title="Verwijder tag">✕</button>` : '';
+        const scanBtn = `<button data-action="assign" data-field="${this._htmlAttr(fieldName)}" data-material-id="${this._htmlAttr(materialId)}" data-name="${this._htmlAttr(name)}" style="font-size:11px;color:var(--qe-purple);background:none;border:1px solid var(--qe-purple);border-radius:6px;cursor:pointer;padding:4px 8px">📱 Scan</button>`;
 
         return `<div id="${rowId}" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0f0">
             <div style="display:flex;align-items:center;gap:10px">
@@ -2367,9 +2400,10 @@ window.QEClock = {
         </div>`;
     },
 
-    /** Escape string voor gebruik in HTML attributen */
+    /** Escape string voor gebruik in HTML attributen (v359: null-veilig —
+     *  camionetten uit Materieel hebben geen fieldName) */
     _htmlAttr(str) {
-        return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return String(str == null ? '' : str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     },
 
     /** Bind click events op tag admin knoppen (aanroepen na innerHTML) */
@@ -2379,23 +2413,38 @@ window.QEClock = {
         container.querySelectorAll('button[data-action="assign"]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const fieldName = btn.getAttribute('data-field');
+                const materialId = btn.getAttribute('data-material-id');
                 const locName = btn.getAttribute('data-name');
-                QEClock.startTagAssignment(fieldName, locName);
+                if (!fieldName && materialId) {
+                    // v359: tag hoort bij een voertuig-MATERIAAL → daar opslaan
+                    QEClock.startTagAssignment(null, locName, async (tagId) => {
+                        await RobawsAPI.setMaterialNfcTag(materialId, tagId);
+                        await QEClock.loadTagConfig(true);
+                    });
+                } else {
+                    QEClock.startTagAssignment(fieldName, locName);
+                }
             });
         });
         container.querySelectorAll('button[data-action="clear"]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const fieldName = btn.getAttribute('data-field');
-                QEClock._clearTag(fieldName);
+                const materialId = btn.getAttribute('data-material-id');
+                QEClock._clearTag(fieldName, materialId);
             });
         });
     },
 
-    async _clearTag(fieldName) {
+    async _clearTag(fieldName, materialId) {
         if (!confirm('Weet je zeker dat je deze tag wilt verwijderen?')) return;
         try {
-            await RobawsAPI.saveNfcTagId(fieldName, '');
-            await this.loadTagConfig();
+            if (!fieldName && materialId) {
+                // v359: tag staat op het voertuig-materiaal
+                await RobawsAPI.setMaterialNfcTag(materialId, null);
+            } else {
+                await RobawsAPI.saveNfcTagId(fieldName, '');
+            }
+            await this.loadTagConfig(true);
             if (window.app) {
                 app.toast('Tag verwijderd ✓');
                 if (app.currentScreen === 'screenClock') app.onNavigateToClock();

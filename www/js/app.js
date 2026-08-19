@@ -8851,6 +8851,15 @@ const app = {
             '    <input type="date" id="vkOndGedaan" class="form-input" style="flex:1" value="' + vandaag + '" max="' + vandaag + '">' +
             '    <button class="btn btn-outline" style="flex:1.3" onclick="app.onderhoudUitgevoerd(\'' + v.id + '\')">Registreren</button>' +
             '  </div>' +
+            // v359: klok-tag van deze camionet op het voertuig zelf (verhuis
+            // van fiche 1 naar Materieel — dubbele bron tijdens de overgang)
+            '  <div style="margin-top:18px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">NFC-klok-tag</div>' +
+            (this._gsNfcTag(v)
+                ? '  <div style="display:flex;gap:8px;margin-top:8px;align-items:center">' +
+                  '    <div style="flex:1;font-size:13px;color:var(--green2,#3E7A54);font-weight:600">Tag toegewezen ✓ <span style="color:var(--g2,#5F5E56);font-weight:500;font-variant-numeric:tabular-nums">' + this.escapeHtml(this._gsNfcTag(v).length > 14 ? this._gsNfcTag(v).slice(0, 14) + '…' : this._gsNfcTag(v)) + '</span></div>' +
+                  '    <button class="btn btn-outline" style="flex-shrink:0" onclick="app.gereedschapTagWissen(\'' + v.id + '\')">Wissen</button>' +
+                  '  </div>'
+                : '  <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.gereedschapTagToewijzen(\'' + v.id + '\')">📶 Tag toewijzen (scan)</button>') +
             '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
@@ -9293,6 +9302,14 @@ const app = {
             // v357: intern onderhoud = volwaardig formulier + ondertekend
             // verslag in de bestanden van het materieel (voorlegbaar bij keuring)
             '  <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.openOnderhoudFormulier(\'' + m.id + '\')">🔧 Onderhoud registreren</button>' +
+            kop('NFC-tag') +
+            // v358: tag op de machinedoos — scannen springt naar deze fiche
+            (this._gsNfcTag(m)
+                ? '  <div style="display:flex;gap:8px;margin-top:8px;align-items:center">' +
+                  '    <div style="flex:1;font-size:13px;color:var(--green2,#3E7A54);font-weight:600">Tag toegewezen ✓ <span style="color:var(--g2,#5F5E56);font-weight:500;font-variant-numeric:tabular-nums">' + this.escapeHtml(this._gsNfcTag(m).length > 14 ? this._gsNfcTag(m).slice(0, 14) + '…' : this._gsNfcTag(m)) + '</span></div>' +
+                  '    <button class="btn btn-outline" style="flex-shrink:0" onclick="app.gereedschapTagWissen(\'' + m.id + '\')">Wissen</button>' +
+                  '  </div>'
+                : '  <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.gereedschapTagToewijzen(\'' + m.id + '\')">📶 Tag toewijzen (scan)</button>') +
             '  <button class="btn btn-outline btn-full" style="margin-top:16px;color:' + (uit ? 'var(--green2,#3E7A54)' : 'var(--red2,#B4372F)') + '" onclick="app.gereedschapStatusToggle(\'' + m.id + '\')">' +
             (uit ? '↩︎ Terug in dienst zetten' : '⛔ Buiten dienst zetten') + '</button>' +
             '</div></div>';
@@ -9404,9 +9421,11 @@ const app = {
     },
 
     /** Eigen handtekening-pad (patroon van initSignatureCanvas, eigen state
-     *  zodat de werkbon-handtekening onaangeroerd blijft). */
-    _ohSigInit() {
-        const canvas = document.getElementById('ohSigCanvas');
+     *  zodat de werkbon-handtekening onaangeroerd blijft).
+     *  v361: canvas-id is instelbaar zodat het kledij-ontvangstbewijs
+     *  hetzelfde pad kan gebruiken. */
+    _ohSigInit(canvasId) {
+        const canvas = document.getElementById(canvasId || 'ohSigCanvas');
         if (!canvas) return;
         const dpr = Math.min(window.devicePixelRatio || 1, 3);
         const rect = canvas.getBoundingClientRect();
@@ -9439,8 +9458,8 @@ const app = {
         canvas.addEventListener('mouseleave', end);
     },
 
-    ohSigClear() {
-        const c = document.getElementById('ohSigCanvas');
+    ohSigClear(canvasId) {
+        const c = document.getElementById(canvasId || 'ohSigCanvas');
         if (!c || !this._ohSigCtx) return;
         this._ohSigCtx.clearRect(0, 0, c.width, c.height);
         this._ohSigHas = false;
@@ -9561,6 +9580,87 @@ const app = {
         const naarUit = String(m.status || '') !== 'inactief';
         this._gsActie(() => RobawsAPI.setMaterialStatus(id, naarUit ? 'inactief' : 'actief'),
             naarUit ? 'Buiten dienst gezet' : 'Terug in dienst');
+    },
+
+    // ---------- v358: NFC-tags op materieel ----------
+
+    _gsNfcTag(m) {
+        // v360: het veld heet in Robaws "NFC Tag" (spatie, groep NFC — zo
+        // door Levi aangemaakt), niet "NFC-tag"
+        const f = m && m.extraFields && m.extraFields['NFC Tag'];
+        const v = f ? (f.stringValue ?? f.value ?? null) : null;
+        return v ? String(v).trim() : null;
+    },
+
+    /** Tag aan dit materiaal koppelen via de klok-scan-overlay (saveFn-route).
+     *  Werkt voor gereedschap ÉN voertuigen (v359). Weigert klok-tags en
+     *  tags die al aan ander materieel hangen. */
+    gereedschapTagToewijzen(materialId) {
+        const m = (this._gsAlles || {})[materialId] || (this._voertuigen || {})[materialId];
+        if (!m || typeof QEClock === 'undefined') return;
+        const zelf = this;
+        const opVoertuig = !!((this._voertuigen || {})[materialId]) && !((this._gsAlles || {})[materialId]);
+        QEClock.startTagAssignment(null, m.name || ('#' + materialId), async (tagId) => {
+            const klokTag = QEClock.identifyTag(tagId);
+            if (klokTag) throw new Error('Deze tag is al in gebruik door de klok (' + klokTag.name + ')');
+            const alle = await RobawsAPI.getMaterials({ bypassCache: true });
+            const bezet = alle.find(x => String(x.id) !== String(materialId)
+                && zelf._gsNfcTag(x) && zelf._gsNfcTag(x).toLowerCase() === String(tagId).toLowerCase());
+            if (bezet) throw new Error('Deze tag hangt al aan "' + (bezet.name || bezet.id) + '"');
+            await RobawsAPI.setMaterialNfcTag(materialId, tagId);
+            // v359: klok-config direct verversen — een voertuig-tag moet
+            // meteen kunnen klokken, niet pas na de 5-min-cache
+            try { await QEClock.loadTagConfig(true); } catch (_e) { }
+            if (opVoertuig) zelf.loadVoertuigen(); else zelf.loadGereedschap();
+        });
+        // sheets dicht zodat de scan-overlay vrij staat
+        const s = document.getElementById('gereedschapSheet'); if (s) s.remove();
+        const s2 = document.getElementById('voertuigSheet'); if (s2) s2.remove();
+    },
+
+    async gereedschapTagWissen(materialId) {
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        try {
+            await RobawsAPI.setMaterialNfcTag(materialId, null);
+            try { await QEClock.loadTagConfig(true); } catch (_e) { }
+            this.toast('NFC-tag gewist');
+            const s = document.getElementById('gereedschapSheet'); if (s) s.remove();
+            const s2 = document.getElementById('voertuigSheet'); if (s2) s2.remove();
+            if (this.currentScreen === 'screenVoertuigen') this.loadVoertuigen();
+            else if (this.currentScreen === 'screenGereedschap') this.loadGereedschap();
+        } catch (e) {
+            this.toast('Mislukt: ' + ((e && e.message) || '?'), true);
+        } finally { this._gsBusy = false; }
+    },
+
+    /** Scan van een materieel-tag (aangeroepen door QEClock als een tag geen
+     *  klok-tag blijkt). true = afgehandeld. Bureel springt naar de fiche;
+     *  monteurs/techniekers krijgen "Niet beschikbaar" (vraag Levi 12 aug). */
+    async gereedschapTagScan(tagId) {
+        let mats;
+        try { mats = await RobawsAPI.getMaterials(); } catch (e) { return false; }
+        const doel = String(tagId || '').trim().toLowerCase();
+        if (!doel) return false;
+        const m = mats.find(x => {
+            const t = this._gsNfcTag(x);
+            return t && t.toLowerCase() === doel;
+        });
+        if (!m) return false;
+        if (!this._adminIsBureel()) {
+            this.toast('Niet beschikbaar', true);
+            return true;
+        }
+        if (this._isVoertuig(m)) {
+            this.navigate('screenVoertuigen', true);
+            await this.loadVoertuigen();
+            this.openVoertuig(String(m.id));
+        } else {
+            this.navigate('screenGereedschap', true);
+            await this.loadGereedschap();
+            this.openGereedschapItem(String(m.id));
+        }
+        return true;
     },
 
     // ---------- nieuw gereedschap ----------
@@ -9712,6 +9812,377 @@ const app = {
             this.toast(ok + ' keuring(en) geregistreerd ✓');
             const s = document.getElementById('gereedschapSheet'); if (s) s.remove();
             this.loadGereedschap();
+        }
+    },
+
+    // =============================================
+    // v361: KLEDIJ & PBM (Logistiek — bureel)
+    // =============================================
+
+    openKledij() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this._kldState = this._kldState || { weergave: 'werknemer', zoek: '' };
+        this.navigate('screenKledij', true);
+        this.loadKledij();
+    },
+
+    kldZet(k, v) {
+        this._kldState = this._kldState || { weergave: 'werknemer', zoek: '' };
+        this._kldState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
+        this._kldRender();
+    },
+
+    async loadKledij() {
+        const el = document.getElementById('kledijList');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const [lijst, veldOk] = await Promise.all([
+                RobawsAPI.getKledijWerknemers({ bypassCache: true }),
+                RobawsAPI.kledijVeldBestaat(),
+            ]);
+            this._kldData = lijst;
+            this._kldVeldOk = veldOk;
+            this._kldRender();
+            const sub = document.getElementById('logKledijSub');
+            if (sub) {
+                let stuks = 0;
+                for (const w of lijst) {
+                    for (const r of w.kledij.regels) {
+                        for (const it of (r.items || [])) stuks += (r.type === 'in' ? -1 : 1) * (Number(it.aantal) || 0);
+                    }
+                }
+                sub.textContent = stuks + ' stuks in omloop';
+            }
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
+        }
+    },
+
+    /** Netto in bezit per artikel-id (uitgifte − inlevering). */
+    _kldBezit(kledij) {
+        const per = {};
+        for (const r of (kledij.regels || [])) {
+            const teken = r.type === 'in' ? -1 : 1;
+            for (const it of (r.items || [])) {
+                per[it.art] = (per[it.art] || 0) + teken * (Number(it.aantal) || 0);
+            }
+        }
+        return per;
+    },
+
+    _kldAantalTotaal(kledij) {
+        const per = this._kldBezit(kledij);
+        return Object.values(per).reduce((a, b) => a + b, 0);
+    },
+
+    _kldDatum(iso, kort) {
+        if (!iso) return '—';
+        return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE',
+            kort ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'long', year: 'numeric' });
+    },
+
+    kldToggle(idx) {
+        const g = (this._kldGroepen || [])[idx];
+        if (!g) return;
+        this._kldOpen = this._kldOpen || {};
+        this._kldOpen[g.key] = !this._kldOpen[g.key];
+        this._kldRender();
+    },
+
+    _kldRender() {
+        const el = document.getElementById('kledijList');
+        if (!el || !this._kldData) return;
+        const s = this._kldState || { weergave: 'werknemer', zoek: '' };
+        this._kldOpen = this._kldOpen || {};
+        const esc = (t) => this.escapeHtml(t);
+        let html = '';
+        if (this._kldVeldOk === false) {
+            html += '<div class="card" style="margin-bottom:10px;padding:12px 14px;background:var(--awash2,#F7EFE2);border-color:var(--aborder2,#E0C79B);font-size:12.5px;color:var(--amber2,#A5651A)">' +
+                'Het extraveld <strong>"Kledij"</strong> (Lang tekstveld) bestaat nog niet op Werknemers in Robaws — registraties worden dan stil niet bewaard. Maak het veld eerst aan.</div>';
+        }
+        const groepen = [];
+        if (s.weergave === 'artikel') {
+            // Per kledingstuk: log van alle uitgiftes + totalen (vraag Levi)
+            const jaar = String(new Date().getFullYear());
+            for (const art of RobawsAPI.KLEDIJ_ARTIKELEN) {
+                const log = [];
+                let uit = 0, terug = 0, ditJaar = 0;
+                for (const w of this._kldData) {
+                    for (const r of w.kledij.regels) {
+                        for (const it of (r.items || [])) {
+                            if (it.art !== art.id) continue;
+                            const n = Number(it.aantal) || 0;
+                            if (r.type === 'in') terug += n; else uit += n;
+                            if (r.type !== 'in' && String(r.datum || '').slice(0, 4) === jaar) ditJaar += n;
+                            log.push({ datum: r.datum, naam: w.name, aantal: n, maat: it.maat, type: r.type });
+                        }
+                    }
+                }
+                if (s.zoek && !art.naam.toLowerCase().includes(s.zoek)) continue;
+                log.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
+                groepen.push({ key: 'a:' + art.id, art, log, uit, terug, ditJaar, omloop: uit - terug });
+            }
+            this._kldGroepen = groepen;
+            html += groepen.map((g, idx) => {
+                const open = !!this._kldOpen[g.key];
+                const kleurGroep = g.art.groep === 'pbm' ? 'var(--accent,#F99D3E)' : 'var(--ink,#26334B)';
+                return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
+                    '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer" onclick="app.kldToggle(' + idx + ')">' +
+                    '  <span style="flex-shrink:0;width:8px;height:26px;border-radius:3px;background:' + kleurGroep + ';opacity:' + (g.omloop ? '1' : '0.25') + '"></span>' +
+                    '  <div style="flex:1;min-width:0">' +
+                    '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(g.art.naam) + (g.art.groep === 'pbm' ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--accent,#F99D3E)">PBM</span>' : '') + '</div>' +
+                    '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + g.omloop + ' in omloop · ' + g.uit + ' uitgegeven' + (g.ditJaar ? ' · ' + g.ditJaar + ' dit jaar' : '') + (g.terug ? ' · ' + g.terug + ' terug' : '') + '</div>' +
+                    '  </div>' +
+                    '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
+                    '</div>' +
+                    (open ? '<div style="padding:0 16px 10px">' + (g.log.length
+                        ? g.log.map(r => '<div style="display:flex;align-items:center;gap:10px;padding:9px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
+                            '<span style="flex-shrink:0;width:74px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._kldDatum(r.datum, true)) + '</span>' +
+                            '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink,#26334B)">' + esc(r.naam) + (r.maat ? ' <span style="color:var(--g1,#85847C)">· ' + esc(r.maat) + '</span>' : '') + '</span>' +
+                            '<span style="flex-shrink:0;font-weight:700;color:' + (r.type === 'in' ? 'var(--g2,#5F5E56)' : 'var(--ink,#26334B)') + '">' + (r.type === 'in' ? '−' : '+') + r.aantal + '</span>' +
+                            '</div>').join('')
+                        : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Nog niets uitgegeven.</div>') + '</div>' : '') +
+                    '</div>';
+            }).join('');
+        } else {
+            // Per werknemer
+            let lijst = this._kldData.slice();
+            if (s.zoek) lijst = lijst.filter(w => w.name.toLowerCase().includes(s.zoek));
+            const actief = lijst.filter(w => !w.gestopt);
+            // stopgezette alleen tonen als ze nog spullen hebben (terugvorderen)
+            const gestopt = lijst.filter(w => w.gestopt && this._kldAantalTotaal(w.kledij) > 0);
+            actief.sort((a, b) => a.name.localeCompare(b.name));
+            gestopt.sort((a, b) => a.name.localeCompare(b.name));
+            for (const w of actief.concat(gestopt)) groepen.push({ key: 'w:' + w.employeeId, w });
+            this._kldGroepen = groepen;
+            html += groepen.map((g, idx) => {
+                const w = g.w;
+                const open = !!this._kldOpen[g.key];
+                const bezit = this._kldBezit(w.kledij);
+                const totaal = Object.values(bezit).reduce((a, b) => a + b, 0);
+                const regels = (w.kledij.regels || []).slice().sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
+                const laatste = regels.length ? regels[0].datum : null;
+                const maten = w.kledij.maten || {};
+                const maatTekst = [maten.schoen ? 'schoen ' + maten.schoen : null, maten.broek ? 'broek ' + maten.broek : null, maten.boven ? maten.boven : null].filter(Boolean).join(' · ');
+                const inBezit = RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => (bezit[a.id] || 0) !== 0);
+                return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden' + (w.gestopt ? ';opacity:.75' : '') + '">' +
+                    '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer" onclick="app.kldToggle(' + idx + ')">' +
+                    '  <div style="flex:1;min-width:0">' +
+                    '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(w.name) + (w.gestopt ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--red2,#B4372F)">STOPGEZET</span>' : '') + '</div>' +
+                    '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + totaal + ' stuks in bezit' + (laatste ? ' · laatst ' + esc(this._kldDatum(laatste, true)) : '') + (maatTekst ? ' · ' + esc(maatTekst) : '') + '</div>' +
+                    '  </div>' +
+                    '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
+                    '</div>' +
+                    (open ? '<div style="padding:0 16px 12px">' +
+                        (inBezit.length
+                            ? inBezit.map(a => '<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
+                                '<span style="flex:1;color:var(--ink,#26334B)">' + esc(a.naam) + '</span>' +
+                                '<span style="font-weight:700;color:var(--ink,#26334B)">' + (bezit[a.id] || 0) + '</span></div>').join('')
+                            : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Nog niets geregistreerd.</div>') +
+                        (regels.length ? '<div style="margin-top:12px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Historiek</div>' +
+                            regels.slice(0, 12).map(r => '<div style="padding:7px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:12.5px;color:var(--g2,#5F5E56)">' +
+                                '<span style="font-variant-numeric:tabular-nums">' + esc(this._kldDatum(r.datum, true)) + '</span> · ' +
+                                (r.type === 'in' ? '<span style="color:var(--g1,#85847C)">ingeleverd</span> ' : '') +
+                                esc((r.items || []).map(it => it.aantal + '× ' + ((RobawsAPI.kledijArtikel(it.art) || {}).naam || it.art) + (it.maat ? ' (' + it.maat + ')' : '')).join(', ')) +
+                                (r.door ? ' <span style="color:var(--g3,#A3A29A)">— ' + esc(r.door) + '</span>' : '') +
+                                '</div>').join('') : '') +
+                        '<button class="btn btn-outline btn-full" style="margin-top:12px" onclick="event.stopPropagation();app.openKledijUitgifte(\'' + w.employeeId + '\')">+ Uitgifte voor ' + esc(w.name.split(' ')[0]) + '</button>' +
+                        '</div>' : '') +
+                    '</div>';
+            }).join('');
+        }
+        el.innerHTML = html || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Niets gevonden.</div>';
+    },
+
+    // ---------- uitgifteformulier ----------
+
+    openKledijUitgifte(empId) {
+        if (!this._kldData) { this.toast('Even wachten — gegevens laden nog', true); return; }
+        const oud = document.getElementById('kledijSheet');
+        if (oud) oud.remove();
+        this._kldForm = { aantallen: {}, empId: empId || (this._kldData.find(w => !w.gestopt) || {}).employeeId || '' };
+        this._ohSigHas = false;
+        const esc = (t) => this.escapeHtml(t);
+        const vandaag = new Date().toISOString().slice(0, 10);
+        const kiesbaar = this._kldData.filter(w => !w.gestopt);
+        const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(this._kldForm.empId) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
+        const lbl = (t) => '<label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">' + t + '</label>';
+        const rij = (a) => '<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--l2,#EBE8E0)">' +
+            '<span style="flex:1;font-size:14px;color:var(--ink,#26334B)">' + esc(a.naam) + '</span>' +
+            '<button class="btn btn-outline" style="width:40px;padding:6px 0;font-size:17px;line-height:1" onclick="app.kldStap(\'' + a.id + '\',-1)">−</button>' +
+            '<span id="kldA_' + a.id + '" style="min-width:26px;text-align:center;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink,#26334B)">0</span>' +
+            '<button class="btn btn-outline" style="width:40px;padding:6px 0;font-size:17px;line-height:1" onclick="app.kldStap(\'' + a.id + '\',1)">+</button>' +
+            '</div>';
+        const kop = (t) => '<div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">' + t + '</div>';
+        const ov = document.createElement('div');
+        ov.id = 'kledijSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99992;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="max-width:560px;margin:0 auto;padding:18px 16px calc(30px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:2px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent,#F99D3E)">Logistiek</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Kledij uitgeven</div></div>' +
+            '    <button onclick="document.getElementById(\'kledijSheet\').remove()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            lbl('Werknemer') +
+            '  <select id="kldWie" class="form-input" style="width:100%" onchange="app.kldWisselWerknemer(this.value)">' + opties + '</select>' +
+            '  <div style="display:flex;gap:8px;margin-top:10px">' +
+            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Datum</label>' +
+            '      <input type="date" id="kldDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '"></div>' +
+            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Soort</label>' +
+            '      <select id="kldType" class="form-input" style="width:100%"><option value="uit">Uitgifte</option><option value="in">Inlevering</option></select></div>' +
+            '  </div>' +
+            lbl('Maten (worden onthouden)') +
+            '  <div style="display:flex;gap:8px">' +
+            '    <input type="text" id="kldMaatSchoen" class="form-input" style="flex:1" placeholder="Schoen">' +
+            '    <input type="text" id="kldMaatBroek" class="form-input" style="flex:1" placeholder="Broek">' +
+            '    <input type="text" id="kldMaatBoven" class="form-input" style="flex:1" placeholder="Bovenmaat">' +
+            '  </div>' +
+            kop('Kledij') +
+            RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => a.groep === 'kledij').map(rij).join('') +
+            kop('PBM') +
+            RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => a.groep === 'pbm').map(rij).join('') +
+            lbl('Opmerking') +
+            '  <input type="text" id="kldOpm" class="form-input" style="width:100%" placeholder="Optioneel">' +
+            '  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink,#26334B);margin:16px 2px 0">' +
+            '    <input type="checkbox" id="kldTekenen" style="width:18px;height:18px" onchange="app.kldTekenToggle(this.checked)"> Laten tekenen voor ontvangst' +
+            '  </label>' +
+            '  <div id="kldSigWrap" style="display:none;margin-top:8px">' +
+            '    <div style="background:#fff;border:1px solid var(--b1,#DDD8CC);border-radius:10px;overflow:hidden">' +
+            '      <canvas id="kldSigCanvas" style="width:100%;height:150px;display:block;touch-action:none;cursor:crosshair"></canvas>' +
+            '    </div>' +
+            '    <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="app.ohSigClear(\'kldSigCanvas\')">Wissen</button>' +
+            '    <div style="font-size:12px;color:var(--g2,#5F5E56);margin-top:6px">Het ontvangstbewijs komt als document op de werknemersfiche.</div>' +
+            '  </div>' +
+            '  <button class="btn btn-primary btn-full" id="kldVerstuurBtn" style="margin-top:16px" onclick="app.kledijRegistreer()">Registreren</button>' +
+            '</div>';
+        document.body.appendChild(ov);
+        this.kldWisselWerknemer(this._kldForm.empId);
+    },
+
+    kldWisselWerknemer(empId) {
+        this._kldForm = this._kldForm || { aantallen: {} };
+        this._kldForm.empId = empId;
+        const w = (this._kldData || []).find(x => String(x.employeeId) === String(empId));
+        const m = (w && w.kledij && w.kledij.maten) || {};
+        const zet = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+        zet('kldMaatSchoen', m.schoen);
+        zet('kldMaatBroek', m.broek);
+        zet('kldMaatBoven', m.boven);
+    },
+
+    kldStap(artId, delta) {
+        this._kldForm = this._kldForm || { aantallen: {} };
+        const nu = this._kldForm.aantallen[artId] || 0;
+        const nieuw = Math.max(0, Math.min(99, nu + delta));
+        this._kldForm.aantallen[artId] = nieuw;
+        const el = document.getElementById('kldA_' + artId);
+        if (el) {
+            el.textContent = String(nieuw);
+            el.style.color = nieuw ? 'var(--accent,#F99D3E)' : 'var(--ink,#26334B)';
+        }
+    },
+
+    kldTekenToggle(aan) {
+        const wrap = document.getElementById('kldSigWrap');
+        if (!wrap) return;
+        wrap.style.display = aan ? '' : 'none';
+        if (aan) setTimeout(() => this._ohSigInit('kldSigCanvas'), 60);
+    },
+
+    /** Het ontvangstbewijs (Marble-document op de werknemersfiche). */
+    _kledijBonHtml(werknemerNaam, regel, maten, sigDataUrl) {
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
+        const isIn = regel.type === 'in';
+        const rijen = (regel.items || []).map(it => {
+            const a = RobawsAPI.kledijArtikel(it.art) || { naam: it.art };
+            return '<tr><td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE">' + esc(a.naam) +
+                (it.maat ? ' <span style="color:#85847C">· maat ' + esc(it.maat) + '</span>' : '') + '</td>' +
+                '<td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE;text-align:right;font-weight:700;width:70px">' + esc(it.aantal) + '</td></tr>';
+        }).join('');
+        const maatTekst = [maten && maten.schoen ? 'schoen ' + maten.schoen : null, maten && maten.broek ? 'broek ' + maten.broek : null, maten && maten.boven ? 'bovenmaat ' + maten.boven : null].filter(Boolean).join(' · ');
+        const inhoud =
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-bottom:16px"><tbody>' +
+            this._marbleMailRij(isIn ? 'INGELEVERD DOOR' : 'ONTVANGEN DOOR', esc(werknemerNaam)) +
+            this._marbleMailRij('DATUM', esc(this._kldDatum(regel.datum))) +
+            this._marbleMailRij('GEREGISTREERD DOOR', esc(regel.door || '—')) +
+            (maatTekst ? this._marbleMailRij('MATEN', esc(maatTekst)) : '') +
+            (regel.opm ? this._marbleMailRij('OPMERKING', esc(regel.opm)) : '') +
+            '</tbody></table>' +
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tbody>' +
+            '<tr><td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B">ARTIKEL</td>' +
+            '<td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B;text-align:right">AANTAL</td></tr>' +
+            rijen + '</tbody></table>' +
+            (isIn ? '' : '<div style="' + f + 'font-size:13px;line-height:20px;color:#3A4356;margin-top:18px">Ondergetekende bevestigt bovenstaande werkkledij en persoonlijke beschermingsmiddelen in goede staat te hebben ontvangen, en verklaart de PBM\'s te gebruiken zoals voorgeschreven.</div>') +
+            (sigDataUrl
+                ? '<div style="' + f + 'font-size:13px;color:#3A4356;padding:14px 0 6px">Ondertekend door <strong style="color:#26334B">' + esc(werknemerNaam) + '</strong></div>' +
+                  '<div style="border:1px solid #DCD9D0;background:#FFFFFF;padding:8px;max-width:340px"><img src="' + sigDataUrl + '" alt="Handtekening" style="display:block;width:100%"></div>'
+                : '');
+        const kern = this._marbleMailFrame(isIn ? 'Inlevering kledij' : 'Ontvangstbewijs kledij &amp; PBM',
+            esc(werknemerNaam) + ' · ' + esc(this._kldDatum(regel.datum)), inhoud);
+        return '<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>' + esc('Kledij ' + werknemerNaam + ' ' + regel.datum) + '</title>' +
+            '<style>body{margin:0}@media print{body{background:#fff}}</style></head><body>' + kern + '</body></html>';
+    },
+
+    async kledijRegistreer() {
+        const v = (id) => (document.getElementById(id) || {}).value || '';
+        const empId = v('kldWie');
+        const w = (this._kldData || []).find(x => String(x.employeeId) === String(empId));
+        if (!w) { this.toast('Kies een werknemer', true); return; }
+        const datum = v('kldDatum');
+        if (!datum) { this.toast('Kies een datum', true); return; }
+        const type = v('kldType') === 'in' ? 'in' : 'uit';
+        const maten = {
+            schoen: v('kldMaatSchoen').trim(),
+            broek: v('kldMaatBroek').trim(),
+            boven: v('kldMaatBoven').trim(),
+        };
+        const aantallen = (this._kldForm && this._kldForm.aantallen) || {};
+        const items = RobawsAPI.KLEDIJ_ARTIKELEN
+            .filter(a => (aantallen[a.id] || 0) > 0)
+            .map(a => ({ art: a.id, aantal: aantallen[a.id], maat: a.maat ? (maten[a.maat] || '') : '' }));
+        if (!items.length) { this.toast('Zet minstens één artikel op een aantal', true); return; }
+        const tekenen = !!((document.getElementById('kldTekenen') || {}).checked);
+        let sigDataUrl = null;
+        if (tekenen) {
+            const c = document.getElementById('kldSigCanvas');
+            if (!c || !this._ohSigHas) { this.toast('Handtekening ontbreekt', true); return; }
+            sigDataUrl = c.toDataURL('image/png');
+        }
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        const btn = document.getElementById('kldVerstuurBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Bezig…'; }
+        const regel = {
+            id: 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            datum, type,
+            door: (this.currentUser && this.currentUser.name) || '',
+            opm: v('kldOpm').trim(),
+            items,
+        };
+        try {
+            await RobawsAPI.addKledijRegel(empId, regel, maten);
+            if (sigDataUrl) {
+                try {
+                    const bestand = (type === 'in' ? 'Inlevering kledij ' : 'Ontvangstbewijs kledij ') + w.name + ' ' + datum + '.html';
+                    await RobawsAPI.uploadEmployeeHtml(empId, this._kledijBonHtml(w.name, regel, maten, sigDataUrl), bestand);
+                } catch (e2) {
+                    // registratie staat al — bewijs apart melden, niet terugdraaien
+                    this.toast('Geregistreerd, maar het ontvangstbewijs uploaden mislukte', true);
+                }
+            }
+            const totaal = items.reduce((a, b) => a + b.aantal, 0);
+            this.toast(totaal + ' stuk(s) ' + (type === 'in' ? 'ingeleverd door ' : 'uitgegeven aan ') + w.name.split(' ')[0] + ' ✓');
+            const s = document.getElementById('kledijSheet'); if (s) s.remove();
+            this.loadKledij();
+        } catch (e) {
+            this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
+        } finally {
+            this._gsBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Registreren'; }
         }
     },
 

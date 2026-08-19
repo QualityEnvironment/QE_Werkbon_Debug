@@ -1284,7 +1284,32 @@
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
+    <!-- v361: Kledij & PBM — uitgifte per werknemer -->
+    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openKledij()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <path d="M9 3l3 2 3-2 4.5 3-2 3.5-1.5-.8V21h-8V8.7l-1.5.8-2-3.5L9 3z"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:600;color:var(--ink)">Kledij &amp; PBM</div>
+            <div id="logKledijSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Uitgifte per werknemer</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
     <div style="font-size:12px;color:var(--g3);text-align:center;margin-top:18px">Meer logistiek volgt hier later.</div>
+</div>
+
+<!-- ========== SCREEN: KLEDIJ &amp; PBM (v361) ========== -->
+<div class="screen" id="screenKledij">
+    <div class="section-header"><h2>Kledij &amp; PBM</h2></div>
+    <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="app.openKledijUitgifte()">+ Uitgifte registreren</button>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+        <select id="kldWeergave" class="form-input" style="flex:1" onchange="app.kldZet('weergave', this.value)">
+            <option value="werknemer">Per werknemer</option>
+            <option value="artikel">Per kledingstuk</option>
+        </select>
+        <input type="text" id="kldZoek" class="form-input" style="flex:1" placeholder="Zoeken…" oninput="app.kldZet('zoek', this.value)">
+    </div>
+    <div id="kledijList"><div class="spinner"></div></div>
 </div>
 
 <!-- ========== SCREEN: VOERTUIGEN (v346) ========== -->
