@@ -1952,64 +1952,63 @@ const app = {
     },
 
     // ========================================
-    // DATE STRIP — vorige werkdag + vandaag + volgende werkdag (weekend skippen)
-    // v112: 3 chips i.p.v. 2 — monteurs moeten ook werkbonnen van gisteren
-    // (of vorige vrijdag, op maandag) kunnen inzien en invullen.
+    // DATE STRIP — de voorbije werkdagen van deze werkweek + vandaag + de
+    // eerstvolgende werkdag (weekend skippen). v362 (vraag Levi):
+    //   - woensdag → ma, di, wo, do
+    //   - vrijdag  → ma, di, wo, do, vr + ma volgende week
+    //   - maandag  → vr vorige week, ma, di
     // ========================================
     buildDateStrip() {
         const strip = document.getElementById('dateStrip');
         const today = new Date();
 
-        // v112: skip weekend voor "vorige werkdag"
-        //   - maandag → vrijdag (3 dagen terug)
-        //   - zondag  → vrijdag (2 dagen terug)
-        //   - zaterdag → vrijdag (1 dag terug)
-        //   - andere dagen → −1 dag
-        const prev = new Date(today);
-        prev.setDate(today.getDate() - 1);
-        while (prev.getDay() === 0 || prev.getDay() === 6) {
-            prev.setDate(prev.getDate() - 1);
-        }
-
-        // v92+: skip weekend voor "volgende werkdag"
-        //   - vrijdag → maandag (3 dagen verder)
-        //   - zaterdag → maandag (2 dagen verder)
-        //   - zondag → maandag (1 dag verder)
-        //   - andere dagen → +1 dag
+        // Eerstvolgende werkdag (weekend overslaan):
+        //   vrijdag → maandag, zaterdag → maandag, zondag → maandag
         const next = new Date(today);
         next.setDate(today.getDate() + 1);
         while (next.getDay() === 0 || next.getDay() === 6) {
             next.setDate(next.getDate() + 1);
         }
 
+        // Voorbije werkdagen van de huidige werkweek (maandag t/m gisteren)
+        const dates = [];
+        const cursor = new Date(today);
+        cursor.setDate(today.getDate() - ((today.getDay() + 6) % 7));   // maandag van deze week
+        while (cursor.toDateString() !== today.toDateString()) {
+            if (cursor.getDay() !== 0 && cursor.getDay() !== 6) dates.push(new Date(cursor));
+            cursor.setDate(cursor.getDate() + 1);
+        }
+        // Maandag (nog geen voorbije dagen deze week) → vrijdag vorige week
+        if (!dates.length) {
+            const prev = new Date(today);
+            prev.setDate(today.getDate() - 1);
+            while (prev.getDay() === 0 || prev.getDay() === 6) {
+                prev.setDate(prev.getDate() - 1);
+            }
+            dates.push(prev);
+        }
+        dates.push(new Date(today));
+        dates.push(next);
+
         const days = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
         const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
-
-        const dates = [prev, today, next];
-
-        // Bepaal label voor "vorige werkdag" — Gisteren als het echt -1 dag is,
-        // anders de weekdag-naam (bv. "Vrijdag" als vandaag maandag is).
+        const dayNames = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
         const yesterdayReal = new Date(today);
         yesterdayReal.setDate(today.getDate() - 1);
-        const prevIsRealYesterday = prev.toDateString() === yesterdayReal.toDateString();
-
-        // Bepaal het label voor de "volgende werkdag" — afhankelijk van of het morgen
-        // letterlijk is, of een andere weekdag (bv. ma als het vandaag vr is)
         const tomorrowReal = new Date(today);
         tomorrowReal.setDate(today.getDate() + 1);
-        const nextIsRealTomorrow = next.toDateString() === tomorrowReal.toDateString();
-        const dayNames = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
 
         strip.innerHTML = dates.map(d => {
             const dateStr = this._localDateStr(d);
             const isToday = d.toDateString() === today.toDateString();
             const isActive = d.toDateString() === this.currentDate.toDateString();
-            const isPrev = d.toDateString() === prev.toDateString();
             const label = isToday
                 ? 'Vandaag'
-                : isPrev
-                    ? (prevIsRealYesterday ? 'Gisteren' : dayNames[d.getDay()])
-                    : (nextIsRealTomorrow ? 'Morgen' : dayNames[d.getDay()]);
+                : d.toDateString() === yesterdayReal.toDateString()
+                    ? 'Gisteren'
+                    : d.toDateString() === tomorrowReal.toDateString()
+                        ? 'Morgen'
+                        : dayNames[d.getDay()];
 
             return `
                 <div class="date-chip ${isActive ? 'active' : ''} ${isToday ? 'today' : ''}"
@@ -2022,6 +2021,13 @@ const app = {
                 </div>
             `;
         }).join('');
+
+        // v362: vandaag in beeld houden als de strip breder is dan het scherm
+        // (op vrijdag staan er 6 chips — de eerste dagen mogen wegscrollen).
+        const actief = strip.querySelector('.date-chip.today');
+        if (actief && strip.scrollWidth > strip.clientWidth) {
+            actief.scrollIntoView({ block: 'nearest', inline: 'center' });
+        }
     },
 
     selectDate(dateStr) {
