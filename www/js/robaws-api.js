@@ -1472,8 +1472,52 @@ const RobawsAPI = {
             naam: String(a.naam || '').trim().slice(0, 80),
             groep: String(a.groep || 'overig').trim().slice(0, 40),
             prijs: Math.round((Number(a.prijs) || 0) * 100) / 100,
+            bewijs: !!a.bewijs,
         })).filter(a => a.id && a.naam);
         return await this._budgetSchrijf(this.CATALOGUS_FICHE, huidig);
+    },
+    /** v366: heeft deze werknemer een budget? De vlag `budgetAan` in zijn
+     *  eigen Budget-JSON beslist; ontbreekt die, dan telt de rol mee —
+     *  bureel krijgt geen budget, monteurs/techniekers wel. Zo verschijnt
+     *  een nieuwe bediende nooit vanzelf in de lijst. */
+    budgetHeeftRecht(budgetObj, rol) {
+        const v = budgetObj && budgetObj.budgetAan;
+        if (v === true || v === false) return v;
+        return String(rol || '') !== 'bureel';
+    },
+
+    /** Budget aan- of uitzetten voor één werknemer. */
+    async setBudgetAan(employeeId, aan) {
+        const r = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        huidig.budgetAan = !!aan;
+        return await this._budgetSchrijf(employeeId, huidig);
+    },
+    // v367: het budgetjaar loopt van 1 AUGUSTUS t/m 31 JULI. Een jaar
+    // heet naar zijn STARTJAAR: '2026' = 1 aug 2026 t/m 31 jul 2027.
+    BUDGET_STARTMAAND: 8,
+
+    /** Budgetjaar (startjaar, als string) waarin een datum valt. */
+    budgetJaarVan(datumISO) {
+        const s = String(datumISO || '');
+        const j = parseInt(s.slice(0, 4), 10);
+        const m = parseInt(s.slice(5, 7), 10);
+        if (!isFinite(j) || !isFinite(m)) return '';
+        return String(m >= this.BUDGET_STARTMAAND ? j : j - 1);
+    },
+
+    /** Het budgetjaar waarin we vandaag zitten. */
+    budgetJaarNu() {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return this.budgetJaarVan(d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()));
+    },
+
+    /** Leesbaar label, bv. '2026–2027'. */
+    budgetJaarLabel(startJaar) {
+        const j = parseInt(startJaar, 10);
+        return isFinite(j) ? (j + '\u2013' + (j + 1)) : String(startJaar || '');
     },
     budgetArtikel(id) {
         return this.BUDGET_ARTIKELEN.find(a => a.id === id) || null;
@@ -1623,6 +1667,7 @@ const RobawsAPI = {
             name: [e.firstName, e.lastName].filter(Boolean).join(' ') || e.fullName || e.name || e.email || '(naamloos)',
             status: String(e.status || ''),
             gestopt: /stopgezet/i.test(String(e.status || '')),
+            rol: this._roleFromEmployee(e),   // v366: standaard-budgetrecht
             kledij: this._kledijParse(e),
             budget: this._budgetParse(e),   // v363: zelfde call bedient beide modules
         }));
@@ -1677,6 +1722,53 @@ const RobawsAPI = {
         return true;
     },
 
+    // v368: DOCUMENTMAPPEN op een werknemersfiche. GEMETEN 24 aug:
+    //  - map aanmaken = JSON-POST { name, directory:true, parentId? }
+    //  - bestand in een map = multipart met het veld `parentId`
+    //  - de platte lijst /employees/{id}/documents bevat álles, met
+    //    parentId (leeg = bovenste niveau); een submap-lijst bestaat niet
+    //    (/documents/{id}/documents = 404), dus we leiden de boom hieruit af.
+
+    /** Zoek-of-maak een mappenpad, bv. ['Ontvangstbewijzen','2026'].
+     *  Geeft het id van de diepste map terug. */
+    async ensureEmployeeMap(employeeId, pad) {
+        const delen = (pad || []).map(x => String(x || '').trim()).filter(Boolean);
+        let ouder = null;
+        let docs = await this._employeeDocs(employeeId);
+        for (const naam of delen) {
+            const bestaat = docs.find(d => d && d.directory &&
+                String(d.name || '').toLowerCase() === naam.toLowerCase() &&
+                String(d.parentId || '') === String(ouder || ''));
+            if (bestaat) { ouder = String(bestaat.id); continue; }
+            const body = { name: naam, directory: true };
+            if (ouder) body.parentId = String(ouder);
+            const r = await this.post('employees/' + employeeId + '/documents', body);
+            const nieuw = r.data;
+            if ((r.code !== 200 && r.code !== 201) || !nieuw || !nieuw.id) {
+                throw new Error('Map "' + naam + '" aanmaken mislukte (' + r.code + ')');
+            }
+            ouder = String(nieuw.id);
+            docs = await this._employeeDocs(employeeId);
+        }
+        return ouder;
+    },
+
+    async _employeeDocs(employeeId) {
+        const r = await this.get('employees/' + employeeId + '/documents?limit=100', { bypassCache: true });
+        if (r.code !== 200) return [];
+        const d = r.data;
+        const lijst = (d && (d.items || d.data || (Array.isArray(d) ? d : []))) || [];
+        return Array.isArray(lijst) ? lijst : [];
+    },
+
+    /** PDF (Uint8Array) als document op de werknemersfiche, eventueel in een map. */
+    async uploadEmployeePdf(employeeId, bytes, fileName, parentId) {
+        const file = new File([new Blob([bytes], { type: 'application/pdf' })], fileName, { type: 'application/pdf' });
+        const res = await this.uploadFile('employees/' + employeeId + '/documents', file, fileName,
+            parentId ? { parentId: String(parentId) } : null);
+        if (res.code !== 200 && res.code !== 201) throw new Error('Upload gaf status ' + res.code);
+        return (res.data && res.data.id) || null;
+    },
     /** v357: HTML-document (onderhoudsregistratie) op een materiaal zetten.
      *  Zelfde route als de foto-upload; text/html i.p.v. afbeelding. */
     async uploadMaterialHtml(materialId, html, fileName) {
@@ -1837,13 +1929,15 @@ const RobawsAPI = {
         return out.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     },
 
-    async uploadFile(endpoint, file, fileName) {
+    async uploadFile(endpoint, file, fileName, extra) {
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
         const _ap = this._authPair();  // v231: per-werknemer key indien aanwezig
         const auth = btoa(_ap.key + ':' + _ap.secret);
 
         const formData = new FormData();
         formData.append('file', file, fileName);
+        // v368: extra velden (bv. parentId om in een map te plaatsen)
+        if (extra) for (const k of Object.keys(extra)) if (extra[k] != null) formData.append(k, String(extra[k]));
 
         const res = await this._fetchWithTimeout(url, {   // v207: ruime upload-timeout
             method: 'POST',

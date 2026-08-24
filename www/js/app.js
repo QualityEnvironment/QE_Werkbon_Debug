@@ -9460,6 +9460,9 @@ const app = {
         ctx.lineJoin = 'round';
         this._ohSigCtx = ctx;
         this._ohSigHas = false;
+        // v368: punten bewaren zodat de PDF de handtekening als échte lijnen tekent
+        this._ohSigPaden = [];
+        this._ohSigMaat = { breedte: rect.width, hoogte: rect.height };
         const getPos = (e) => {
             const r = canvas.getBoundingClientRect();
             const t = e.touches ? e.touches[0] : e;
@@ -9467,8 +9470,9 @@ const app = {
         };
         const self = this;
         let bezig = false;
-        const start = (e) => { e.preventDefault(); bezig = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
-        const move = (e) => { if (!bezig) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); self._ohSigHas = true; };
+        const start = (e) => { e.preventDefault(); bezig = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); self._ohSigPaden.push([{ x: p.x, y: p.y }]); };
+        const move = (e) => { if (!bezig) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); self._ohSigHas = true;
+            const huidig = self._ohSigPaden[self._ohSigPaden.length - 1]; if (huidig) huidig.push({ x: p.x, y: p.y }); };
         const end = () => { bezig = false; };
         canvas.addEventListener('touchstart', start, { passive: false });
         canvas.addEventListener('touchmove', move, { passive: false });
@@ -9484,6 +9488,7 @@ const app = {
         if (!c || !this._ohSigCtx) return;
         this._ohSigCtx.clearRect(0, 0, c.width, c.height);
         this._ohSigHas = false;
+        this._ohSigPaden = [];
     },
 
     /** Het onderhoudsverslag als zelfstandig Marble-document (zelfde stijl
@@ -9865,13 +9870,13 @@ const app = {
 
     openBudget() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
-        this._budState = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        this._budState = this._budState || { jaar: RobawsAPI.budgetJaarNu(), zoek: '', laste: '' };
         this.navigate('screenBudget', true);
         this.loadBudget();
     },
 
     budZet(k, v) {
-        this._budState = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        this._budState = this._budState || { jaar: RobawsAPI.budgetJaarNu(), zoek: '', laste: '' };
         this._budState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
         this._budRender();
     },
@@ -9887,13 +9892,13 @@ const app = {
             ]);
             this._budData = lijst;
             this._budVeldOk = veldOk;
-            const jaren = new Set([String(new Date().getFullYear())]);
-            for (const w of lijst) for (const r of w.budget.regels) if (r.datum) jaren.add(String(r.datum).slice(0, 4));
+            const jaren = new Set([RobawsAPI.budgetJaarNu()]);
+            for (const w of lijst) for (const r of w.budget.regels) { const bj = RobawsAPI.budgetJaarVan(r.datum); if (bj) jaren.add(bj); }
             const sel = document.getElementById('budJaar');
             if (sel) {
-                const cur = (this._budState && this._budState.jaar) || String(new Date().getFullYear());
+                const cur = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
                 sel.innerHTML = [...jaren].sort().reverse().map(j =>
-                    '<option value="' + j + '"' + (j === cur ? ' selected' : '') + '>Jaar ' + j + '</option>').join('');
+                    '<option value="' + j + '"' + (j === cur ? ' selected' : '') + '>Budgetjaar ' + RobawsAPI.budgetJaarLabel(j) + '</option>').join('');
             }
             this._budRender();
         } catch (e) {
@@ -9910,13 +9915,17 @@ const app = {
         return out.sort((x, y) => this._natSort(x, y));
     },
 
+    /** v366: krijgt deze werknemer een budget? Vlag budgetAan beslist;
+     *  ontbreekt die, dan telt de rol mee (bureel = nee). */
+    _budHeeft(w) { return RobawsAPI.budgetHeeftRecht(w && w.budget, w && w.rol); },
+
     _budJaarbudget(w) { return (w.budget && w.budget.jaarbudget) || RobawsAPI.BUDGET_STANDAARD; },
 
     /** Verbruik in een jaar, gesplitst in budget en firma. */
     _budVerbruik(w, jaar) {
         let budget = 0, firma = 0;
         for (const r of ((w.budget && w.budget.regels) || [])) {
-            if (String(r.datum || '').slice(0, 4) !== String(jaar)) continue;
+            if (RobawsAPI.budgetJaarVan(r.datum) !== String(jaar)) continue;
             const bedrag = Number(r.totaal) || 0;
             if (r.laste === 'firma') firma += bedrag; else budget += bedrag;
         }
@@ -9938,7 +9947,7 @@ const app = {
     _budRender() {
         const el = document.getElementById('budgetList');
         if (!el || !this._budData) return;
-        const s = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        const s = this._budState || { jaar: RobawsAPI.budgetJaarNu(), zoek: '', laste: '' };
         this._budOpen = this._budOpen || {};
         const esc = (t) => this.escapeHtml(t);
         let html = '';
@@ -9946,7 +9955,7 @@ const app = {
             html += '<div class="card" style="margin-bottom:10px;padding:12px 14px;background:var(--awash2,#F7EFE2);border-color:var(--aborder2,#E0C79B);font-size:12.5px;color:var(--amber2,#A5651A)">' +
                 'Het extraveld <strong>"Budget"</strong> (Lang tekstveld) bestaat nog niet op Werknemers in Robaws — boekingen worden dan stil niet bewaard.</div>';
         }
-        let lijst = this._budData.filter(w => !w.gestopt);
+        let lijst = this._budData.filter(w => !w.gestopt && this._budHeeft(w));   // v366
         if (s.zoek) lijst = lijst.filter(w => w.name.toLowerCase().includes(s.zoek));
         lijst.sort((a, b) => a.name.localeCompare(b.name));
         const groepen = lijst.map(w => ({ key: 'b:' + w.employeeId, w }));
@@ -9959,7 +9968,7 @@ const app = {
         }
         // Twee aparte totalen (vraag Levi): budget-verbruik én firma-kosten
         html += '<div class="card" style="margin-bottom:12px;padding:14px 16px;display:flex;gap:14px">' +
-            '<div style="flex:1"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Van budget</div>' +
+            '<div style="flex:1"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Van budget · ' + esc(RobawsAPI.budgetJaarLabel(s.jaar)) + '</div>' +
             '<div style="font-size:18px;font-weight:700;color:var(--ink,#26334B);margin-top:2px">' + this._budEur(totVerbruik) + '</div>' +
             '<div style="font-size:11px;color:var(--g2,#5F5E56)">van ' + this._budEur(totBudget) + '</div></div>' +
             '<div style="flex:1;border-left:1px solid var(--l2,#EBE8E0);padding-left:14px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Firma-kosten</div>' +
@@ -9975,7 +9984,7 @@ const app = {
             const pct = budget > 0 ? Math.min(100, Math.round((v.budget / budget) * 100)) : 0;
             const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
             let regels = ((w.budget && w.budget.regels) || [])
-                .filter(r => String(r.datum || '').slice(0, 4) === String(s.jaar));
+                .filter(r => RobawsAPI.budgetJaarVan(r.datum) === String(s.jaar));
             if (s.laste === 'budget') regels = regels.filter(r => r.laste !== 'firma');
             else if (s.laste === 'firma') regels = regels.filter(r => r.laste === 'firma');
             regels = regels.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
@@ -10006,7 +10015,7 @@ const app = {
                         '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums;color:' + (r.laste === 'firma' ? 'var(--g2,#5F5E56)' : 'var(--ink,#26334B)') + '">' + this._budEur(r.totaal) + '</span>' +
                         '<button onclick="event.stopPropagation();app.budgetRegelWeg(\'' + w.employeeId + '\',\'' + r.id + '\')" style="flex-shrink:0;border:none;background:none;color:var(--g3,#A3A29A);font-size:15px;line-height:1;padding:2px 4px;cursor:pointer" title="Boeking verwijderen">&times;</button>' +
                         '</div>').join('')
-                     : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Niets geboekt' + (s.laste ? ' in deze weergave' : '') + ' in ' + esc(s.jaar) + '.</div>') +
+                     : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Niets geboekt' + (s.laste ? ' in deze weergave' : '') + ' in ' + esc(RobawsAPI.budgetJaarLabel(s.jaar)) + '.</div>') +
                     '<div style="display:flex;gap:8px;margin-top:12px">' +
                     '  <button class="btn btn-outline" style="flex:1.4" onclick="event.stopPropagation();app.openBudgetBoeking(\'' + w.employeeId + '\')">+ Boeking</button>' +
                     '  <button class="btn btn-outline" style="flex:1" onclick="event.stopPropagation();app.budgetJaarbudget(\'' + w.employeeId + '\')">Budget \u2699</button>' +
@@ -10016,7 +10025,7 @@ const app = {
         }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Niemand gevonden.</div>';
         el.innerHTML = html;
         const sub = document.getElementById('logBudgetSub');
-        if (sub) sub.textContent = this._budEur(totVerbruik) + ' verbruikt in ' + s.jaar;
+        if (sub) sub.textContent = this._budEur(totVerbruik) + ' verbruikt in ' + RobawsAPI.budgetJaarLabel(s.jaar);
     },
 
     async budgetJaarbudget(empId) {
@@ -10050,7 +10059,7 @@ const app = {
         if (oud) oud.remove();
         const esc = (t) => this.escapeHtml(t);
         const vandaag = new Date().toISOString().slice(0, 10);
-        const kiesbaar = this._budData.filter(w => !w.gestopt);
+        const kiesbaar = this._budData.filter(w => !w.gestopt && this._budHeeft(w));
         const start = empId || (kiesbaar[0] || {}).employeeId || '';
         const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(start) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
         const cat = this._budCat();
@@ -10107,12 +10116,17 @@ const app = {
         const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
         const el = document.getElementById('budRest');
         if (!el || !w) return;
-        const jaar = (this._budState && this._budState.jaar) || String(new Date().getFullYear());
+        const jaar = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
         const budget = this._budJaarbudget(w);
         const rest = Math.round((budget - this._budVerbruik(w, jaar).budget) * 100) / 100;
-        el.innerHTML = rest < 0
-            ? '<span style="color:var(--red2,#B4372F);font-weight:600">' + this._budEur(-rest) + ' over budget</span> in ' + jaar
-            : 'Nog <strong>' + this._budEur(rest) + '</strong> van ' + this._budEur(budget) + ' in ' + jaar;
+        const lbl = RobawsAPI.budgetJaarLabel(jaar);
+        el.innerHTML = rest <= 0
+            ? '<span style="color:var(--red2,#B4372F);font-weight:600">Budget op</span>' + (rest < 0 ? ' (' + this._budEur(-rest) + ' over)' : '') +
+              ' in ' + lbl + ' \u2014 standaarduitvoering op kosten van de firma.'
+            : 'Nog <strong>' + this._budEur(rest) + '</strong> van ' + this._budEur(budget) + ' in ' + lbl;
+        // v370: budget op? dan is de firma de logische keuze — aanpasbaar
+        const lst = document.getElementById('budLaste');
+        if (lst) lst.value = (rest <= 0) ? 'firma' : 'budget';
         this.budMaatVul();
     },
 
@@ -10180,6 +10194,13 @@ const app = {
             opm: v('budOpm').trim(),
         };
         try {
+            // v368: vraagt dit artikel een ondertekend ontvangstbewijs?
+            if (a && a.bewijs) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Boeken'; }
+                this._gsBusy = false;
+                this._bewijsOpen(empId, w, regel);
+                return;
+            }
             await RobawsAPI.addBudgetRegel(empId, regel);
             this.toast(this._budEur(regel.totaal) + ' geboekt op ' + w.name.split(' ')[0]);
             const s = document.getElementById('budgetSheet'); if (s) s.remove();
@@ -10212,7 +10233,13 @@ const app = {
             const r = await RobawsAPI.get('employees/' + empId, { bypassCache: true });
             if (r.code !== 200 || !r.data) throw new Error('Kon je gegevens niet ophalen (' + r.code + ')');
             this._mijnBudget = RobawsAPI._budgetParse(r.data);
-            this._mijnBudgetJaar = this._mijnBudgetJaar ||  String(new Date().getFullYear());
+            // v366: geen budgetrecht (bv. bureel) → geen teller tonen
+            if (!RobawsAPI.budgetHeeftRecht(this._mijnBudget, RobawsAPI._roleFromEmployee(r.data))) {
+                el.innerHTML = '<div class="card" style="font-size:13.5px;color:var(--g2,#5F5E56);line-height:1.55">' +
+                    'Voor jouw functie is er geen materiaalbudget. Heb je toch iets nodig, vraag het dan aan bureel.</div>';
+                return;
+            }
+            this._mijnBudgetJaar = this._mijnBudgetJaar || RobawsAPI.budgetJaarNu();
             this._renderMijnBudget();
         } catch (e) {
             el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
@@ -10229,9 +10256,10 @@ const app = {
         const b = this._mijnBudget;
         if (!el || !b) return;
         const esc = (t) => this.escapeHtml(t);
-        const jaar = this._mijnBudgetJaar || String(new Date().getFullYear());
+        const jaar = this._mijnBudgetJaar || RobawsAPI.budgetJaarNu();
+        const jaarLbl = RobawsAPI.budgetJaarLabel(jaar);
         const budget = b.jaarbudget || RobawsAPI.BUDGET_STANDAARD;
-        const alle = (b.regels || []).filter(r => String(r.datum || '').slice(0, 4) === String(jaar));
+        const alle = (b.regels || []).filter(r => RobawsAPI.budgetJaarVan(r.datum) === String(jaar));
         const vanBudget = alle.filter(r => r.laste !== 'firma');
         const vanFirma = alle.filter(r => r.laste === 'firma');
         const op = Math.round(vanBudget.reduce((s, r) => s + (Number(r.totaal) || 0), 0) * 100) / 100;
@@ -10239,8 +10267,8 @@ const app = {
         const rest = Math.round((budget - op) * 100) / 100;
         const pct = budget > 0 ? Math.min(100, Math.round((op / budget) * 100)) : 0;
         const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
-        const jaren = [...new Set((b.regels || []).map(r => String(r.datum || '').slice(0, 4)).filter(Boolean))];
-        if (jaren.indexOf(String(new Date().getFullYear())) < 0) jaren.push(String(new Date().getFullYear()));
+        const jaren = [...new Set((b.regels || []).map(r => RobawsAPI.budgetJaarVan(r.datum)).filter(Boolean))];
+        if (jaren.indexOf(RobawsAPI.budgetJaarNu()) < 0) jaren.push(RobawsAPI.budgetJaarNu());
         jaren.sort().reverse();
         const REDEN = { kwijt: 'kwijt', kapot: 'kapot', versleten: 'versleten', nieuw: 'nieuw' };
         const rij = (r) =>
@@ -10252,15 +10280,15 @@ const app = {
             '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums">' + this._budEur(r.totaal) + '</span>' +
             '</div>';
         el.innerHTML =
-            '<p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px">Je krijgt elk jaar een budget voor je werkkledij en klein gereedschap. Wat je kwijtmaakt of stukmaakt, gaat hiervan af.</p>' +
+            '<p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px">Je krijgt elk werkjaar (1 augustus t/m 31 juli) een budget voor je werkkledij en klein persoonlijk materiaal. Wat je kwijtmaakt of stukmaakt, gaat hiervan af. Is je budget op, dan krijg je de standaarduitvoering \u2014 er wordt nooit loon ingehouden.</p>' +
             (jaren.length > 1
                 ? '<select class="form-input" style="width:100%;margin-bottom:12px" onchange="app.mijnBudgetJaar(this.value)">' +
-                  jaren.map(j => '<option value="' + j + '"' + (j === jaar ? ' selected' : '') + '>Jaar ' + j + '</option>').join('') + '</select>'
+                  jaren.map(j => '<option value="' + j + '"' + (j === jaar ? ' selected' : '') + '>Budgetjaar ' + RobawsAPI.budgetJaarLabel(j) + '</option>').join('') + '</select>'
                 : '') +
             // Grote teller: wat er nog over is
             '<div class="card" style="margin-bottom:14px;padding:18px 18px 16px;text-align:center">' +
             '  <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g1,#85847C)">' +
-            (rest < 0 ? 'Over je budget' : 'Nog beschikbaar') + ' \u00B7 ' + esc(jaar) + '</div>' +
+            (rest < 0 ? 'Over je budget' : 'Nog beschikbaar') + ' \u00B7 ' + esc(jaarLbl) + '</div>' +
             '  <div style="font-size:34px;font-weight:700;letter-spacing:-1px;color:' + kleur + ';margin:4px 0 2px">' + this._budEur(rest < 0 ? -rest : rest) + '</div>' +
             '  <div style="font-size:13px;color:var(--g2,#5F5E56)">' + this._budEur(op) + ' gebruikt van ' + this._budEur(budget) + '</div>' +
             '  <div style="margin-top:12px;height:9px;border-radius:5px;background:var(--l2,#EBE8E0);overflow:hidden">' +
@@ -10280,6 +10308,114 @@ const app = {
                   '<div class="card" style="padding:4px 16px 10px;opacity:.85">' +
                   vanFirma.slice().sort((a, b2) => String(b2.datum || '').localeCompare(String(a.datum || ''))).map(rij).join('') + '</div>'
                 : '');
+    },
+    // =============================================
+    // v368: ONTVANGSTBEWIJS (artikelen met de vlag `bewijs`)
+    // De werknemer tekent; er gaat een PDF naar zijn fiche in de map
+    // Ontvangstbewijzen/<jaar>. Pas daarna wordt de boeking weggeschreven —
+    // zo bestaat er nooit een boeking zonder bewijs.
+    // =============================================
+
+    _bewijsOpen(empId, w, regel) {
+        const oud = document.getElementById('budgetSheet');
+        if (oud) oud.remove();
+        this._bewijsCtx = { empId, w, regel };
+        this._ohSigHas = false;
+        this._ohSigPaden = [];
+        const esc = (t) => this.escapeHtml(t);
+        const ov = document.createElement('div');
+        ov.id = 'bewijsSheet';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99993;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="max-width:560px;margin:0 auto;padding:18px 16px calc(30px + env(safe-area-inset-bottom))">' +
+            '  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:2px">' +
+            '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent,#F99D3E)">Handtekening vereist</div>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Ontvangstbewijs</div></div>' +
+            '    <button onclick="app.bewijsAnnuleer()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '  </div>' +
+            '  <div style="font-size:12.5px;color:var(--g1,#85847C);margin-bottom:12px">' + esc(w.name) + ' tekent voor ontvangst. Het bewijs komt als PDF op zijn fiche te staan.</div>' +
+            '  <div class="card" style="padding:12px 14px;margin-bottom:12px">' +
+            '    <div style="display:flex;justify-content:space-between;gap:12px;font-size:14.5px">' +
+            '      <span style="color:var(--ink,#26334B)">' + esc((regel.aantal > 1 ? regel.aantal + '\u00D7 ' : '') + regel.oms) + (regel.maat ? ' <span style="color:var(--g1,#85847C)">maat ' + esc(regel.maat) + '</span>' : '') + '</span>' +
+            '      <b>' + this._budEur(regel.totaal) + '</b></div>' +
+            '  </div>' +
+            // v369: de verklaring MOET leesbaar zijn vóór het tekenen —
+            // exact dezelfde tekst als in de PDF (QEPdf.VERKLARING).
+            '  <div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C);margin:16px 0 6px">Verklaring</div>' +
+            '  <div class="card" style="padding:14px 16px">' +
+            QEPdf.VERKLARING.map(function (t) {
+                return '<p style="font-size:13.5px;line-height:1.55;color:var(--ink,#26334B);margin:0 0 10px">' + app.escapeHtml(t) + '</p>';
+            }).join('').replace(/margin:0 0 10px">([^<]*)<\/p>$/, 'margin:0">$1</p>') +
+            '  </div>' +
+            '  <label style="display:flex;align-items:flex-start;gap:9px;font-size:13.5px;color:var(--ink,#26334B);margin:14px 2px 0;line-height:1.5">' +
+            '    <input type="checkbox" id="bewijsAkkoord" style="width:19px;height:19px;flex-shrink:0;margin-top:1px">' +
+            '    <span>Ik heb bovenstaande verklaring gelezen en ga ermee akkoord.</span>' +
+            '  </label>' +
+            '  <label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">Naam van de ontvanger</label>' +
+            '  <input type="text" id="bewijsNaam" class="form-input" style="width:100%" value="' + esc(w.name) + '">' +
+            '  <label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">Handtekening</label>' +
+            '  <div style="background:#fff;border:1px solid var(--b1,#DDD8CC);border-radius:10px;overflow:hidden">' +
+            '    <canvas id="ohSigCanvas" style="width:100%;height:170px;display:block;touch-action:none;cursor:crosshair"></canvas>' +
+            '  </div>' +
+            '  <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="app.ohSigClear()">Wissen</button>' +
+            '  <button class="btn btn-primary btn-full" id="bewijsBtn" style="margin-top:16px" onclick="app.bewijsVersturen()">Ondertekenen en boeken</button>' +
+            '  <button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.bewijsAnnuleer()">Annuleren</button>' +
+            '</div>';
+        document.body.appendChild(ov);
+        setTimeout(() => this._ohSigInit('ohSigCanvas'), 80);
+    },
+
+    bewijsAnnuleer() {
+        const s = document.getElementById('bewijsSheet');
+        if (s) s.remove();
+        this._bewijsCtx = null;
+        this.toast('Geannuleerd — er is niets geboekt');
+    },
+
+    async bewijsVersturen() {
+        const c = this._bewijsCtx;
+        if (!c) return;
+        const naam = ((document.getElementById('bewijsNaam') || {}).value || '').trim();
+        if (!naam) { this.toast('Vul de naam van de ontvanger in', true); return; }
+        if (!((document.getElementById('bewijsAkkoord') || {}).checked)) {
+            this.toast('Lees de verklaring en vink aan dat je akkoord gaat', true); return;
+        }
+        if (!this._ohSigHas || !this._ohSigPaden || !this._ohSigPaden.length) { this.toast('Handtekening ontbreekt', true); return; }
+        if (this._gsBusy) return;
+        this._gsBusy = true;
+        const btn = document.getElementById('bewijsBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Bezig\u2026'; }
+        const r = c.regel;
+        try {
+            const pdf = QEPdf.ontvangstbewijs({
+                werknemer: c.w.name,
+                datum: r.datum,
+                datumLang: this._budDat(r.datum),
+                tijdstip: new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                door: (this.currentUser && this.currentUser.name) || '',
+                ondertekenaar: naam,
+                akkoordTijdstip: new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                artikelen: [{ naam: r.oms, aantal: r.aantal, maat: r.maat || '',
+                    bedrag: r.laste === 'firma' ? 'firma' : this._budEur(r.totaal) }],
+                handtekening: { paden: this._ohSigPaden,
+                    breedte: (this._ohSigMaat || {}).breedte || 600, hoogte: (this._ohSigMaat || {}).hoogte || 170 },
+            });
+            const jaar = String(r.datum || '').slice(0, 4) || String(new Date().getFullYear());
+            const map = await RobawsAPI.ensureEmployeeMap(c.empId, ['Ontvangstbewijzen', jaar]);
+            const bestand = 'Ontvangstbewijs ' + r.oms + ' ' + r.datum + '.pdf';
+            await RobawsAPI.uploadEmployeePdf(c.empId, pdf, bestand, map);
+            // pas nu boeken — nooit een boeking zonder bewijs
+            await RobawsAPI.addBudgetRegel(c.empId, Object.assign({}, r, { bewijs: true }));
+            this.toast('Ondertekend en geboekt \u2713');
+            const sh = document.getElementById('bewijsSheet'); if (sh) sh.remove();
+            this._bewijsCtx = null;
+            this.loadBudget();
+        } catch (e) {
+            this.toast('Mislukt: ' + ((e && e.message) || '?'), true);
+        } finally {
+            this._gsBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Ondertekenen en boeken'; }
+        }
     },
     /** v344: Automations heeft een eigen scherm onder Instellingen. */
     openAutomations() {
