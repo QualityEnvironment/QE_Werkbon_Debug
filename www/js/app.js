@@ -9095,6 +9095,7 @@ const app = {
     gsZet(k, v) {
         this._gsState = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
         this._gsState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
+        this._gsGroep = null;   // v364: filter wijzigen = terug naar het overzicht
         this._gsRender();
     },
 
@@ -9112,7 +9113,7 @@ const app = {
             this._gsAlles = {};
             this._gsItems.forEach(m => { this._gsAlles[m.id] = m; });
             // soort-filter vullen (distinct, in gebruik)
-            const soorten = [...new Set(this._gsItems.map(m => this._gsSoort(m)).filter(Boolean))].sort();
+            const soorten = [...new Set(this._gsItems.map(m => this._gsSoort(m)).filter(Boolean))].sort((a, b) => this._natSort(a, b));
             const sel = document.getElementById('gsFilter');
             if (sel) {
                 const cur = (this._gsState && this._gsState.filter) || '';
@@ -9158,13 +9159,6 @@ const app = {
             '</div>';
     },
 
-    gsToggleGroep(idx) {
-        const g = (this._gsGroepen || [])[idx];
-        if (!g) return;
-        this._gsOpen = this._gsOpen || {};
-        this._gsOpen[g.key] = !this._gsOpen[g.key];
-        this._gsRender();
-    },
 
     /** Ergste keuringsstatus in een groep → kleur van het groepskaart-lichtje. */
     _gsGroepKleur(items) {
@@ -9178,26 +9172,31 @@ const app = {
         return beste ? beste.kleur : 'var(--g3,#A3A29A)';
     },
 
-    _gsRender() {
-        const el = document.getElementById('gereedschapList');
-        if (!el || !this._gsItems) return;
+    /** v364: een groep opent als eigen PAGINA (vraag Levi: overzichtelijker
+     *  dan uitklappen). null = het groepsoverzicht. */
+    gsOpenGroep(idx) {
+        const g = (this._gsGroepen || [])[idx];
+        if (!g) return;
+        this._gsGroep = g.key;
+        this._gsRender();
+        window.scrollTo(0, 0);
+    },
+    gsTerug() {
+        this._gsGroep = null;
+        this._gsRender();
+    },
+
+    _gsGroepenBouw() {
         const s = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
-        this._gsOpen = this._gsOpen || {};
-        let items = this._gsItems.slice();
+        let items = (this._gsItems || []).slice();
         if (s.filter) items = items.filter(m => this._gsSoort(m) === s.filter);
-        if (s.zoek) {
-            items = items.filter(m => ((m.name || '') + ' ' + (m.brand || '') + ' ' + (m.serialNumber || '')).toLowerCase().includes(s.zoek));
-        }
+        if (s.zoek) items = items.filter(m => ((m.name || '') + ' ' + (m.brand || '') + ' ' + (m.serialNumber || '')).toLowerCase().includes(s.zoek));
         const actief = items.filter(m => String(m.status || '') !== 'inactief');
         const uitDienst = items.filter(m => String(m.status || '') === 'inactief');
-        // urgentste eerst binnen elke groep
         const rang = { verlopen: 0, nooit: 1, rood: 2, oranje: 3, groen: 4, onbekend: 5, vrij: 6, uit: 7 };
         const sorteer = (arr) => arr.sort((a, b) => (rang[this._gsStatus(a).key] ?? 9) - (rang[this._gsStatus(b).key] ?? 9) || String(a.name || '').localeCompare(String(b.name || '')));
-        // v356: groepen worden openklikbare KAARTEN (Logistiek-hub-stijl);
-        // per-soort-rijen tonen de locatie, per-locatie-rijen de soort.
         const groepen = [];
         if (s.weergave === 'locatie') {
-            // volgorde van de stocklocatie-lijst (magazijnen eerst), rest achteraan
             for (const loc of (this._gsLocs || [])) {
                 const in1 = actief.filter(m => String(m.stockLocationId) === String(loc.id));
                 if (in1.length) groepen.push({ key: 'l:' + loc.id, kop: loc.name, items: sorteer(in1), sub: 'soort' });
@@ -9205,7 +9204,8 @@ const app = {
             const zonder = actief.filter(m => !m.stockLocationId || !this._gsLocNaam(m.stockLocationId));
             if (zonder.length) groepen.push({ key: 'l:geen', kop: 'Zonder locatie', items: sorteer(zonder), sub: 'soort' });
         } else {
-            const soorten = [...new Set(actief.map(m => this._gsSoort(m)).filter(Boolean))].sort();
+            // v364: numeriek sorteren — '3. Boormachines' vóór '10. Draadsnijmachines'
+            const soorten = [...new Set(actief.map(m => this._gsSoort(m)).filter(Boolean))].sort((a, b) => this._natSort(a, b));
             for (const soort of soorten) {
                 groepen.push({ key: 's:' + soort, kop: soort, items: sorteer(actief.filter(m => this._gsSoort(m) === soort)), sub: 'locatie' });
             }
@@ -9215,26 +9215,41 @@ const app = {
         if (uitDienst.length) {
             groepen.push({ key: 'uit', kop: 'Buiten dienst', items: sorteer(uitDienst), sub: s.weergave === 'locatie' ? 'soort' : 'locatie', uit: true });
         }
+        return groepen;
+    },
+
+    _gsRender() {
+        const el = document.getElementById('gereedschapList');
+        if (!el || !this._gsItems) return;
+        const s = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
+        const groepen = this._gsGroepenBouw();
         this._gsGroepen = groepen;
+        // --- detailpagina van één groep ---
+        const huidig = this._gsGroep ? groepen.find(g => g.key === this._gsGroep) : null;
+        if (this._gsGroep && !huidig) this._gsGroep = null;
+        if (huidig) {
+            el.innerHTML =
+                '<button class="btn btn-outline" style="margin-bottom:12px" onclick="app.gsTerug()">\u2190 Alle soorten</button>' +
+                '<div style="font-size:18px;font-weight:700;letter-spacing:-0.3px;color:var(--ink,#26334B);margin:0 2px 2px">' + this.escapeHtml(huidig.kop) + '</div>' +
+                '<div style="font-size:12.5px;color:var(--g1,#85847C);margin:0 2px 12px">' + huidig.items.length + ' stuks</div>' +
+                '<div class="card" style="padding:2px 16px 6px">' + huidig.items.map(m => this._gsRij(m, huidig.sub)).join('') + '</div>';
+            return;
+        }
+        // --- overzicht: één kaart per groep ---
         el.innerHTML = groepen.map((g, idx) => {
-            const open = !!s.zoek || !!this._gsOpen[g.key];   // zoeken = alles open
             const acties = g.uit ? 0 : g.items.filter(m => ['verlopen', 'rood', 'oranje', 'nooit'].includes(this._gsStatus(m).key)).length;
             const kleur = g.uit ? 'var(--g3,#A3A29A)' : this._gsGroepKleur(g.items);
-            return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
-                '<div style="display:flex;align-items:center;gap:12px;padding:15px 16px;cursor:pointer" onclick="app.gsToggleGroep(' + idx + ')">' +
+            return '<div class="card" style="margin-bottom:10px;padding:15px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="app.gsOpenGroep(' + idx + ')">' +
                 '  <span style="flex-shrink:0;width:11px;height:11px;border-radius:50%;background:' + kleur + '"></span>' +
                 '  <div style="flex:1;min-width:0">' +
                 '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(g.kop) + '</div>' +
                 '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + g.items.length + ' stuks' +
                 (acties ? ' · <span style="color:var(--amber,#D97E24);font-weight:600">' + acties + ' keuring(en) op komst</span>' : '') + '</div>' +
                 '  </div>' +
-                '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
-                '</div>' +
-                (open ? '<div style="padding:0 16px 4px">' + g.items.map(m => this._gsRij(m, g.sub)).join('') + '</div>' : '') +
+                '  <span style="flex-shrink:0;font-size:16px;color:var(--g3,#A3A29A)">\u2192</span>' +
                 '</div>';
         }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen gereedschap gevonden' + (s.zoek || s.filter ? ' voor deze zoekopdracht/filter.' : ' — voeg toe met "+ Nieuw".') + '</div>';
     },
-
     openGereedschapItem(id) {
         const m = (this._gsAlles || {})[id];
         if (!m) return;
@@ -9822,376 +9837,450 @@ const app = {
     },
 
     // =============================================
-    // v361: KLEDIJ & PBM (Logistiek — bureel)
+    // v364: WERKNEMERSBUDGET (Logistiek — bureel)
+    //
+    // Kledij is hierin opgegaan (vraag Levi 21 aug): kledingstukken zijn
+    // gewone artikelen in de categorie 'kledij'. De oude Kledij-JSON blijft
+    // in Robaws staan (niet meer getoond); maten worden per boeking bewaard.
     // =============================================
 
-    openKledij() {
-        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
-        this._kldState = this._kldState || { weergave: 'werknemer', zoek: '' };
-        this.navigate('screenKledij', true);
-        this.loadKledij();
-    },
-
-    kldZet(k, v) {
-        this._kldState = this._kldState || { weergave: 'werknemer', zoek: '' };
-        this._kldState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
-        this._kldRender();
-    },
-
-    async loadKledij() {
-        const el = document.getElementById('kledijList');
-        if (!el) return;
-        el.innerHTML = '<div class="spinner"></div>';
-        try {
-            const [lijst, veldOk] = await Promise.all([
-                RobawsAPI.getKledijWerknemers({ bypassCache: true }),
-                RobawsAPI.kledijVeldBestaat(),
-            ]);
-            this._kldData = lijst;
-            this._kldVeldOk = veldOk;
-            this._kldRender();
-            const sub = document.getElementById('logKledijSub');
-            if (sub) {
-                let stuks = 0;
-                for (const w of lijst) {
-                    for (const r of w.kledij.regels) {
-                        for (const it of (r.items || [])) stuks += (r.type === 'in' ? -1 : 1) * (Number(it.aantal) || 0);
-                    }
-                }
-                sub.textContent = stuks + ' stuks in omloop';
-            }
-        } catch (e) {
-            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
-        }
-    },
-
-    /** Netto in bezit per artikel-id (uitgifte − inlevering). */
-    _kldBezit(kledij) {
-        const per = {};
-        for (const r of (kledij.regels || [])) {
-            const teken = r.type === 'in' ? -1 : 1;
-            for (const it of (r.items || [])) {
-                per[it.art] = (per[it.art] || 0) + teken * (Number(it.aantal) || 0);
-            }
-        }
-        return per;
-    },
-
-    _kldAantalTotaal(kledij) {
-        const per = this._kldBezit(kledij);
-        return Object.values(per).reduce((a, b) => a + b, 0);
-    },
-
-    _kldDatum(iso, kort) {
+    /** Datum kort/lang — ook gebruikt door de budgetregels. */
+    _budDat(iso, kort) {
         if (!iso) return '—';
         return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE',
             kort ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'long', year: 'numeric' });
     },
 
-    kldToggle(idx) {
-        const g = (this._kldGroepen || [])[idx];
-        if (!g) return;
-        this._kldOpen = this._kldOpen || {};
-        this._kldOpen[g.key] = !this._kldOpen[g.key];
-        this._kldRender();
+    /** Sorteert '3. Boormachines' vóór '10. Draadsnijmachines' (vraag Levi:
+     *  gewone tekstsortering zette de tienen bovenaan). */
+    _natSort(a, b) {
+        const na = parseInt((String(a).match(/^\s*(\d+)/) || [])[1], 10);
+        const nb = parseInt((String(b).match(/^\s*(\d+)/) || [])[1], 10);
+        const ga = isFinite(na), gb = isFinite(nb);
+        if (ga && gb && na !== nb) return na - nb;
+        if (ga && !gb) return -1;
+        if (!ga && gb) return 1;
+        return String(a).localeCompare(String(b));
     },
 
-    _kldRender() {
-        const el = document.getElementById('kledijList');
-        if (!el || !this._kldData) return;
-        const s = this._kldState || { weergave: 'werknemer', zoek: '' };
-        this._kldOpen = this._kldOpen || {};
+    openBudget() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this._budState = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        this.navigate('screenBudget', true);
+        this.loadBudget();
+    },
+
+    budZet(k, v) {
+        this._budState = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        this._budState[k] = k === 'zoek' ? String(v || '').trim().toLowerCase() : v;
+        this._budRender();
+    },
+
+    async loadBudget() {
+        const el = document.getElementById('budgetList');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const [lijst, veldOk] = await Promise.all([
+                RobawsAPI.getKledijWerknemers({ bypassCache: true }),
+                RobawsAPI.budgetVeldBestaat(),
+            ]);
+            this._budData = lijst;
+            this._budVeldOk = veldOk;
+            const jaren = new Set([String(new Date().getFullYear())]);
+            for (const w of lijst) for (const r of w.budget.regels) if (r.datum) jaren.add(String(r.datum).slice(0, 4));
+            const sel = document.getElementById('budJaar');
+            if (sel) {
+                const cur = (this._budState && this._budState.jaar) || String(new Date().getFullYear());
+                sel.innerHTML = [...jaren].sort().reverse().map(j =>
+                    '<option value="' + j + '"' + (j === cur ? ' selected' : '') + '>Jaar ' + j + '</option>').join('');
+            }
+            this._budRender();
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
+        }
+    },
+
+    /** De gedeelde artikelcatalogus (fiche 1) of de ingebouwde startlijst. */
+    _budCat() { return RobawsAPI.budgetCatalogus(this._budData || []); },
+    _budCatArt(id) { return this._budCat().find(a => a.id === id) || null; },
+    _budCatGroepen() {
+        const out = [];
+        for (const a of this._budCat()) if (out.indexOf(a.groep) < 0) out.push(a.groep);
+        return out.sort((x, y) => this._natSort(x, y));
+    },
+
+    _budJaarbudget(w) { return (w.budget && w.budget.jaarbudget) || RobawsAPI.BUDGET_STANDAARD; },
+
+    /** Verbruik in een jaar, gesplitst in budget en firma. */
+    _budVerbruik(w, jaar) {
+        let budget = 0, firma = 0;
+        for (const r of ((w.budget && w.budget.regels) || [])) {
+            if (String(r.datum || '').slice(0, 4) !== String(jaar)) continue;
+            const bedrag = Number(r.totaal) || 0;
+            if (r.laste === 'firma') firma += bedrag; else budget += bedrag;
+        }
+        return { budget: Math.round(budget * 100) / 100, firma: Math.round(firma * 100) / 100 };
+    },
+
+    _budEur(n) {
+        return '\u20AC\u00A0' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2).replace('.', ',');
+    },
+
+    budToggle(idx) {
+        const g = (this._budGroepen || [])[idx];
+        if (!g) return;
+        this._budOpen = this._budOpen || {};
+        this._budOpen[g.key] = !this._budOpen[g.key];
+        this._budRender();
+    },
+
+    _budRender() {
+        const el = document.getElementById('budgetList');
+        if (!el || !this._budData) return;
+        const s = this._budState || { jaar: String(new Date().getFullYear()), zoek: '', laste: '' };
+        this._budOpen = this._budOpen || {};
         const esc = (t) => this.escapeHtml(t);
         let html = '';
-        if (this._kldVeldOk === false) {
+        if (this._budVeldOk === false) {
             html += '<div class="card" style="margin-bottom:10px;padding:12px 14px;background:var(--awash2,#F7EFE2);border-color:var(--aborder2,#E0C79B);font-size:12.5px;color:var(--amber2,#A5651A)">' +
-                'Het extraveld <strong>"Kledij"</strong> (Lang tekstveld) bestaat nog niet op Werknemers in Robaws — registraties worden dan stil niet bewaard. Maak het veld eerst aan.</div>';
+                'Het extraveld <strong>"Budget"</strong> (Lang tekstveld) bestaat nog niet op Werknemers in Robaws — boekingen worden dan stil niet bewaard.</div>';
         }
-        const groepen = [];
-        if (s.weergave === 'artikel') {
-            // Per kledingstuk: log van alle uitgiftes + totalen (vraag Levi)
-            const jaar = String(new Date().getFullYear());
-            for (const art of RobawsAPI.KLEDIJ_ARTIKELEN) {
-                const log = [];
-                let uit = 0, terug = 0, ditJaar = 0;
-                for (const w of this._kldData) {
-                    for (const r of w.kledij.regels) {
-                        for (const it of (r.items || [])) {
-                            if (it.art !== art.id) continue;
-                            const n = Number(it.aantal) || 0;
-                            if (r.type === 'in') terug += n; else uit += n;
-                            if (r.type !== 'in' && String(r.datum || '').slice(0, 4) === jaar) ditJaar += n;
-                            log.push({ datum: r.datum, naam: w.name, aantal: n, maat: it.maat, type: r.type });
-                        }
-                    }
-                }
-                if (s.zoek && !art.naam.toLowerCase().includes(s.zoek)) continue;
-                log.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
-                groepen.push({ key: 'a:' + art.id, art, log, uit, terug, ditJaar, omloop: uit - terug });
-            }
-            this._kldGroepen = groepen;
-            html += groepen.map((g, idx) => {
-                const open = !!this._kldOpen[g.key];
-                const kleurGroep = g.art.groep === 'pbm' ? 'var(--accent,#F99D3E)' : 'var(--ink,#26334B)';
-                return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
-                    '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer" onclick="app.kldToggle(' + idx + ')">' +
-                    '  <span style="flex-shrink:0;width:8px;height:26px;border-radius:3px;background:' + kleurGroep + ';opacity:' + (g.omloop ? '1' : '0.25') + '"></span>' +
-                    '  <div style="flex:1;min-width:0">' +
-                    '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(g.art.naam) + (g.art.groep === 'pbm' ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--accent,#F99D3E)">PBM</span>' : '') + '</div>' +
-                    '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + g.omloop + ' in omloop · ' + g.uit + ' uitgegeven' + (g.ditJaar ? ' · ' + g.ditJaar + ' dit jaar' : '') + (g.terug ? ' · ' + g.terug + ' terug' : '') + '</div>' +
-                    '  </div>' +
-                    '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
-                    '</div>' +
-                    (open ? '<div style="padding:0 16px 10px">' + (g.log.length
-                        ? g.log.map(r => '<div style="display:flex;align-items:center;gap:10px;padding:9px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
-                            '<span style="flex-shrink:0;width:74px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._kldDatum(r.datum, true)) + '</span>' +
-                            '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink,#26334B)">' + esc(r.naam) + (r.maat ? ' <span style="color:var(--g1,#85847C)">· ' + esc(r.maat) + '</span>' : '') + '</span>' +
-                            '<span style="flex-shrink:0;font-weight:700;color:' + (r.type === 'in' ? 'var(--g2,#5F5E56)' : 'var(--ink,#26334B)') + '">' + (r.type === 'in' ? '−' : '+') + r.aantal + '</span>' +
-                            '</div>').join('')
-                        : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Nog niets uitgegeven.</div>') + '</div>' : '') +
-                    '</div>';
-            }).join('');
-        } else {
-            // Per werknemer
-            let lijst = this._kldData.slice();
-            if (s.zoek) lijst = lijst.filter(w => w.name.toLowerCase().includes(s.zoek));
-            const actief = lijst.filter(w => !w.gestopt);
-            // stopgezette alleen tonen als ze nog spullen hebben (terugvorderen)
-            const gestopt = lijst.filter(w => w.gestopt && this._kldAantalTotaal(w.kledij) > 0);
-            actief.sort((a, b) => a.name.localeCompare(b.name));
-            gestopt.sort((a, b) => a.name.localeCompare(b.name));
-            for (const w of actief.concat(gestopt)) groepen.push({ key: 'w:' + w.employeeId, w });
-            this._kldGroepen = groepen;
-            html += groepen.map((g, idx) => {
-                const w = g.w;
-                const open = !!this._kldOpen[g.key];
-                const bezit = this._kldBezit(w.kledij);
-                const totaal = Object.values(bezit).reduce((a, b) => a + b, 0);
-                const regels = (w.kledij.regels || []).slice().sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
-                const laatste = regels.length ? regels[0].datum : null;
-                const maten = w.kledij.maten || {};
-                const maatTekst = [maten.schoen ? 'schoen ' + maten.schoen : null, maten.broek ? 'broek ' + maten.broek : null, maten.boven ? maten.boven : null].filter(Boolean).join(' · ');
-                const inBezit = RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => (bezit[a.id] || 0) !== 0);
-                return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden' + (w.gestopt ? ';opacity:.75' : '') + '">' +
-                    '<div style="display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer" onclick="app.kldToggle(' + idx + ')">' +
-                    '  <div style="flex:1;min-width:0">' +
-                    '    <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(w.name) + (w.gestopt ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--red2,#B4372F)">STOPGEZET</span>' : '') + '</div>' +
-                    '    <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + totaal + ' stuks in bezit' + (laatste ? ' · laatst ' + esc(this._kldDatum(laatste, true)) : '') + (maatTekst ? ' · ' + esc(maatTekst) : '') + '</div>' +
-                    '  </div>' +
-                    '  <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '▴' : '▾') + '</span>' +
-                    '</div>' +
-                    (open ? '<div style="padding:0 16px 12px">' +
-                        (inBezit.length
-                            ? inBezit.map(a => '<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
-                                '<span style="flex:1;color:var(--ink,#26334B)">' + esc(a.naam) + '</span>' +
-                                '<span style="font-weight:700;color:var(--ink,#26334B)">' + (bezit[a.id] || 0) + '</span></div>').join('')
-                            : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Nog niets geregistreerd.</div>') +
-                        (regels.length ? '<div style="margin-top:12px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Historiek</div>' +
-                            regels.slice(0, 12).map(r => '<div style="padding:7px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:12.5px;color:var(--g2,#5F5E56)">' +
-                                '<span style="font-variant-numeric:tabular-nums">' + esc(this._kldDatum(r.datum, true)) + '</span> · ' +
-                                (r.type === 'in' ? '<span style="color:var(--g1,#85847C)">ingeleverd</span> ' : '') +
-                                esc((r.items || []).map(it => it.aantal + '× ' + ((RobawsAPI.kledijArtikel(it.art) || {}).naam || it.art) + (it.maat ? ' (' + it.maat + ')' : '')).join(', ')) +
-                                (r.door ? ' <span style="color:var(--g3,#A3A29A)">— ' + esc(r.door) + '</span>' : '') +
-                                '</div>').join('') : '') +
-                        '<button class="btn btn-outline btn-full" style="margin-top:12px" onclick="event.stopPropagation();app.openKledijUitgifte(\'' + w.employeeId + '\')">+ Uitgifte voor ' + esc(w.name.split(' ')[0]) + '</button>' +
-                        '</div>' : '') +
-                    '</div>';
-            }).join('');
+        let lijst = this._budData.filter(w => !w.gestopt);
+        if (s.zoek) lijst = lijst.filter(w => w.name.toLowerCase().includes(s.zoek));
+        lijst.sort((a, b) => a.name.localeCompare(b.name));
+        const groepen = lijst.map(w => ({ key: 'b:' + w.employeeId, w }));
+        this._budGroepen = groepen;
+        let totBudget = 0, totVerbruik = 0, totFirma = 0;
+        for (const g of groepen) {
+            totBudget += this._budJaarbudget(g.w);
+            const v = this._budVerbruik(g.w, s.jaar);
+            totVerbruik += v.budget; totFirma += v.firma;
         }
-        el.innerHTML = html || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Niets gevonden.</div>';
+        // Twee aparte totalen (vraag Levi): budget-verbruik én firma-kosten
+        html += '<div class="card" style="margin-bottom:12px;padding:14px 16px;display:flex;gap:14px">' +
+            '<div style="flex:1"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Van budget</div>' +
+            '<div style="font-size:18px;font-weight:700;color:var(--ink,#26334B);margin-top:2px">' + this._budEur(totVerbruik) + '</div>' +
+            '<div style="font-size:11px;color:var(--g2,#5F5E56)">van ' + this._budEur(totBudget) + '</div></div>' +
+            '<div style="flex:1;border-left:1px solid var(--l2,#EBE8E0);padding-left:14px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Firma-kosten</div>' +
+            '<div style="font-size:18px;font-weight:700;color:var(--g2,#5F5E56);margin-top:2px">' + this._budEur(totFirma) + '</div>' +
+            '<div style="font-size:11px;color:var(--g2,#5F5E56)">buiten het budget</div></div>' +
+            '</div>';
+        html += groepen.map((g, idx) => {
+            const w = g.w;
+            const open = !!this._budOpen[g.key];
+            const budget = this._budJaarbudget(w);
+            const v = this._budVerbruik(w, s.jaar);
+            const rest = Math.round((budget - v.budget) * 100) / 100;
+            const pct = budget > 0 ? Math.min(100, Math.round((v.budget / budget) * 100)) : 0;
+            const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
+            let regels = ((w.budget && w.budget.regels) || [])
+                .filter(r => String(r.datum || '').slice(0, 4) === String(s.jaar));
+            if (s.laste === 'budget') regels = regels.filter(r => r.laste !== 'firma');
+            else if (s.laste === 'firma') regels = regels.filter(r => r.laste === 'firma');
+            regels = regels.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
+            return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
+                '<div style="padding:14px 16px;cursor:pointer" onclick="app.budToggle(' + idx + ')">' +
+                '  <div style="display:flex;align-items:center;gap:12px">' +
+                '    <div style="flex:1;min-width:0">' +
+                '      <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(w.name) + '</div>' +
+                '      <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + this._budEur(v.budget) + ' van ' + this._budEur(budget) +
+                       (rest < 0 ? ' · <span style="color:var(--red2,#B4372F);font-weight:700">' + this._budEur(-rest) + ' over budget</span>' : ' · nog ' + this._budEur(rest)) +
+                       (v.firma ? ' <span style="color:var(--g3,#A3A29A)">· firma ' + this._budEur(v.firma) + '</span>' : '') + '</div>' +
+                '    </div>' +
+                '    <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '\u25B4' : '\u25BE') + '</span>' +
+                '  </div>' +
+                '  <div style="margin-top:9px;height:7px;border-radius:4px;background:var(--l2,#EBE8E0);overflow:hidden">' +
+                '    <div style="height:100%;width:' + pct + '%;background:' + kleur + '"></div>' +
+                '  </div>' +
+                '</div>' +
+                (open ? '<div style="padding:0 16px 12px">' +
+                    (regels.length ? regels.map(r =>
+                        '<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13px">' +
+                        '<span style="flex-shrink:0;width:70px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._budDat(r.datum, true)) + '</span>' +
+                        '<span style="flex:1;min-width:0;color:var(--ink,#26334B)">' + esc((r.aantal > 1 ? r.aantal + '\u00D7 ' : '') + (r.oms || r.art)) +
+                          (r.maat ? ' <span style="color:var(--g1,#85847C)">' + esc(r.maat) + '</span>' : '') +
+                          (r.reden ? ' <span style="color:var(--g1,#85847C)">\u00B7 ' + esc(r.reden) + '</span>' : '') +
+                          (r.laste === 'firma' ? ' <span style="color:var(--g3,#A3A29A)">\u00B7 firma</span>' : '') +
+                          (r.opm ? '<div style="font-size:11.5px;color:var(--g1,#85847C)">' + esc(r.opm) + '</div>' : '') + '</span>' +
+                        '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums;color:' + (r.laste === 'firma' ? 'var(--g2,#5F5E56)' : 'var(--ink,#26334B)') + '">' + this._budEur(r.totaal) + '</span>' +
+                        '<button onclick="event.stopPropagation();app.budgetRegelWeg(\'' + w.employeeId + '\',\'' + r.id + '\')" style="flex-shrink:0;border:none;background:none;color:var(--g3,#A3A29A);font-size:15px;line-height:1;padding:2px 4px;cursor:pointer" title="Boeking verwijderen">&times;</button>' +
+                        '</div>').join('')
+                     : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Niets geboekt' + (s.laste ? ' in deze weergave' : '') + ' in ' + esc(s.jaar) + '.</div>') +
+                    '<div style="display:flex;gap:8px;margin-top:12px">' +
+                    '  <button class="btn btn-outline" style="flex:1.4" onclick="event.stopPropagation();app.openBudgetBoeking(\'' + w.employeeId + '\')">+ Boeking</button>' +
+                    '  <button class="btn btn-outline" style="flex:1" onclick="event.stopPropagation();app.budgetJaarbudget(\'' + w.employeeId + '\')">Budget \u2699</button>' +
+                    '</div>' +
+                '</div>' : '') +
+                '</div>';
+        }).join('') || '<div class="card" style="font-size:13px;color:var(--qe-grey)">Niemand gevonden.</div>';
+        el.innerHTML = html;
+        const sub = document.getElementById('logBudgetSub');
+        if (sub) sub.textContent = this._budEur(totVerbruik) + ' verbruikt in ' + s.jaar;
     },
 
-    // ---------- uitgifteformulier ----------
+    async budgetJaarbudget(empId) {
+        const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
+        if (!w) return;
+        const inv = prompt('Jaarbudget voor ' + w.name + ' (euro). Leeg = standaard ' + RobawsAPI.BUDGET_STANDAARD + '.', String(this._budJaarbudget(w)));
+        if (inv === null) return;
+        const n = String(inv).trim().replace(',', '.');
+        if (n && !isFinite(Number(n))) { this.toast('Geen geldig bedrag', true); return; }
+        try {
+            await RobawsAPI.setJaarbudget(empId, n ? Number(n) : null);
+            this.toast('Jaarbudget bijgewerkt');
+            this.loadBudget();
+        } catch (e) { this.toast('Mislukt: ' + ((e && e.message) || '?'), true); }
+    },
 
-    openKledijUitgifte(empId) {
-        if (!this._kldData) { this.toast('Even wachten — gegevens laden nog', true); return; }
-        const oud = document.getElementById('kledijSheet');
+    async budgetRegelWeg(empId, regelId) {
+        if (!confirm('Deze boeking verwijderen?')) return;
+        try {
+            await RobawsAPI.removeBudgetRegel(empId, regelId);
+            this.toast('Boeking verwijderd');
+            this.loadBudget();
+        } catch (e) { this.toast('Mislukt: ' + ((e && e.message) || '?'), true); }
+    },
+
+    // ---------- boekingsformulier ----------
+
+    openBudgetBoeking(empId) {
+        if (!this._budData) { this.toast('Even wachten — gegevens laden nog', true); return; }
+        const oud = document.getElementById('budgetSheet');
         if (oud) oud.remove();
-        this._kldForm = { aantallen: {}, empId: empId || (this._kldData.find(w => !w.gestopt) || {}).employeeId || '' };
-        this._ohSigHas = false;
         const esc = (t) => this.escapeHtml(t);
         const vandaag = new Date().toISOString().slice(0, 10);
-        const kiesbaar = this._kldData.filter(w => !w.gestopt);
-        const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(this._kldForm.empId) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
+        const kiesbaar = this._budData.filter(w => !w.gestopt);
+        const start = empId || (kiesbaar[0] || {}).employeeId || '';
+        const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(start) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
+        const cat = this._budCat();
+        const artOpties = this._budCatGroepen().map(g => '<optgroup label="' + esc(g) + '">' +
+            cat.filter(a => a.groep === g).map(a =>
+                '<option value="' + esc(a.id) + '">' + esc(a.naam) + ' \u2014 ' + this._budEur(a.prijs) + '</option>').join('') +
+            '</optgroup>').join('') + '<option value="__vrij__">\u2014 Ander artikel (zelf invullen) \u2014</option>';
         const lbl = (t) => '<label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">' + t + '</label>';
-        const rij = (a) => '<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-top:1px solid var(--l2,#EBE8E0)">' +
-            '<span style="flex:1;font-size:14px;color:var(--ink,#26334B)">' + esc(a.naam) + '</span>' +
-            '<button class="btn btn-outline" style="width:40px;padding:6px 0;font-size:17px;line-height:1" onclick="app.kldStap(\'' + a.id + '\',-1)">−</button>' +
-            '<span id="kldA_' + a.id + '" style="min-width:26px;text-align:center;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink,#26334B)">0</span>' +
-            '<button class="btn btn-outline" style="width:40px;padding:6px 0;font-size:17px;line-height:1" onclick="app.kldStap(\'' + a.id + '\',1)">+</button>' +
-            '</div>';
-        const kop = (t) => '<div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">' + t + '</div>';
         const ov = document.createElement('div');
-        ov.id = 'kledijSheet';
+        ov.id = 'budgetSheet';
         ov.style.cssText = 'position:fixed;inset:0;z-index:99992;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
         ov.innerHTML =
             '<div style="max-width:560px;margin:0 auto;padding:18px 16px calc(30px + env(safe-area-inset-bottom))">' +
             '  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:2px">' +
             '    <div><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent,#F99D3E)">Logistiek</div>' +
-            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Kledij uitgeven</div></div>' +
-            '    <button onclick="document.getElementById(\'kledijSheet\').remove()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
+            '    <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B)">Boeking op budget</div></div>' +
+            '    <button onclick="document.getElementById(\'budgetSheet\').remove()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
             '  </div>' +
+            '  <div id="budRest" style="font-size:12.5px;color:var(--g1,#85847C);margin-bottom:4px"></div>' +
             lbl('Werknemer') +
-            '  <select id="kldWie" class="form-input" style="width:100%" onchange="app.kldWisselWerknemer(this.value)">' + opties + '</select>' +
+            '  <select id="budWie" class="form-input" style="width:100%" onchange="app.budWissel(this.value)">' + opties + '</select>' +
             '  <div style="display:flex;gap:8px;margin-top:10px">' +
             '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Datum</label>' +
-            '      <input type="date" id="kldDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '"></div>' +
-            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Soort</label>' +
-            '      <select id="kldType" class="form-input" style="width:100%"><option value="uit">Uitgifte</option><option value="in">Inlevering</option></select></div>' +
+            '      <input type="date" id="budDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '"></div>' +
+            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Reden</label>' +
+            '      <select id="budReden" class="form-input" style="width:100%">' +
+            '        <option value="kwijt">Kwijt / verloren</option><option value="kapot">Kapot gemaakt</option>' +
+            '        <option value="versleten">Versleten</option><option value="nieuw">Nieuw / aanvulling</option></select></div>' +
             '  </div>' +
-            lbl('Maten (worden onthouden)') +
-            '  <div style="display:flex;gap:8px">' +
-            '    <input type="text" id="kldMaatSchoen" class="form-input" style="flex:1" placeholder="Schoen">' +
-            '    <input type="text" id="kldMaatBroek" class="form-input" style="flex:1" placeholder="Broek">' +
-            '    <input type="text" id="kldMaatBoven" class="form-input" style="flex:1" placeholder="Bovenmaat">' +
+            lbl('Artikel') +
+            '  <select id="budArt" class="form-input" style="width:100%" onchange="app.budArtWissel(this.value)">' + artOpties + '</select>' +
+            '  <input type="text" id="budVrij" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Omschrijving artikel">' +
+            '  <input type="text" id="budMaat" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Maat (bv. L of 44)">' +
+            '  <div style="display:flex;gap:8px;margin-top:10px">' +
+            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Aantal</label>' +
+            '      <input type="number" id="budAantal" class="form-input" style="width:100%" value="1" min="1" step="1" oninput="app.budTotaal()"></div>' +
+            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Stukprijs (\u20AC)</label>' +
+            '      <input type="number" id="budPrijs" class="form-input" style="width:100%" value="0" min="0" step="0.5" oninput="app.budTotaal()"></div>' +
             '  </div>' +
-            kop('Kledij') +
-            RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => a.groep === 'kledij').map(rij).join('') +
-            kop('PBM') +
-            RobawsAPI.KLEDIJ_ARTIKELEN.filter(a => a.groep === 'pbm').map(rij).join('') +
+            '  <div id="budTotaalRegel" style="margin-top:10px;font-size:15px;font-weight:700;color:var(--ink,#26334B)"></div>' +
+            lbl('Ten laste van') +
+            '  <select id="budLaste" class="form-input" style="width:100%">' +
+            '    <option value="budget">Budget van de werknemer</option><option value="firma">Firma (niet van het budget)</option></select>' +
             lbl('Opmerking') +
-            '  <input type="text" id="kldOpm" class="form-input" style="width:100%" placeholder="Optioneel">' +
-            '  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink,#26334B);margin:16px 2px 0">' +
-            '    <input type="checkbox" id="kldTekenen" style="width:18px;height:18px" onchange="app.kldTekenToggle(this.checked)"> Laten tekenen voor ontvangst' +
-            '  </label>' +
-            '  <div id="kldSigWrap" style="display:none;margin-top:8px">' +
-            '    <div style="background:#fff;border:1px solid var(--b1,#DDD8CC);border-radius:10px;overflow:hidden">' +
-            '      <canvas id="kldSigCanvas" style="width:100%;height:150px;display:block;touch-action:none;cursor:crosshair"></canvas>' +
-            '    </div>' +
-            '    <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="app.ohSigClear(\'kldSigCanvas\')">Wissen</button>' +
-            '    <div style="font-size:12px;color:var(--g2,#5F5E56);margin-top:6px">Het ontvangstbewijs komt als document op de werknemersfiche.</div>' +
-            '  </div>' +
-            '  <button class="btn btn-primary btn-full" id="kldVerstuurBtn" style="margin-top:16px" onclick="app.kledijRegistreer()">Registreren</button>' +
+            '  <input type="text" id="budOpm" class="form-input" style="width:100%" placeholder="Optioneel">' +
+            '  <button class="btn btn-primary btn-full" id="budVerstuurBtn" style="margin-top:16px" onclick="app.budgetBoeken()">Boeken</button>' +
             '</div>';
         document.body.appendChild(ov);
-        this.kldWisselWerknemer(this._kldForm.empId);
+        this.budArtWissel((document.getElementById('budArt') || {}).value);
+        this.budWissel(start);
     },
 
-    kldWisselWerknemer(empId) {
-        this._kldForm = this._kldForm || { aantallen: {} };
-        this._kldForm.empId = empId;
-        const w = (this._kldData || []).find(x => String(x.employeeId) === String(empId));
-        const m = (w && w.kledij && w.kledij.maten) || {};
-        const zet = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-        zet('kldMaatSchoen', m.schoen);
-        zet('kldMaatBroek', m.broek);
-        zet('kldMaatBoven', m.boven);
+    budWissel(empId) {
+        const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
+        const el = document.getElementById('budRest');
+        if (!el || !w) return;
+        const jaar = (this._budState && this._budState.jaar) || String(new Date().getFullYear());
+        const budget = this._budJaarbudget(w);
+        const rest = Math.round((budget - this._budVerbruik(w, jaar).budget) * 100) / 100;
+        el.innerHTML = rest < 0
+            ? '<span style="color:var(--red2,#B4372F);font-weight:600">' + this._budEur(-rest) + ' over budget</span> in ' + jaar
+            : 'Nog <strong>' + this._budEur(rest) + '</strong> van ' + this._budEur(budget) + ' in ' + jaar;
+        this.budMaatVul();
     },
 
-    kldStap(artId, delta) {
-        this._kldForm = this._kldForm || { aantallen: {} };
-        const nu = this._kldForm.aantallen[artId] || 0;
-        const nieuw = Math.max(0, Math.min(99, nu + delta));
-        this._kldForm.aantallen[artId] = nieuw;
-        const el = document.getElementById('kldA_' + artId);
-        if (el) {
-            el.textContent = String(nieuw);
-            el.style.color = nieuw ? 'var(--accent,#F99D3E)' : 'var(--ink,#26334B)';
-        }
+    /** Laatst gebruikte maat van deze werknemer voorstellen. */
+    budMaatVul() {
+        const el = document.getElementById('budMaat');
+        if (!el || el.style.display === 'none' || el.value) return;
+        const empId = (document.getElementById('budWie') || {}).value;
+        const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
+        if (!w) return;
+        const artId = (document.getElementById('budArt') || {}).value;
+        const regels = ((w.budget && w.budget.regels) || []).slice().reverse();
+        const zelfde = regels.find(r => r.art === artId && r.maat);
+        const eender = regels.find(r => r.maat);
+        el.value = (zelfde && zelfde.maat) || (eender && eender.maat) || '';
     },
 
-    kldTekenToggle(aan) {
-        const wrap = document.getElementById('kldSigWrap');
-        if (!wrap) return;
-        wrap.style.display = aan ? '' : 'none';
-        if (aan) setTimeout(() => this._ohSigInit('kldSigCanvas'), 60);
+    budArtWissel(artId) {
+        const a = this._budCatArt(artId);
+        const vrij = document.getElementById('budVrij');
+        const maat = document.getElementById('budMaat');
+        const prijs = document.getElementById('budPrijs');
+        if (vrij) vrij.style.display = (artId === '__vrij__') ? '' : 'none';
+        if (maat) { maat.style.display = (a && a.groep === 'kledij') ? '' : 'none'; if (a && a.groep !== 'kledij') maat.value = ''; }
+        if (prijs) prijs.value = (artId === '__vrij__') ? '0' : String(a ? a.prijs : 0);
+        this.budMaatVul();
+        this.budTotaal();
     },
 
-    /** Het ontvangstbewijs (Marble-document op de werknemersfiche). */
-    _kledijBonHtml(werknemerNaam, regel, maten, sigDataUrl) {
-        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
-        const f = 'font-family:Archivo,Arial,Helvetica,sans-serif;';
-        const isIn = regel.type === 'in';
-        const rijen = (regel.items || []).map(it => {
-            const a = RobawsAPI.kledijArtikel(it.art) || { naam: it.art };
-            return '<tr><td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE">' + esc(a.naam) +
-                (it.maat ? ' <span style="color:#85847C">· maat ' + esc(it.maat) + '</span>' : '') + '</td>' +
-                '<td style="' + f + 'padding:9px 0;font-size:14.5px;color:#26334B;border-bottom:1px solid #E9E6DE;text-align:right;font-weight:700;width:70px">' + esc(it.aantal) + '</td></tr>';
-        }).join('');
-        const maatTekst = [maten && maten.schoen ? 'schoen ' + maten.schoen : null, maten && maten.broek ? 'broek ' + maten.broek : null, maten && maten.boven ? 'bovenmaat ' + maten.boven : null].filter(Boolean).join(' · ');
-        const inhoud =
-            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-bottom:16px"><tbody>' +
-            this._marbleMailRij(isIn ? 'INGELEVERD DOOR' : 'ONTVANGEN DOOR', esc(werknemerNaam)) +
-            this._marbleMailRij('DATUM', esc(this._kldDatum(regel.datum))) +
-            this._marbleMailRij('GEREGISTREERD DOOR', esc(regel.door || '—')) +
-            (maatTekst ? this._marbleMailRij('MATEN', esc(maatTekst)) : '') +
-            (regel.opm ? this._marbleMailRij('OPMERKING', esc(regel.opm)) : '') +
-            '</tbody></table>' +
-            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tbody>' +
-            '<tr><td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B">ARTIKEL</td>' +
-            '<td style="' + f + 'padding:0 0 8px;font-size:10.5px;font-weight:700;letter-spacing:1px;color:#85847C;border-bottom:2px solid #26334B;text-align:right">AANTAL</td></tr>' +
-            rijen + '</tbody></table>' +
-            (isIn ? '' : '<div style="' + f + 'font-size:13px;line-height:20px;color:#3A4356;margin-top:18px">Ondergetekende bevestigt bovenstaande werkkledij en persoonlijke beschermingsmiddelen in goede staat te hebben ontvangen, en verklaart de PBM\'s te gebruiken zoals voorgeschreven.</div>') +
-            (sigDataUrl
-                ? '<div style="' + f + 'font-size:13px;color:#3A4356;padding:14px 0 6px">Ondertekend door <strong style="color:#26334B">' + esc(werknemerNaam) + '</strong></div>' +
-                  '<div style="border:1px solid #DCD9D0;background:#FFFFFF;padding:8px;max-width:340px"><img src="' + sigDataUrl + '" alt="Handtekening" style="display:block;width:100%"></div>'
-                : '');
-        const kern = this._marbleMailFrame(isIn ? 'Inlevering kledij' : 'Ontvangstbewijs kledij &amp; PBM',
-            esc(werknemerNaam) + ' · ' + esc(this._kldDatum(regel.datum)), inhoud);
-        return '<!DOCTYPE html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<title>' + esc('Kledij ' + werknemerNaam + ' ' + regel.datum) + '</title>' +
-            '<style>body{margin:0}@media print{body{background:#fff}}</style></head><body>' + kern + '</body></html>';
+    budTotaal() {
+        const n = Number((document.getElementById('budAantal') || {}).value || 0);
+        const p = Number((document.getElementById('budPrijs') || {}).value || 0);
+        const el = document.getElementById('budTotaalRegel');
+        if (el) el.textContent = 'Totaal: ' + this._budEur((n > 0 ? n : 0) * (p > 0 ? p : 0));
     },
 
-    async kledijRegistreer() {
+    async budgetBoeken() {
         const v = (id) => (document.getElementById(id) || {}).value || '';
-        const empId = v('kldWie');
-        const w = (this._kldData || []).find(x => String(x.employeeId) === String(empId));
+        const empId = v('budWie');
+        const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
         if (!w) { this.toast('Kies een werknemer', true); return; }
-        const datum = v('kldDatum');
+        const datum = v('budDatum');
         if (!datum) { this.toast('Kies een datum', true); return; }
-        const type = v('kldType') === 'in' ? 'in' : 'uit';
-        const maten = {
-            schoen: v('kldMaatSchoen').trim(),
-            broek: v('kldMaatBroek').trim(),
-            boven: v('kldMaatBoven').trim(),
-        };
-        const aantallen = (this._kldForm && this._kldForm.aantallen) || {};
-        const items = RobawsAPI.KLEDIJ_ARTIKELEN
-            .filter(a => (aantallen[a.id] || 0) > 0)
-            .map(a => ({ art: a.id, aantal: aantallen[a.id], maat: a.maat ? (maten[a.maat] || '') : '' }));
-        if (!items.length) { this.toast('Zet minstens één artikel op een aantal', true); return; }
-        const tekenen = !!((document.getElementById('kldTekenen') || {}).checked);
-        let sigDataUrl = null;
-        if (tekenen) {
-            const c = document.getElementById('kldSigCanvas');
-            if (!c || !this._ohSigHas) { this.toast('Handtekening ontbreekt', true); return; }
-            sigDataUrl = c.toDataURL('image/png');
-        }
+        const artId = v('budArt');
+        const a = this._budCatArt(artId);
+        const oms = (artId === '__vrij__') ? v('budVrij').trim() : (a ? a.naam : '');
+        if (!oms) { this.toast('Vul een omschrijving in', true); return; }
+        const aantal = Math.max(1, Math.round(Number(v('budAantal')) || 1));
+        const stukprijs = Math.round((Number(v('budPrijs')) || 0) * 100) / 100;
+        if (stukprijs <= 0) { this.toast('Vul een stukprijs in', true); return; }
         if (this._gsBusy) return;
         this._gsBusy = true;
-        const btn = document.getElementById('kldVerstuurBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Bezig…'; }
+        const btn = document.getElementById('budVerstuurBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Bezig\u2026'; }
         const regel = {
-            id: 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-            datum, type,
+            id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            datum,
+            art: (artId === '__vrij__') ? 'vrij' : artId,
+            oms, aantal, stukprijs,
+            totaal: Math.round(aantal * stukprijs * 100) / 100,
+            maat: v('budMaat').trim(),
+            reden: v('budReden'),
+            laste: v('budLaste') === 'firma' ? 'firma' : 'budget',
             door: (this.currentUser && this.currentUser.name) || '',
-            opm: v('kldOpm').trim(),
-            items,
+            opm: v('budOpm').trim(),
         };
         try {
-            await RobawsAPI.addKledijRegel(empId, regel, maten);
-            if (sigDataUrl) {
-                try {
-                    const bestand = (type === 'in' ? 'Inlevering kledij ' : 'Ontvangstbewijs kledij ') + w.name + ' ' + datum + '.html';
-                    await RobawsAPI.uploadEmployeeHtml(empId, this._kledijBonHtml(w.name, regel, maten, sigDataUrl), bestand);
-                } catch (e2) {
-                    // registratie staat al — bewijs apart melden, niet terugdraaien
-                    this.toast('Geregistreerd, maar het ontvangstbewijs uploaden mislukte', true);
-                }
-            }
-            const totaal = items.reduce((a, b) => a + b.aantal, 0);
-            this.toast(totaal + ' stuk(s) ' + (type === 'in' ? 'ingeleverd door ' : 'uitgegeven aan ') + w.name.split(' ')[0] + ' ✓');
-            const s = document.getElementById('kledijSheet'); if (s) s.remove();
-            this.loadKledij();
+            await RobawsAPI.addBudgetRegel(empId, regel);
+            this.toast(this._budEur(regel.totaal) + ' geboekt op ' + w.name.split(' ')[0]);
+            const s = document.getElementById('budgetSheet'); if (s) s.remove();
+            this.loadBudget();
         } catch (e) {
-            this.toast('Registreren mislukt: ' + ((e && e.message) || '?'), true);
+            this.toast('Boeken mislukt: ' + ((e && e.message) || '?'), true);
         } finally {
             this._gsBusy = false;
-            if (btn) { btn.disabled = false; btn.textContent = 'Registreren'; }
+            if (btn) { btn.disabled = false; btn.textContent = 'Boeken'; }
+        }
+    },
+    // =============================================
+    // v365: MIJN BUDGET (Aanvragen — iedereen, alleen-lezen)
+    //
+    // De werknemer ziet zijn EIGEN budget: hoeveel op, hoeveel over en
+    // waaraan besteed. Er wordt maar één fiche opgehaald — die van de
+    // ingelogde persoon — dus niemand kan andermans budget zien.
+    // =============================================
+
+    async loadMijnBudget() {
+        const el = document.getElementById('mijnBudget');
+        if (!el) return;
+        el.innerHTML = '<div class="spinner"></div>';
+        const empId = this.currentUser && this.currentUser.robawsEmployeeId;
+        if (!empId) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--qe-grey)">Geen werknemersfiche gekoppeld aan je account.</div>';
+            return;
+        }
+        try {
+            const r = await RobawsAPI.get('employees/' + empId, { bypassCache: true });
+            if (r.code !== 200 || !r.data) throw new Error('Kon je gegevens niet ophalen (' + r.code + ')');
+            this._mijnBudget = RobawsAPI._budgetParse(r.data);
+            this._mijnBudgetJaar = this._mijnBudgetJaar ||  String(new Date().getFullYear());
+            this._renderMijnBudget();
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>';
         }
     },
 
+    mijnBudgetJaar(j) {
+        this._mijnBudgetJaar = j;
+        this._renderMijnBudget();
+    },
+
+    _renderMijnBudget() {
+        const el = document.getElementById('mijnBudget');
+        const b = this._mijnBudget;
+        if (!el || !b) return;
+        const esc = (t) => this.escapeHtml(t);
+        const jaar = this._mijnBudgetJaar || String(new Date().getFullYear());
+        const budget = b.jaarbudget || RobawsAPI.BUDGET_STANDAARD;
+        const alle = (b.regels || []).filter(r => String(r.datum || '').slice(0, 4) === String(jaar));
+        const vanBudget = alle.filter(r => r.laste !== 'firma');
+        const vanFirma = alle.filter(r => r.laste === 'firma');
+        const op = Math.round(vanBudget.reduce((s, r) => s + (Number(r.totaal) || 0), 0) * 100) / 100;
+        const firma = Math.round(vanFirma.reduce((s, r) => s + (Number(r.totaal) || 0), 0) * 100) / 100;
+        const rest = Math.round((budget - op) * 100) / 100;
+        const pct = budget > 0 ? Math.min(100, Math.round((op / budget) * 100)) : 0;
+        const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
+        const jaren = [...new Set((b.regels || []).map(r => String(r.datum || '').slice(0, 4)).filter(Boolean))];
+        if (jaren.indexOf(String(new Date().getFullYear())) < 0) jaren.push(String(new Date().getFullYear()));
+        jaren.sort().reverse();
+        const REDEN = { kwijt: 'kwijt', kapot: 'kapot', versleten: 'versleten', nieuw: 'nieuw' };
+        const rij = (r) =>
+            '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
+            '<span style="flex-shrink:0;width:70px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._budDat(r.datum, true)) + '</span>' +
+            '<span style="flex:1;min-width:0;color:var(--ink,#26334B)">' + esc((r.aantal > 1 ? r.aantal + '\u00D7 ' : '') + (r.oms || r.art || '')) +
+              (r.maat ? ' <span style="color:var(--g1,#85847C)">' + esc(r.maat) + '</span>' : '') +
+              (r.reden ? '<div style="font-size:11.5px;color:var(--g1,#85847C)">' + esc(REDEN[r.reden] || r.reden) + '</div>' : '') + '</span>' +
+            '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums">' + this._budEur(r.totaal) + '</span>' +
+            '</div>';
+        el.innerHTML =
+            '<p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px">Je krijgt elk jaar een budget voor je werkkledij en klein gereedschap. Wat je kwijtmaakt of stukmaakt, gaat hiervan af.</p>' +
+            (jaren.length > 1
+                ? '<select class="form-input" style="width:100%;margin-bottom:12px" onchange="app.mijnBudgetJaar(this.value)">' +
+                  jaren.map(j => '<option value="' + j + '"' + (j === jaar ? ' selected' : '') + '>Jaar ' + j + '</option>').join('') + '</select>'
+                : '') +
+            // Grote teller: wat er nog over is
+            '<div class="card" style="margin-bottom:14px;padding:18px 18px 16px;text-align:center">' +
+            '  <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g1,#85847C)">' +
+            (rest < 0 ? 'Over je budget' : 'Nog beschikbaar') + ' \u00B7 ' + esc(jaar) + '</div>' +
+            '  <div style="font-size:34px;font-weight:700;letter-spacing:-1px;color:' + kleur + ';margin:4px 0 2px">' + this._budEur(rest < 0 ? -rest : rest) + '</div>' +
+            '  <div style="font-size:13px;color:var(--g2,#5F5E56)">' + this._budEur(op) + ' gebruikt van ' + this._budEur(budget) + '</div>' +
+            '  <div style="margin-top:12px;height:9px;border-radius:5px;background:var(--l2,#EBE8E0);overflow:hidden">' +
+            '    <div style="height:100%;width:' + pct + '%;background:' + kleur + '"></div>' +
+            '  </div>' +
+            '</div>' +
+            // Waaraan besteed
+            '<div class="section-header"><h2>Waaraan besteed</h2></div>' +
+            (vanBudget.length
+                ? '<div class="card" style="padding:4px 16px 10px;margin-bottom:14px">' +
+                  vanBudget.slice().sort((a, b2) => String(b2.datum || '').localeCompare(String(a.datum || ''))).map(rij).join('') + '</div>'
+                : '<div class="card" style="font-size:13px;color:var(--g2,#5F5E56);margin-bottom:14px">Je hebt dit jaar nog niets van je budget gebruikt.</div>') +
+            // Wat de firma betaalde — ter info, telt niet mee
+            (vanFirma.length
+                ? '<div class="section-header"><h2>Op kosten van de firma</h2></div>' +
+                  '<p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 10px">Dit telt niet mee in je budget \u2014 samen ' + this._budEur(firma) + '.</p>' +
+                  '<div class="card" style="padding:4px 16px 10px;opacity:.85">' +
+                  vanFirma.slice().sort((a, b2) => String(b2.datum || '').localeCompare(String(a.datum || ''))).map(rij).join('') + '</div>'
+                : '');
+    },
     /** v344: Automations heeft een eigen scherm onder Instellingen. */
     openAutomations() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
@@ -10864,13 +10953,14 @@ const app = {
         this._aanvraagTab = tab;
         document.querySelectorAll('#aanvraagSubtabs .mb-subtab').forEach(b =>
             b.classList.toggle('active', b.dataset.atab === tab));
-        [['verlof', 'aanvraagVerlof'], ['materiaal', 'aanvraagMateriaal'], ['materieel', 'aanvraagMaterieel']].forEach(([t, id]) => {
+        [['verlof', 'aanvraagVerlof'], ['materiaal', 'aanvraagMateriaal'], ['materieel', 'aanvraagMaterieel'], ['budget', 'aanvraagBudget']].forEach(([t, id]) => {
             const p = document.getElementById(id);
             if (p) p.style.display = (t === tab) ? 'block' : 'none';
         });
         if (tab === 'verlof') { this._renderVerlofBudget(); this.loadMyVerlof(); }
         else if (tab === 'materiaal') { this.initMateriaalAanvraagTab(); }  // v329
         else if (tab === 'materieel') { this.loadMaterieel(); }
+        else if (tab === 'budget') { this.loadMijnBudget(); }  // v365
     },
 
     async _refreshAanvraagGoedkeurCount() {

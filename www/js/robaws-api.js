@@ -1401,6 +1401,152 @@ const RobawsAPI = {
     //            items:[{art, aantal, maat}] } ] }
     // =============================================
 
+    // =============================================
+    // v363: WERKNEMERSBUDGET (Logistiek — bureel)
+    //
+    // Elke werknemer krijgt een JAARBUDGET voor alles wat hij nodig heeft
+    // (klein gereedschap, verbruik, kledij). Wat hij kwijtmaakt of stukmaakt
+    // gaat eraf — doel is zorg dragen voor het materiaal. Opslag = JSON in
+    // extraveld "Budget" (LONG_TEXT) op de WERKNEMER, zelfde patroon als
+    // "Kledij" (merge-PATCH op /employees bewezen veilig, 12 aug).
+    //
+    // Vorm: { v:1, jaarbudget:250, regels:[
+    //          { id, datum, art, oms, aantal, stukprijs, totaal,
+    //            reden:'kwijt'|'kapot'|'versleten'|'nieuw',
+    //            laste:'budget'|'firma', door, opm } ] }
+    // De PRIJS wordt in de regel bewaard: latere prijswijzigingen raken de
+    // historiek nooit.
+    // =============================================
+
+    BUDGET_FIELD: 'Budget',
+    BUDGET_STANDAARD: 500,   // standaard jaarbudget in euro als er niets is ingesteld (Levi, 21 aug)
+
+    /** Richtprijzen — altijd aanpasbaar bij het boeken; de geboekte prijs
+     *  wordt in de regel bewaard. `kledij` koppelt aan KLEDIJ_ARTIKELEN zodat
+     *  één boeking ook het kledijregister kan bijwerken. */
+    BUDGET_ARTIKELEN: [
+        { id: 'vouwmeter',     naam: 'Vouwmeter',              groep: 'meten',           prijs: 8 },
+        { id: 'rolmeter',      naam: 'Rolmeter 5 m',           groep: 'meten',           prijs: 14 },
+        { id: 'waterpas',      naam: 'Waterpas 40 cm',         groep: 'meten',           prijs: 25 },
+        { id: 'potlood',       naam: 'Potlood / markeerstift', groep: 'verbruik',        prijs: 3 },
+        { id: 'mes',           naam: 'Mes / cutter',           groep: 'verbruik',        prijs: 12 },
+        { id: 'mesjes',        naam: 'Reservemesjes',          groep: 'verbruik',        prijs: 4 },
+        { id: 'zaagblad',      naam: 'Zaagbladen',             groep: 'verbruik',        prijs: 9 },
+        { id: 'boortjes',      naam: 'Boortjes',               groep: 'verbruik',        prijs: 15 },
+        { id: 'tang',          naam: 'Combinatietang',         groep: 'handgereedschap', prijs: 22 },
+        { id: 'waterpomptang', naam: 'Waterpomptang',          groep: 'handgereedschap', prijs: 28 },
+        { id: 'sleutel',       naam: 'Verstelbare sleutel',    groep: 'handgereedschap', prijs: 30 },
+        { id: 'schroefset',    naam: 'Schroevendraaierset',    groep: 'handgereedschap', prijs: 35 },
+        { id: 'inbusset',      naam: 'Inbussleutelset',        groep: 'handgereedschap', prijs: 18 },
+        { id: 'hamer',         naam: 'Hamer',                  groep: 'handgereedschap', prijs: 20 },
+        { id: 'buizensnijder', naam: 'Buizensnijder',          groep: 'handgereedschap', prijs: 25 },
+        { id: 'ontbramer',     naam: 'Ontbramer',              groep: 'handgereedschap', prijs: 12 },
+        { id: 'zaklamp',       naam: 'Zaklamp',                groep: 'handgereedschap', prijs: 25 },
+        { id: 'koffer',        naam: 'Gereedschapskoffer',     groep: 'handgereedschap', prijs: 60 },
+        { id: 'riem',          naam: 'Gereedschapsriem',       groep: 'handgereedschap', prijs: 35 },
+        { id: 'werkbroek',     naam: 'Werkbroek',              groep: 'kledij', prijs: 45, kledij: 'lange_broek' },
+        { id: 'korte_broek',   naam: 'Korte broek',            groep: 'kledij', prijs: 35, kledij: 'korte_broek' },
+        { id: 'tshirt',        naam: 'T-shirt',                groep: 'kledij', prijs: 15, kledij: 'tshirt' },
+        { id: 'hoodie',        naam: 'Hoodie',                 groep: 'kledij', prijs: 35, kledij: 'hoodie' },
+        { id: 'jas',           naam: 'Jas',                    groep: 'kledij', prijs: 90, kledij: 'jas' },
+        { id: 'schoenen',      naam: 'Veiligheidsschoenen',    groep: 'kledij', prijs: 85, kledij: 'schoenen' },
+    ],
+
+    /** v364: de GEDEELDE artikelcatalogus. Staat als `catalogus` in de
+     *  Budget-JSON van fiche 1 (zelfde 'gedeelde configuratie'-plek als de
+     *  NFC-klok-tags); leeg of onleesbaar → de ingebouwde startlijst. */
+    CATALOGUS_FICHE: '1',
+    budgetCatalogus(werknemers) {
+        const een = (werknemers || []).find(w => String(w.employeeId) === this.CATALOGUS_FICHE);
+        const c = een && een.budget && Array.isArray(een.budget.catalogus) ? een.budget.catalogus : null;
+        return (c && c.length) ? c : this.BUDGET_ARTIKELEN;
+    },
+
+    /** Catalogus opslaan (op fiche 1; de rest van die Budget-JSON blijft). */
+    async saveBudgetCatalogus(lijst) {
+        const r = await this.get('employees/' + this.CATALOGUS_FICHE, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Fiche 1 niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        huidig.catalogus = (lijst || []).map(a => ({
+            id: String(a.id || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40),
+            naam: String(a.naam || '').trim().slice(0, 80),
+            groep: String(a.groep || 'overig').trim().slice(0, 40),
+            prijs: Math.round((Number(a.prijs) || 0) * 100) / 100,
+        })).filter(a => a.id && a.naam);
+        return await this._budgetSchrijf(this.CATALOGUS_FICHE, huidig);
+    },
+    budgetArtikel(id) {
+        return this.BUDGET_ARTIKELEN.find(a => a.id === id) || null;
+    },
+
+    /** Budget-JSON van een werknemer-object (robuust; lege vorm bij leeg/kapot). */
+    _budgetParse(emp) {
+        const leeg = { v: 1, jaarbudget: null, regels: [] };
+        const f = emp && emp.extraFields && emp.extraFields[this.BUDGET_FIELD];
+        const raw = f ? (f.stringValue ?? f.value ?? null) : null;
+        if (!raw) return leeg;
+        try {
+            const o = JSON.parse(String(raw));
+            if (!o || typeof o !== 'object') return leeg;
+            const jb = Number(o.jaarbudget);
+            // v364: onbekende sleutels bewaren — op fiche 1 staat hier ook
+            // `catalogus` (de gedeelde artikellijst); die mag een schrijfactie
+            // op iemands budget nooit wissen.
+            return Object.assign({}, o, {
+                v: o.v || 1,
+                jaarbudget: isFinite(jb) && jb > 0 ? jb : null,
+                regels: Array.isArray(o.regels) ? o.regels : [],
+            });
+        } catch (e) {
+            console.warn('[Budget] JSON onleesbaar op werknemer', emp && emp.id, '— als leeg behandeld');
+            return leeg;
+        }
+    },
+
+    /** Bestaat de velddefinitie "Budget" al op Werknemers? */
+    async budgetVeldBestaat() {
+        try {
+            const r = await this.get('resource-types/employee/extra-fields');
+            if (r.code !== 200 || !r.data) return true;
+            const lijst = Array.isArray(r.data) ? r.data : (r.data.items || []);
+            if (!lijst.length) return true;
+            return lijst.some(f => String(f.label || '').trim() === this.BUDGET_FIELD);
+        } catch (e) { return true; }
+    },
+
+    async addBudgetRegel(employeeId, regel) {
+        const r = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        huidig.regels.push(regel);
+        return await this._budgetSchrijf(employeeId, huidig);
+    },
+
+    async removeBudgetRegel(employeeId, regelId) {
+        const r = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        huidig.regels = huidig.regels.filter(x => String(x.id) !== String(regelId));
+        return await this._budgetSchrijf(employeeId, huidig);
+    },
+
+    /** Jaarbudget van één werknemer instellen (leeg = terug naar standaard). */
+    async setJaarbudget(employeeId, bedrag) {
+        const r = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        const n = Number(bedrag);
+        huidig.jaarbudget = isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+        return await this._budgetSchrijf(employeeId, huidig);
+    },
+
+    async _budgetSchrijf(employeeId, obj) {
+        const res = await this.patchMerge('employees/' + employeeId, { extraFields: {
+            [this.BUDGET_FIELD]: { type: 'LONG_TEXT', stringValue: JSON.stringify(obj) },
+        } });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
     KLEDIJ_FIELD: 'Kledij',
 
     /** Vaste artikelcatalogus (lijst Levi 12 aug). `maat` verwijst naar het
@@ -1478,6 +1624,7 @@ const RobawsAPI = {
             status: String(e.status || ''),
             gestopt: /stopgezet/i.test(String(e.status || '')),
             kledij: this._kledijParse(e),
+            budget: this._budgetParse(e),   // v363: zelfde call bedient beide modules
         }));
     },
 
