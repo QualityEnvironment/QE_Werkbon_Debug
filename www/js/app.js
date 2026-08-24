@@ -9898,7 +9898,8 @@ const app = {
             if (sel) {
                 const cur = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
                 sel.innerHTML = [...jaren].sort().reverse().map(j =>
-                    '<option value="' + j + '"' + (j === cur ? ' selected' : '') + '>Budgetjaar ' + RobawsAPI.budgetJaarLabel(j) + '</option>').join('');
+                    '<option value="' + j + '"' + (j === cur ? ' selected' : '') + '>Budgetjaar ' + RobawsAPI.budgetJaarLabel(j) + '</option>').join('') +
+                    '<option value="alles"' + (cur === 'alles' ? ' selected' : '') + '>Altijd</option>';   // v372
             }
             this._budRender();
         } catch (e) {
@@ -9925,7 +9926,7 @@ const app = {
     _budVerbruik(w, jaar) {
         let budget = 0, firma = 0;
         for (const r of ((w.budget && w.budget.regels) || [])) {
-            if (RobawsAPI.budgetJaarVan(r.datum) !== String(jaar)) continue;
+            if (String(jaar) !== 'alles' && RobawsAPI.budgetJaarVan(r.datum) !== String(jaar)) continue;   // v372
             const bedrag = Number(r.totaal) || 0;
             if (r.laste === 'firma') firma += bedrag; else budget += bedrag;
         }
@@ -9970,7 +9971,7 @@ const app = {
         html += '<div class="card" style="margin-bottom:12px;padding:14px 16px;display:flex;gap:14px">' +
             '<div style="flex:1"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Van budget · ' + esc(RobawsAPI.budgetJaarLabel(s.jaar)) + '</div>' +
             '<div style="font-size:18px;font-weight:700;color:var(--ink,#26334B);margin-top:2px">' + this._budEur(totVerbruik) + '</div>' +
-            '<div style="font-size:11px;color:var(--g2,#5F5E56)">van ' + this._budEur(totBudget) + '</div></div>' +
+            '<div style="font-size:11px;color:var(--g2,#5F5E56)">' + (s.jaar === 'alles' ? 'over alle jaren' : 'van ' + this._budEur(totBudget)) + '</div></div>' +
             '<div style="flex:1;border-left:1px solid var(--l2,#EBE8E0);padding-left:14px"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--g1,#85847C)">Firma-kosten</div>' +
             '<div style="font-size:18px;font-weight:700;color:var(--g2,#5F5E56);margin-top:2px">' + this._budEur(totFirma) + '</div>' +
             '<div style="font-size:11px;color:var(--g2,#5F5E56)">buiten het budget</div></div>' +
@@ -9984,24 +9985,32 @@ const app = {
             const pct = budget > 0 ? Math.min(100, Math.round((v.budget / budget) * 100)) : 0;
             const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
             let regels = ((w.budget && w.budget.regels) || [])
-                .filter(r => RobawsAPI.budgetJaarVan(r.datum) === String(s.jaar));
+                .filter(r => s.jaar === 'alles' || RobawsAPI.budgetJaarVan(r.datum) === String(s.jaar));
             if (s.laste === 'budget') regels = regels.filter(r => r.laste !== 'firma');
             else if (s.laste === 'firma') regels = regels.filter(r => r.laste === 'firma');
             regels = regels.sort((a, b) => String(b.datum || '').localeCompare(String(a.datum || '')));
+            // v371: boekingen die in een ánder budgetjaar vallen — anders lijkt
+            // het alsof ze verdwenen zijn (juli hoort bij het vorige werkjaar).
+            const anderJaar = (s.jaar === 'alles') ? 0 : ((w.budget && w.budget.regels) || [])
+                .filter(r => RobawsAPI.budgetJaarVan(r.datum) !== String(s.jaar)).length;
             return '<div class="card" style="margin-bottom:10px;padding:0;overflow:hidden">' +
                 '<div style="padding:14px 16px;cursor:pointer" onclick="app.budToggle(' + idx + ')">' +
                 '  <div style="display:flex;align-items:center;gap:12px">' +
                 '    <div style="flex:1;min-width:0">' +
                 '      <div style="font-size:15px;font-weight:600;color:var(--ink,#26334B)">' + esc(w.name) + '</div>' +
-                '      <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' + this._budEur(v.budget) + ' van ' + this._budEur(budget) +
-                       (rest < 0 ? ' · <span style="color:var(--red2,#B4372F);font-weight:700">' + this._budEur(-rest) + ' over budget</span>' : ' · nog ' + this._budEur(rest)) +
-                       (v.firma ? ' <span style="color:var(--g3,#A3A29A)">· firma ' + this._budEur(v.firma) + '</span>' : '') + '</div>' +
+                '      <div style="font-size:12px;color:var(--g1,#85847C);margin-top:1px">' +
+                       (s.jaar === 'alles'
+                         ? this._budEur(v.budget) + ' van budget' + (v.firma ? ' · firma ' + this._budEur(v.firma) : '')
+                         : this._budEur(v.budget) + ' van ' + this._budEur(budget) +
+                           (rest < 0 ? ' · <span style="color:var(--red2,#B4372F);font-weight:700">' + this._budEur(-rest) + ' over budget</span>' : ' · nog ' + this._budEur(rest)) +
+                           (v.firma ? ' <span style="color:var(--g3,#A3A29A)">· firma ' + this._budEur(v.firma) + '</span>' : '')) + '</div>' +
                 '    </div>' +
                 '    <span style="flex-shrink:0;font-size:14px;color:var(--g3,#A3A29A)">' + (open ? '\u25B4' : '\u25BE') + '</span>' +
                 '  </div>' +
+                (s.jaar === 'alles' ? '' :
                 '  <div style="margin-top:9px;height:7px;border-radius:4px;background:var(--l2,#EBE8E0);overflow:hidden">' +
                 '    <div style="height:100%;width:' + pct + '%;background:' + kleur + '"></div>' +
-                '  </div>' +
+                '  </div>') +
                 '</div>' +
                 (open ? '<div style="padding:0 16px 12px">' +
                     (regels.length ? regels.map(r =>
@@ -10016,6 +10025,8 @@ const app = {
                         '<button onclick="event.stopPropagation();app.budgetRegelWeg(\'' + w.employeeId + '\',\'' + r.id + '\')" style="flex-shrink:0;border:none;background:none;color:var(--g3,#A3A29A);font-size:15px;line-height:1;padding:2px 4px;cursor:pointer" title="Boeking verwijderen">&times;</button>' +
                         '</div>').join('')
                      : '<div style="padding:10px 2px;font-size:13px;color:var(--g2,#5F5E56);border-top:1px solid var(--l2,#EBE8E0)">Niets geboekt' + (s.laste ? ' in deze weergave' : '') + ' in ' + esc(RobawsAPI.budgetJaarLabel(s.jaar)) + '.</div>') +
+                    (anderJaar ? '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--wash,#F0EDE6);font-size:12px;color:var(--g2,#5F5E56)">' +
+                        anderJaar + ' boeking' + (anderJaar === 1 ? '' : 'en') + ' in een ander budgetjaar \u2014 kies het jaar bovenaan om ' + (anderJaar === 1 ? 'die' : 'die') + ' te zien.</div>' : '') +
                     '<div style="display:flex;gap:8px;margin-top:12px">' +
                     '  <button class="btn btn-outline" style="flex:1.4" onclick="event.stopPropagation();app.openBudgetBoeking(\'' + w.employeeId + '\')">+ Boeking</button>' +
                     '  <button class="btn btn-outline" style="flex:1" onclick="event.stopPropagation();app.budgetJaarbudget(\'' + w.employeeId + '\')">Budget \u2699</button>' +
@@ -10057,13 +10068,15 @@ const app = {
         if (!this._budData) { this.toast('Even wachten — gegevens laden nog', true); return; }
         const oud = document.getElementById('budgetSheet');
         if (oud) oud.remove();
+        this._budLijnen = [];   // v373: regels van deze ene boeking
         const esc = (t) => this.escapeHtml(t);
         const vandaag = new Date().toISOString().slice(0, 10);
         const kiesbaar = this._budData.filter(w => !w.gestopt && this._budHeeft(w));
         const start = empId || (kiesbaar[0] || {}).employeeId || '';
         const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(start) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
         const cat = this._budCat();
-        const artOpties = this._budCatGroepen().map(g => '<optgroup label="' + esc(g) + '">' +
+        const artOpties = '<option value="" selected>\u2014 Kies een artikel \u2014</option>' +
+            this._budCatGroepen().map(g => '<optgroup label="' + esc(g) + '">' +
             cat.filter(a => a.groep === g).map(a =>
                 '<option value="' + esc(a.id) + '">' + esc(a.naam) + ' \u2014 ' + this._budEur(a.prijs) + '</option>').join('') +
             '</optgroup>').join('') + '<option value="__vrij__">\u2014 Ander artikel (zelf invullen) \u2014</option>';
@@ -10081,42 +10094,123 @@ const app = {
             '  <div id="budRest" style="font-size:12.5px;color:var(--g1,#85847C);margin-bottom:4px"></div>' +
             lbl('Werknemer') +
             '  <select id="budWie" class="form-input" style="width:100%" onchange="app.budWissel(this.value)">' + opties + '</select>' +
-            '  <div style="display:flex;gap:8px;margin-top:10px">' +
-            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Datum</label>' +
-            '      <input type="date" id="budDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '"></div>' +
-            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Reden</label>' +
-            '      <select id="budReden" class="form-input" style="width:100%">' +
-            '        <option value="kwijt">Kwijt / verloren</option><option value="kapot">Kapot gemaakt</option>' +
-            '        <option value="versleten">Versleten</option><option value="nieuw">Nieuw / aanvulling</option></select></div>' +
+            lbl('Datum') +
+            '  <input type="date" id="budDatum" class="form-input" style="width:100%" value="' + vandaag + '" max="' + vandaag + '">' +
+            // --- toevoegblok: hier bouw je regel na regel op ---
+            '  <div style="margin-top:18px;padding:14px;border:1px dashed var(--b1,#DDD8CC);border-radius:12px">' +
+            '    <div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C);margin-bottom:8px">Artikel toevoegen</div>' +
+            '    <select id="budArt" class="form-input" style="width:100%" onchange="app.budArtWissel(this.value)">' + artOpties + '</select>' +
+            '    <input type="text" id="budVrij" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Omschrijving artikel">' +
+            '    <label id="budVrijBewijsWrap" style="display:none;align-items:center;gap:8px;font-size:13px;color:var(--ink,#26334B);margin-top:8px">' +
+            '      <input type="checkbox" id="budVrijBewijs" style="width:17px;height:17px"> \u270D Ontvangstbewijs laten tekenen' +
+            '    </label>' +
+            '    <input type="text" id="budMaat" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Maat (bv. L of 44)">' +
+            '    <div style="display:flex;gap:8px;margin-top:8px">' +
+            '      <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Aantal</label>' +
+            '        <input type="number" id="budAantal" class="form-input" style="width:100%" value="1" min="1" step="1" oninput="app.budTotaal()"></div>' +
+            '      <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Stukprijs (\u20AC)</label>' +
+            '        <input type="number" id="budPrijs" class="form-input" style="width:100%" value="0" min="0" step="0.5" oninput="app.budTotaal()"></div>' +
+            '    </div>' +
+            '    <div style="display:flex;gap:8px;margin-top:8px">' +
+            '      <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Reden</label>' +
+            '        <select id="budReden" class="form-input" style="width:100%">' +
+            '          <option value="kwijt">Kwijt / verloren</option><option value="kapot">Kapot gemaakt</option>' +
+            '          <option value="versleten">Versleten</option><option value="nieuw">Nieuw / aanvulling</option></select></div>' +
+            '      <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Ten laste van</label>' +
+            '        <select id="budLaste" class="form-input" style="width:100%">' +
+            '          <option value="budget">Budget</option><option value="firma">Firma</option></select></div>' +
+            '    </div>' +
+            '    <div id="budTotaalRegel" style="margin-top:8px;font-size:13px;color:var(--g2,#5F5E56)"></div>' +
+            '    <button class="btn btn-outline btn-full" style="margin-top:10px" onclick="app.budLijnBij()">+ Toevoegen aan de boeking</button>' +
             '  </div>' +
-            lbl('Artikel') +
-            '  <select id="budArt" class="form-input" style="width:100%" onchange="app.budArtWissel(this.value)">' + artOpties + '</select>' +
-            '  <input type="text" id="budVrij" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Omschrijving artikel">' +
-            '  <input type="text" id="budMaat" class="form-input" style="width:100%;margin-top:8px;display:none" placeholder="Maat (bv. L of 44)">' +
-            '  <div style="display:flex;gap:8px;margin-top:10px">' +
-            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Aantal</label>' +
-            '      <input type="number" id="budAantal" class="form-input" style="width:100%" value="1" min="1" step="1" oninput="app.budTotaal()"></div>' +
-            '    <div style="flex:1"><label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin-bottom:5px">Stukprijs (\u20AC)</label>' +
-            '      <input type="number" id="budPrijs" class="form-input" style="width:100%" value="0" min="0" step="0.5" oninput="app.budTotaal()"></div>' +
-            '  </div>' +
-            '  <div id="budTotaalRegel" style="margin-top:10px;font-size:15px;font-weight:700;color:var(--ink,#26334B)"></div>' +
-            lbl('Ten laste van') +
-            '  <select id="budLaste" class="form-input" style="width:100%">' +
-            '    <option value="budget">Budget van de werknemer</option><option value="firma">Firma (niet van het budget)</option></select>' +
-            lbl('Opmerking') +
+            '  <div id="budLijnen" style="margin-top:14px"></div>' +
+            lbl('Opmerking (voor de hele boeking)') +
             '  <input type="text" id="budOpm" class="form-input" style="width:100%" placeholder="Optioneel">' +
             '  <button class="btn btn-primary btn-full" id="budVerstuurBtn" style="margin-top:16px" onclick="app.budgetBoeken()">Boeken</button>' +
             '</div>';
         document.body.appendChild(ov);
-        this.budArtWissel((document.getElementById('budArt') || {}).value);
+        this.budArtWissel('');
         this.budWissel(start);
+        this._budLijnenToon();
+    },
+
+    /** De regel uit het toevoegblok lezen; null als hij niet klopt. */
+    _budLijnUit(stil) {
+        const v = (id) => (document.getElementById(id) || {}).value || '';
+        const artId = v('budArt');
+        if (!artId) { if (!stil) this.toast('Kies eerst een artikel', true); return null; }
+        const a = this._budCatArt(artId);
+        const oms = (artId === '__vrij__') ? v('budVrij').trim() : (a ? a.naam : '');
+        if (!oms) { if (!stil) this.toast('Vul een omschrijving in', true); return null; }
+        const aantal = Math.max(1, Math.round(Number(v('budAantal')) || 1));
+        const stukprijs = Math.round((Number(v('budPrijs')) || 0) * 100) / 100;
+        if (stukprijs <= 0) { if (!stil) this.toast('Vul een stukprijs in', true); return null; }
+        return {
+            art: (artId === '__vrij__') ? 'vrij' : artId,
+            oms, aantal, stukprijs,
+            totaal: Math.round(aantal * stukprijs * 100) / 100,
+            maat: v('budMaat').trim(),
+            reden: v('budReden'),
+            laste: v('budLaste') === 'firma' ? 'firma' : 'budget',
+            // v373b: catalogus-vlag óf het vinkje bij een handmatig artikel
+            bewijs: !!(a && a.bewijs) || (artId === '__vrij__' && !!((document.getElementById('budVrijBewijs') || {}).checked)),
+        };
+    },
+
+    budLijnBij() {
+        const lijn = this._budLijnUit(false);
+        if (!lijn) return;
+        this._budLijnen = this._budLijnen || [];
+        this._budLijnen.push(lijn);
+        // toevoegblok leegmaken voor de volgende
+        const zet = (id, w) => { const el = document.getElementById(id); if (el) el.value = w; };
+        zet('budArt', ''); zet('budVrij', ''); zet('budMaat', ''); zet('budAantal', '1');
+        const vbx = document.getElementById('budVrijBewijs'); if (vbx) vbx.checked = false;
+        this.budArtWissel('');
+        this._budLijnenToon();
+    },
+
+    budLijnWeg(i) {
+        (this._budLijnen || []).splice(i, 1);
+        this._budLijnenToon();
+    },
+
+    _budLijnenToon() {
+        const el = document.getElementById('budLijnen');
+        if (!el) return;
+        const lijnen = this._budLijnen || [];
+        const esc = (t) => this.escapeHtml(t);
+        if (!lijnen.length) {
+            el.innerHTML = '<div style="font-size:12.5px;color:var(--g3,#A3A29A);text-align:center;padding:6px 0">Nog geen artikelen toegevoegd.</div>';
+            return;
+        }
+        let totaal = 0;
+        lijnen.forEach(l => { if (l.laste !== 'firma') totaal += l.totaal; });
+        const totaalAlles = lijnen.reduce((sm, l) => sm + l.totaal, 0);
+        el.innerHTML = '<div class="card" style="padding:4px 14px 12px">' +
+            lijnen.map((l, i) =>
+                '<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
+                '<span style="flex:1;min-width:0;color:var(--ink,#26334B)">' + esc((l.aantal > 1 ? l.aantal + '\u00D7 ' : '') + l.oms) +
+                  (l.maat ? ' <span style="color:var(--g1,#85847C)">' + esc(l.maat) + '</span>' : '') +
+                  '<div style="font-size:11.5px;color:var(--g1,#85847C)">' + esc(l.reden) + (l.laste === 'firma' ? ' \u00B7 firma' : '') +
+                  (l.bewijs ? ' \u00B7 \u270D tekenen' : '') + '</div></span>' +
+                '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums">' + this._budEur(l.totaal) + '</span>' +
+                '<button onclick="app.budLijnWeg(' + i + ')" style="flex-shrink:0;border:none;background:none;color:var(--g3,#A3A29A);font-size:16px;line-height:1;padding:2px 4px;cursor:pointer">&times;</button>' +
+                '</div>').join('') +
+            '<div style="display:flex;justify-content:space-between;padding:10px 0 0;font-size:14.5px;font-weight:700;color:var(--ink,#26334B)">' +
+            '<span>Totaal (' + lijnen.length + ')</span><span>' + this._budEur(totaalAlles) + '</span></div>' +
+            (totaal !== totaalAlles ? '<div style="font-size:11.5px;color:var(--g2,#5F5E56);text-align:right">waarvan ' + this._budEur(totaal) + ' van het budget</div>' : '') +
+            '</div>';
     },
 
     budWissel(empId) {
         const w = (this._budData || []).find(x => String(x.employeeId) === String(empId));
         const el = document.getElementById('budRest');
         if (!el || !w) return;
-        const jaar = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
+        // v372: boeken gaat altijd over het LOPENDE budgetjaar, ook als het
+        // overzicht op "Altijd" staat.
+        let jaar = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
+        if (jaar === 'alles') jaar = RobawsAPI.budgetJaarNu();
         const budget = this._budJaarbudget(w);
         const rest = Math.round((budget - this._budVerbruik(w, jaar).budget) * 100) / 100;
         const lbl = RobawsAPI.budgetJaarLabel(jaar);
@@ -10146,12 +10240,15 @@ const app = {
 
     budArtWissel(artId) {
         const a = this._budCatArt(artId);
+        const leeg = !artId;
         const vrij = document.getElementById('budVrij');
         const maat = document.getElementById('budMaat');
         const prijs = document.getElementById('budPrijs');
         if (vrij) vrij.style.display = (artId === '__vrij__') ? '' : 'none';
-        if (maat) { maat.style.display = (a && a.groep === 'kledij') ? '' : 'none'; if (a && a.groep !== 'kledij') maat.value = ''; }
-        if (prijs) prijs.value = (artId === '__vrij__') ? '0' : String(a ? a.prijs : 0);
+        const vb = document.getElementById('budVrijBewijsWrap');
+        if (vb) vb.style.display = (artId === '__vrij__') ? 'flex' : 'none';
+        if (maat) { maat.style.display = (a && a.groep === 'kledij') ? '' : 'none'; if (!(a && a.groep === 'kledij')) maat.value = ''; }
+        if (prijs) prijs.value = (artId === '__vrij__' || leeg) ? '0' : String(a ? a.prijs : 0);
         this.budMaatVul();
         this.budTotaal();
     },
@@ -10160,7 +10257,7 @@ const app = {
         const n = Number((document.getElementById('budAantal') || {}).value || 0);
         const p = Number((document.getElementById('budPrijs') || {}).value || 0);
         const el = document.getElementById('budTotaalRegel');
-        if (el) el.textContent = 'Totaal: ' + this._budEur((n > 0 ? n : 0) * (p > 0 ? p : 0));
+        if (el) el.textContent = 'Regel: ' + this._budEur((n > 0 ? n : 0) * (p > 0 ? p : 0));
     },
 
     async budgetBoeken() {
@@ -10170,40 +10267,38 @@ const app = {
         if (!w) { this.toast('Kies een werknemer', true); return; }
         const datum = v('budDatum');
         if (!datum) { this.toast('Kies een datum', true); return; }
-        const artId = v('budArt');
-        const a = this._budCatArt(artId);
-        const oms = (artId === '__vrij__') ? v('budVrij').trim() : (a ? a.naam : '');
-        if (!oms) { this.toast('Vul een omschrijving in', true); return; }
-        const aantal = Math.max(1, Math.round(Number(v('budAantal')) || 1));
-        const stukprijs = Math.round((Number(v('budPrijs')) || 0) * 100) / 100;
-        if (stukprijs <= 0) { this.toast('Vul een stukprijs in', true); return; }
+        // staat er nog een ingevulde regel open? die telt gewoon mee
+        const open = this._budLijnUit(true);
+        if (open) { this._budLijnen = (this._budLijnen || []); this._budLijnen.push(open); }
+        const lijnen = this._budLijnen || [];
+        if (!lijnen.length) { this.toast('Voeg minstens één artikel toe', true); return; }
         if (this._gsBusy) return;
         this._gsBusy = true;
         const btn = document.getElementById('budVerstuurBtn');
         if (btn) { btn.disabled = true; btn.textContent = 'Bezig\u2026'; }
-        const regel = {
-            id: 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-            datum,
-            art: (artId === '__vrij__') ? 'vrij' : artId,
-            oms, aantal, stukprijs,
-            totaal: Math.round(aantal * stukprijs * 100) / 100,
-            maat: v('budMaat').trim(),
-            reden: v('budReden'),
-            laste: v('budLaste') === 'firma' ? 'firma' : 'budget',
-            door: (this.currentUser && this.currentUser.name) || '',
-            opm: v('budOpm').trim(),
-        };
+        const groep = 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        const door = (this.currentUser && this.currentUser.name) || '';
+        const opm = v('budOpm').trim();
+        const regels = lijnen.map((l, i) => ({
+            id: 'b' + Date.now().toString(36) + i + Math.random().toString(36).slice(2, 5),
+            datum, groep, door, opm,
+            art: l.art, oms: l.oms, aantal: l.aantal, stukprijs: l.stukprijs,
+            totaal: l.totaal, maat: l.maat, reden: l.reden, laste: l.laste,
+        }));
         try {
-            // v368: vraagt dit artikel een ondertekend ontvangstbewijs?
-            if (a && a.bewijs) {
+            // v368/v373: vraagt één van de artikelen een ondertekend bewijs?
+            // Dan tekent de werknemer één keer voor de hele levering.
+            if (lijnen.some(l => l.bewijs)) {
                 if (btn) { btn.disabled = false; btn.textContent = 'Boeken'; }
                 this._gsBusy = false;
-                this._bewijsOpen(empId, w, regel);
+                this._bewijsOpen(empId, w, regels);
                 return;
             }
-            await RobawsAPI.addBudgetRegel(empId, regel);
-            this.toast(this._budEur(regel.totaal) + ' geboekt op ' + w.name.split(' ')[0]);
-            const s = document.getElementById('budgetSheet'); if (s) s.remove();
+            await RobawsAPI.addBudgetRegels(empId, regels);
+            this._budLijnen = [];   // v373b: niets meeslepen naar een volgende boeking
+            const som = regels.reduce((sm, r) => sm + r.totaal, 0);
+            this.toast(regels.length + ' artikel' + (regels.length === 1 ? '' : 'en') + ' geboekt \u2014 ' + this._budEur(som));
+            const s2 = document.getElementById('budgetSheet'); if (s2) s2.remove();
             this.loadBudget();
         } catch (e) {
             this.toast('Boeken mislukt: ' + ((e && e.message) || '?'), true);
@@ -10316,13 +10411,14 @@ const app = {
     // zo bestaat er nooit een boeking zonder bewijs.
     // =============================================
 
-    _bewijsOpen(empId, w, regel) {
+    _bewijsOpen(empId, w, regels) {
         const oud = document.getElementById('budgetSheet');
         if (oud) oud.remove();
-        this._bewijsCtx = { empId, w, regel };
+        this._bewijsCtx = { empId, w, regels };
         this._ohSigHas = false;
         this._ohSigPaden = [];
         const esc = (t) => this.escapeHtml(t);
+        const som = regels.reduce((sm, r) => sm + r.totaal, 0);
         const ov = document.createElement('div');
         ov.id = 'bewijsSheet';
         ov.style.cssText = 'position:fixed;inset:0;z-index:99993;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
@@ -10334,18 +10430,18 @@ const app = {
             '    <button onclick="app.bewijsAnnuleer()" style="border:none;background:none;font-size:26px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button>' +
             '  </div>' +
             '  <div style="font-size:12.5px;color:var(--g1,#85847C);margin-bottom:12px">' + esc(w.name) + ' tekent voor ontvangst. Het bewijs komt als PDF op zijn fiche te staan.</div>' +
-            '  <div class="card" style="padding:12px 14px;margin-bottom:12px">' +
-            '    <div style="display:flex;justify-content:space-between;gap:12px;font-size:14.5px">' +
-            '      <span style="color:var(--ink,#26334B)">' + esc((regel.aantal > 1 ? regel.aantal + '\u00D7 ' : '') + regel.oms) + (regel.maat ? ' <span style="color:var(--g1,#85847C)">maat ' + esc(regel.maat) + '</span>' : '') + '</span>' +
-            '      <b>' + this._budEur(regel.totaal) + '</b></div>' +
+            '  <div class="card" style="padding:6px 14px 12px;margin-bottom:12px">' +
+            regels.map(r => '<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px">' +
+                '<span style="color:var(--ink,#26334B)">' + esc((r.aantal > 1 ? r.aantal + '\u00D7 ' : '') + r.oms) +
+                (r.maat ? ' <span style="color:var(--g1,#85847C)">maat ' + esc(r.maat) + '</span>' : '') + '</span>' +
+                '<b>' + this._budEur(r.totaal) + '</b></div>').join('') +
+            '    <div style="display:flex;justify-content:space-between;padding:9px 0 0;font-weight:700;color:var(--ink,#26334B)"><span>Totaal</span><span>' + this._budEur(som) + '</span></div>' +
             '  </div>' +
-            // v369: de verklaring MOET leesbaar zijn vóór het tekenen —
-            // exact dezelfde tekst als in de PDF (QEPdf.VERKLARING).
             '  <div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C);margin:16px 0 6px">Verklaring</div>' +
             '  <div class="card" style="padding:14px 16px">' +
             QEPdf.VERKLARING.map(function (t) {
                 return '<p style="font-size:13.5px;line-height:1.55;color:var(--ink,#26334B);margin:0 0 10px">' + app.escapeHtml(t) + '</p>';
-            }).join('').replace(/margin:0 0 10px">([^<]*)<\/p>$/, 'margin:0">$1</p>') +
+            }).join('') +
             '  </div>' +
             '  <label style="display:flex;align-items:flex-start;gap:9px;font-size:13.5px;color:var(--ink,#26334B);margin:14px 2px 0;line-height:1.5">' +
             '    <input type="checkbox" id="bewijsAkkoord" style="width:19px;height:19px;flex-shrink:0;margin-top:1px">' +
@@ -10385,27 +10481,31 @@ const app = {
         this._gsBusy = true;
         const btn = document.getElementById('bewijsBtn');
         if (btn) { btn.disabled = true; btn.textContent = 'Bezig\u2026'; }
-        const r = c.regel;
+        const regels = c.regels;
+        const datum = regels[0].datum;
         try {
             const pdf = QEPdf.ontvangstbewijs({
                 werknemer: c.w.name,
-                datum: r.datum,
-                datumLang: this._budDat(r.datum),
+                datum,
+                datumLang: this._budDat(datum),
                 tijdstip: new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
                 door: (this.currentUser && this.currentUser.name) || '',
                 ondertekenaar: naam,
                 akkoordTijdstip: new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-                artikelen: [{ naam: r.oms, aantal: r.aantal, maat: r.maat || '',
-                    bedrag: r.laste === 'firma' ? 'firma' : this._budEur(r.totaal) }],
+                artikelen: regels.map(r => ({ naam: r.oms, aantal: r.aantal, maat: r.maat || '',
+                    bedrag: r.laste === 'firma' ? 'firma' : this._budEur(r.totaal) })),
                 handtekening: { paden: this._ohSigPaden,
                     breedte: (this._ohSigMaat || {}).breedte || 600, hoogte: (this._ohSigMaat || {}).hoogte || 170 },
             });
-            const jaar = String(r.datum || '').slice(0, 4) || String(new Date().getFullYear());
+            const jaar = String(datum || '').slice(0, 4) || String(new Date().getFullYear());
             const map = await RobawsAPI.ensureEmployeeMap(c.empId, ['Ontvangstbewijzen', jaar]);
-            const bestand = 'Ontvangstbewijs ' + r.oms + ' ' + r.datum + '.pdf';
+            const bestand = (regels.length === 1)
+                ? 'Ontvangstbewijs ' + regels[0].oms + ' ' + datum + '.pdf'
+                : 'Ontvangstbewijs ' + regels.length + ' artikelen ' + datum + '.pdf';
             await RobawsAPI.uploadEmployeePdf(c.empId, pdf, bestand, map);
             // pas nu boeken — nooit een boeking zonder bewijs
-            await RobawsAPI.addBudgetRegel(c.empId, Object.assign({}, r, { bewijs: true }));
+            await RobawsAPI.addBudgetRegels(c.empId, regels.map(r => Object.assign({}, r, { bewijs: true })));
+            this._budLijnen = [];   // v373b
             this.toast('Ondertekend en geboekt \u2713');
             const sh = document.getElementById('bewijsSheet'); if (sh) sh.remove();
             this._bewijsCtx = null;

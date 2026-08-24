@@ -1516,6 +1516,7 @@ const RobawsAPI = {
 
     /** Leesbaar label, bv. '2026–2027'. */
     budgetJaarLabel(startJaar) {
+        if (String(startJaar) === 'alles') return 'alle jaren';   // v372
         const j = parseInt(startJaar, 10);
         return isFinite(j) ? (j + '\u2013' + (j + 1)) : String(startJaar || '');
     },
@@ -1566,6 +1567,18 @@ const RobawsAPI = {
         return await this._budgetSchrijf(employeeId, huidig);
     },
 
+    /** v373: meerdere regels in ÉÉN lees-muteer-schrijf (één boeking met
+     *  meerdere artikelen). Scheelt calls en voorkomt half geschreven
+     *  boekingen bij een fout halverwege. */
+    async addBudgetRegels(employeeId, regels) {
+        const lijst = Array.isArray(regels) ? regels : [regels];
+        if (!lijst.length) return true;
+        const r = await this.get('employees/' + employeeId, { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
+        const huidig = this._budgetParse(r.data);
+        for (const x of lijst) huidig.regels.push(x);
+        return await this._budgetSchrijf(employeeId, huidig);
+    },
     async removeBudgetRegel(employeeId, regelId) {
         const r = await this.get('employees/' + employeeId, { bypassCache: true });
         if (r.code !== 200 || !r.data) throw new Error('Werknemer niet gevonden (' + r.code + ')');
