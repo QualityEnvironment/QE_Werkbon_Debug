@@ -10075,11 +10075,11 @@ const app = {
         const start = empId || (kiesbaar[0] || {}).employeeId || '';
         const opties = kiesbaar.map(w => '<option value="' + w.employeeId + '"' + (String(w.employeeId) === String(start) ? ' selected' : '') + '>' + esc(w.name) + '</option>').join('');
         const cat = this._budCat();
-        const artOpties = '<option value="" selected>\u2014 Kies een artikel \u2014</option>' +
+        const artOpties = '<option value="">\u2014 Kies een artikel \u2014</option>' +
             this._budCatGroepen().map(g => '<optgroup label="' + esc(g) + '">' +
             cat.filter(a => a.groep === g).map(a =>
                 '<option value="' + esc(a.id) + '">' + esc(a.naam) + ' \u2014 ' + this._budEur(a.prijs) + '</option>').join('') +
-            '</optgroup>').join('') + '<option value="__vrij__">\u2014 Ander artikel (zelf invullen) \u2014</option>';
+            '</optgroup>').join('') + '<option value="__vrij__" selected>\u2014 Ander artikel (zelf invullen) \u2014</option>';
         const lbl = (t) => '<label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:14px 0 5px">' + t + '</label>';
         const ov = document.createElement('div');
         ov.id = 'budgetSheet';
@@ -10129,7 +10129,7 @@ const app = {
             '  <button class="btn btn-primary btn-full" id="budVerstuurBtn" style="margin-top:16px" onclick="app.budgetBoeken()">Boeken</button>' +
             '</div>';
         document.body.appendChild(ov);
-        this.budArtWissel('');
+        this.budArtWissel('__vrij__');
         this.budWissel(start);
         this._budLijnenToon();
     },
@@ -10164,9 +10164,9 @@ const app = {
         this._budLijnen.push(lijn);
         // toevoegblok leegmaken voor de volgende
         const zet = (id, w) => { const el = document.getElementById(id); if (el) el.value = w; };
-        zet('budArt', ''); zet('budVrij', ''); zet('budMaat', ''); zet('budAantal', '1');
+        zet('budArt', '__vrij__'); zet('budVrij', ''); zet('budMaat', ''); zet('budAantal', '1');
         const vbx = document.getElementById('budVrijBewijs'); if (vbx) vbx.checked = false;
-        this.budArtWissel('');
+        this.budArtWissel('__vrij__');
         this._budLijnenToon();
     },
 
@@ -14717,6 +14717,26 @@ const app = {
             const fmt1 = (n) => (Math.round(n * 100) / 100).toFixed(2);
             const fmt2 = fmt1; // alias
 
+            // v375: FIETSDAGEN (vraag Levi) — 'Fietsvergoeding' is een
+            // CHECKBOX-extraveld dat ALLEEN booleanValue draagt (live gemeten
+            // 25 aug op T263292); _extractFieldVal leest die vorm NIET, dus
+            // hier expliciet. Dagen met enkel verlof/ziek tellen niet mee —
+            // dan was er geen woon-werkverkeer.
+            const fietsOp = (wo) => {
+                const f = (wo.extraFields || {})['Fietsvergoeding'];
+                if (!f) return false;
+                return f.booleanValue === true || f.value === true
+                    || f.stringValue === '1' || f.value === '1';
+            };
+            const fietsPerDag = {};
+            for (const [dDatum, dWos] of Object.entries(byDate)) {
+                const gewerkt = dWos.filter(w => !this._isAbsenceTijd(getField(w, 'Tijd') || 'Op tijd'));
+                if (!gewerkt.length) continue;
+                fietsPerDag[dDatum] = gewerkt.some(fietsOp);
+            }
+            const fietsDagen = Object.values(fietsPerDag).filter(Boolean).length;
+            const fietsGewerkteDagen = Object.keys(fietsPerDag).length;
+
             let html = '';
 
             // v266 (Marble 1:1, prototype "UREN"): kop met maandlabel + grote
@@ -14757,6 +14777,43 @@ const app = {
                         <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">DAGEN</div>
                     </div>
                 </div>`;
+
+            // v375: fietskaart — teller + dag-raster (groen = met de fiets,
+            // omlijnd = niet). Alleen tonen als er gewerkte dagen zijn.
+            if (fietsGewerkteDagen > 0) {
+                const dagKort = ['zo','ma','di','wo','do','vr','za'];
+                const blokjes = Object.keys(fietsPerDag).sort().map(ds => {
+                    const dd = new Date(ds + 'T12:00:00');
+                    const aan = fietsPerDag[ds];
+                    const titel = dagKort[dd.getDay()] + ' ' + dd.getDate() + ' '
+                        + monthNames[dd.getMonth()].slice(0, 3)
+                        + (aan ? ' - met de fiets' : ' - niet met de fiets');
+                    return '<div title="' + titel + '" style="width:32px;height:32px;border-radius:9px;'
+                        + 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;'
+                        + 'font:700 12px var(--font);font-variant-numeric:tabular-nums;'
+                        + (aan ? 'background:var(--gwash);color:var(--green2);border:1px solid transparent'
+                               : 'background:transparent;color:var(--g2);border:1px solid var(--b1)')
+                        + '">' + dd.getDate() + '</div>';
+                }).join('');
+                html += `
+                <div style="border:1px solid var(--b1);border-radius:14px;padding:14px;margin:14px 0 12px;background:var(--card)">
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px">
+                        <div>
+                            <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--green2)">
+                                <span class="qe-countup" data-count="${fietsDagen}" data-dec="0">${fietsDagen}</span>
+                                <span style="font-size:14px;color:var(--g1);font-weight:600"> van ${fietsGewerkteDagen} ${fietsGewerkteDagen === 1 ? 'dag' : 'dagen'}</span>
+                            </div>
+                            <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">MET DE FIETS</div>
+                        </div>
+                        <div style="font-size:26px;line-height:1">&#128690;</div>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:5px">${blokjes}</div>
+                    <div style="display:flex;align-items:center;gap:12px;margin-top:10px;font-size:11px;color:var(--g1)">
+                        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:4px;background:var(--gwash);border:1px solid transparent;display:inline-block"></span> met de fiets</span>
+                        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:4px;border:1px solid var(--b1);display:inline-block"></span> niet</span>
+                    </div>
+                </div>`;
+            }
 
             // v324: hint BOVEN de daglijst (stond onder 31 blokken verstopt)
             html += `<div style="font-size:12px;color:var(--g1);margin:2px 0 6px">Klopt een dag niet? Tik erop om een aanpassing aan te vragen.</div>`;
@@ -14802,7 +14859,7 @@ const app = {
                     const clickWo = wos.find(w => !this._isAbsenceTijd(getField(w, 'Tijd') || 'Op tijd')) || null;
                     html += `<div style="padding:12px 2px 8px;border-bottom:1px solid var(--l2)${clickWo ? ';cursor:pointer' : ''}"${clickWo ? ` onclick="app.openAanpassing('${clickWo.id}')"` : ''}>
                         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
-                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}</span>
+                            <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}${fietsPerDag[date] ? ' <span title="Met de fiets naar het werk" style="font-size:13px">&#128690;</span>' : ''}</span>
                             <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u${clickWo ? ' <span style="color:var(--g3);font-weight:400">&rsaquo;</span>' : ''}</span>
                         </div>`;
 
