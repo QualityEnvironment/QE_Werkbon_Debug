@@ -14778,39 +14778,62 @@ const app = {
                     </div>
                 </div>`;
 
-            // v375: fietskaart — teller + dag-raster (groen = met de fiets,
-            // omlijnd = niet). Alleen tonen als er gewerkte dagen zijn.
+            // v375b: fietskaart als MINI-KALENDER — kolommen = weekdagen
+            // (ma-vr, met za/zo erbij zodra er weekendwerk is), rijen = weken.
+            // Zo zie je in één oogopslag op wélke weekdagen wel/niet gefietst
+            // wordt. Groen = met de fiets, omlijnd = niet, leeg = niet gewerkt.
             if (fietsGewerkteDagen > 0) {
-                const dagKort = ['zo','ma','di','wo','do','vr','za'];
-                const blokjes = Object.keys(fietsPerDag).sort().map(ds => {
-                    const dd = new Date(ds + 'T12:00:00');
-                    const aan = fietsPerDag[ds];
-                    const titel = dagKort[dd.getDay()] + ' ' + dd.getDate() + ' '
-                        + monthNames[dd.getMonth()].slice(0, 3)
-                        + (aan ? ' - met de fiets' : ' - niet met de fiets');
-                    return '<div title="' + titel + '" style="width:32px;height:32px;border-radius:9px;'
-                        + 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;'
-                        + 'font:700 12px var(--font);font-variant-numeric:tabular-nums;'
-                        + (aan ? 'background:var(--gwash);color:var(--green2);border:1px solid transparent'
-                               : 'background:transparent;color:var(--g2);border:1px solid var(--b1)')
-                        + '">' + dd.getDate() + '</div>';
-                }).join('');
+                const dagKort = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+                const dsen = Object.keys(fietsPerDag).sort();
+                const weekendGewerkt = dsen.some(ds => {
+                    const g = new Date(ds + 'T12:00:00').getDay();
+                    return g === 0 || g === 6;
+                });
+                const kolommen = weekendGewerkt ? [1, 2, 3, 4, 5, 6, 0] : [1, 2, 3, 4, 5];
+                const eersteD = new Date(dsen[0] + 'T12:00:00');
+                const laatsteD = new Date(dsen[dsen.length - 1] + 'T12:00:00');
+                const loop = new Date(eersteD);
+                loop.setDate(eersteD.getDate() - ((eersteD.getDay() + 6) % 7));   // maandag van die week
+                let cellen = '';
+                while (loop <= laatsteD) {
+                    for (const wd of kolommen) {
+                        const cel = new Date(loop);
+                        cel.setDate(loop.getDate() + (wd === 0 ? 6 : wd - 1));
+                        const ds = this._localDateStr(cel);
+                        if (!(ds in fietsPerDag)) { cellen += '<div style="height:24px"></div>'; continue; }
+                        const aan = fietsPerDag[ds];
+                        const titel = dagKort[cel.getDay()] + ' ' + cel.getDate() + ' '
+                            + monthNames[cel.getMonth()].slice(0, 3)
+                            + (aan ? ' - met de fiets' : ' - niet met de fiets');
+                        cellen += '<div title="' + titel + '" style="height:24px;border-radius:7px;'
+                            + 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;'
+                            + 'font:700 10.5px var(--font);font-variant-numeric:tabular-nums;'
+                            + (aan ? 'background:var(--gwash);color:var(--green2);border:1px solid transparent'
+                                   : 'background:transparent;color:var(--g2);border:1px solid var(--b1)')
+                            + '">' + cel.getDate() + '</div>';
+                    }
+                    loop.setDate(loop.getDate() + 7);
+                }
+                const koppen = kolommen.map(wd =>
+                    '<div style="text-align:center;font:700 9.5px var(--font);color:var(--g1);'
+                    + 'letter-spacing:0.4px;text-transform:uppercase;padding-bottom:1px">'
+                    + dagKort[wd] + '</div>').join('');
                 html += `
-                <div style="border:1px solid var(--b1);border-radius:14px;padding:14px;margin:14px 0 12px;background:var(--card)">
-                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px">
+                <div style="border:1px solid var(--b1);border-radius:12px;padding:11px 12px;margin:12px 0 10px;background:var(--card)">
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:9px">
                         <div>
-                            <div style="font:400 28px var(--font);letter-spacing:-0.8px;color:var(--green2)">
+                            <div style="font:400 22px var(--font);letter-spacing:-0.6px;color:var(--green2)">
                                 <span class="qe-countup" data-count="${fietsDagen}" data-dec="0">${fietsDagen}</span>
-                                <span style="font-size:14px;color:var(--g1);font-weight:600"> van ${fietsGewerkteDagen} ${fietsGewerkteDagen === 1 ? 'dag' : 'dagen'}</span>
+                                <span style="font-size:12.5px;color:var(--g1);font-weight:600"> van ${fietsGewerkteDagen} ${fietsGewerkteDagen === 1 ? 'dag' : 'dagen'}</span>
                             </div>
-                            <div style="font-size:10.5px;font-weight:600;color:var(--g1);margin-top:2px;letter-spacing:0.5px">MET DE FIETS</div>
+                            <div style="font-size:9.5px;font-weight:600;color:var(--g1);margin-top:1px;letter-spacing:0.5px">MET DE FIETS</div>
                         </div>
-                        <div style="font-size:26px;line-height:1">&#128690;</div>
+                        <div style="font-size:19px;line-height:1">&#128690;</div>
                     </div>
-                    <div style="display:flex;flex-wrap:wrap;gap:5px">${blokjes}</div>
-                    <div style="display:flex;align-items:center;gap:12px;margin-top:10px;font-size:11px;color:var(--g1)">
-                        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:4px;background:var(--gwash);border:1px solid transparent;display:inline-block"></span> met de fiets</span>
-                        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:4px;border:1px solid var(--b1);display:inline-block"></span> niet</span>
+                    <div style="display:grid;grid-template-columns:repeat(${kolommen.length}, minmax(0,30px));gap:3px;justify-content:start">${koppen}${cellen}</div>
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:10.5px;color:var(--g1)">
+                        <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:11px;border-radius:4px;background:var(--gwash);display:inline-block"></span> met de fiets</span>
+                        <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:11px;border-radius:4px;border:1px solid var(--b1);display:inline-block"></span> niet</span>
                     </div>
                 </div>`;
             }
