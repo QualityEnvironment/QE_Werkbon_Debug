@@ -14778,10 +14778,10 @@ const app = {
                     </div>
                 </div>`;
 
-            // v375b: fietskaart als MINI-KALENDER — kolommen = weekdagen
-            // (ma-vr, met za/zo erbij zodra er weekendwerk is), rijen = weken.
-            // Zo zie je in één oogopslag op wélke weekdagen wel/niet gefietst
-            // wordt. Groen = met de fiets, omlijnd = niet, leeg = niet gewerkt.
+            // v376b: fietsstrip — teller LINKS, mini-kalender RECHTS op één
+            // regel (feedback Levi: zo weinig mogelijk plaats, wel duidelijk).
+            // Kolommen = weekdagen (za/zo alleen bij weekendwerk), rijen =
+            // weken; groen = met de fiets, omlijnd = niet, leeg = niet gewerkt.
             if (fietsGewerkteDagen > 0) {
                 const dagKort = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
                 const dsen = Object.keys(fietsPerDag).sort();
@@ -14793,48 +14793,42 @@ const app = {
                 const eersteD = new Date(dsen[0] + 'T12:00:00');
                 const laatsteD = new Date(dsen[dsen.length - 1] + 'T12:00:00');
                 const loop = new Date(eersteD);
-                loop.setDate(eersteD.getDate() - ((eersteD.getDay() + 6) % 7));   // maandag van die week
+                loop.setDate(eersteD.getDate() - ((eersteD.getDay() + 6) % 7));
                 let cellen = '';
                 while (loop <= laatsteD) {
                     for (const wd of kolommen) {
                         const cel = new Date(loop);
                         cel.setDate(loop.getDate() + (wd === 0 ? 6 : wd - 1));
                         const ds = this._localDateStr(cel);
-                        if (!(ds in fietsPerDag)) { cellen += '<div style="height:24px"></div>'; continue; }
+                        if (!(ds in fietsPerDag)) { cellen += '<div style="height:19px"></div>'; continue; }
                         const aan = fietsPerDag[ds];
                         const titel = dagKort[cel.getDay()] + ' ' + cel.getDate() + ' '
                             + monthNames[cel.getMonth()].slice(0, 3)
                             + (aan ? ' - met de fiets' : ' - niet met de fiets');
-                        cellen += '<div title="' + titel + '" style="height:24px;border-radius:7px;'
+                        cellen += '<div title="' + titel + '" style="height:19px;border-radius:5px;'
                             + 'display:flex;align-items:center;justify-content:center;box-sizing:border-box;'
-                            + 'font:700 10.5px var(--font);font-variant-numeric:tabular-nums;'
+                            + 'font:600 9.5px var(--font);font-variant-numeric:tabular-nums;'
                             + (aan ? 'background:var(--gwash);color:var(--green2);border:1px solid transparent'
-                                   : 'background:transparent;color:var(--g2);border:1px solid var(--b1)')
+                                   : 'background:transparent;color:var(--g3);border:1px solid var(--l2)')
                             + '">' + cel.getDate() + '</div>';
                     }
                     loop.setDate(loop.getDate() + 7);
                 }
                 const koppen = kolommen.map(wd =>
-                    '<div style="text-align:center;font:700 9.5px var(--font);color:var(--g1);'
-                    + 'letter-spacing:0.4px;text-transform:uppercase;padding-bottom:1px">'
+                    '<div style="text-align:center;font:700 8.5px var(--font);color:var(--g1);'
+                    + 'letter-spacing:0.3px;text-transform:uppercase;line-height:11px">'
                     + dagKort[wd] + '</div>').join('');
+                const telKleur = fietsDagen > 0 ? 'var(--green2)' : 'var(--g2)';
                 html += `
-                <div style="border:1px solid var(--b1);border-radius:12px;padding:11px 12px;margin:12px 0 10px;background:var(--card)">
-                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:9px">
-                        <div>
-                            <div style="font:400 22px var(--font);letter-spacing:-0.6px;color:var(--green2)">
-                                <span class="qe-countup" data-count="${fietsDagen}" data-dec="0">${fietsDagen}</span>
-                                <span style="font-size:12.5px;color:var(--g1);font-weight:600"> van ${fietsGewerkteDagen} ${fietsGewerkteDagen === 1 ? 'dag' : 'dagen'}</span>
-                            </div>
-                            <div style="font-size:9.5px;font-weight:600;color:var(--g1);margin-top:1px;letter-spacing:0.5px">MET DE FIETS</div>
+                <div style="border:1px solid var(--b1);border-radius:11px;padding:9px 11px;margin:10px 0 8px;background:var(--card);display:flex;align-items:flex-start;gap:12px">
+                    <div style="flex:0 0 auto">
+                        <div style="font:400 20px var(--font);letter-spacing:-0.5px;color:${telKleur};line-height:1.1">
+                            <span class="qe-countup" data-count="${fietsDagen}" data-dec="0">${fietsDagen}</span><span style="font-size:12px;color:var(--g1);font-weight:600"> / ${fietsGewerkteDagen}</span>
                         </div>
-                        <div style="font-size:19px;line-height:1">&#128690;</div>
+                        <div style="font-size:9px;font-weight:700;color:var(--g1);letter-spacing:0.4px;margin-top:1px">&#128690; MET DE FIETS</div>
+                        <div style="font-size:8.5px;color:var(--g3);margin-top:2px">groen = gefietst</div>
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(${kolommen.length}, minmax(0,30px));gap:3px;justify-content:start">${koppen}${cellen}</div>
-                    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:10.5px;color:var(--g1)">
-                        <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:11px;border-radius:4px;background:var(--gwash);display:inline-block"></span> met de fiets</span>
-                        <span style="display:flex;align-items:center;gap:4px"><span style="width:11px;height:11px;border-radius:4px;border:1px solid var(--b1);display:inline-block"></span> niet</span>
-                    </div>
+                    <div style="flex:1;display:grid;grid-template-columns:repeat(${kolommen.length}, 19px);gap:2px;justify-content:end">${koppen}${cellen}</div>
                 </div>`;
             }
 
@@ -14885,6 +14879,22 @@ const app = {
                             <span style="font-size:14px;font-weight:700;color:var(--ink)">${dayName} ${dateStr}${fietsPerDag[date] ? ' <span title="Met de fiets naar het werk" style="font-size:13px">&#128690;</span>' : ''}</span>
                             <span style="font:600 17px var(--font);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.3px">${fmt1(dayTotal)} u${clickWo ? ' <span style="color:var(--g3);font-weight:400">&rsaquo;</span>' : ''}</span>
                         </div>`;
+
+                    // v379: heeft bureel iets aangepast aan deze dag, dan
+                    // staat de reden in het extraveld "Opmerking
+                    // tijdsaanpassing" (gezet in het uren-scherm). Tonen,
+                    // zodat je weet waarom je uren veranderd zijn.
+                    const dagOpm = wos
+                        .map(w => String(getField(w, 'Opmerking tijdsaanpassing') || '').trim())
+                        .find(t => t);
+                    if (dagOpm) {
+                        html += `<div style="display:flex;gap:9px;align-items:flex-start;margin:2px 0 8px;padding:9px 11px;background:var(--wash);border-radius:10px">
+                            <span style="font-size:14px;line-height:1.2;flex-shrink:0">&#128221;</span>
+                            <div style="flex:1;min-width:0;font-size:12.5px;color:var(--g2);line-height:1.45">
+                                <span style="font-weight:700;color:var(--ink)">Aangepast door bureel</span><br>${this.escapeHtml(dagOpm)}
+                            </div>
+                        </div>`;
+                    }
 
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
                     //   Werkuren (hourTypeId=1, article 185)  → ✅ groen, klant-werk

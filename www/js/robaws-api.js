@@ -7145,7 +7145,16 @@ const RobawsAPI = {
         for (let p = 0; p < 3; p++) {
             const offset = p * LIMIT;
             const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
-            if (res.code !== 200 || !res.data || !res.data.items || res.data.items.length === 0) break;
+            // v378: een MISLUKTE read (429/5xx/replica-storing) mag NOOIT als
+            // "geen werkbon vandaag" gelden — de sync wiste dan de lokale
+            // sessie en de eerstvolgende uitklok-scan werd stil een 2e INKLOK
+            // (dag bleef open, ochtenduren verloren in de 23:45-afsluiting;
+            // gemeten 19-25 aug bij bureel). Fout = gooien; alle aanroepers
+            // hebben een net catch-pad ("sessie behouden" / "probeer opnieuw").
+            if (res.code !== 200 || !res.data || !res.data.items) {
+                throw new Error('werkbonnen-lijst faalde (HTTP ' + res.code + ')');
+            }
+            if (res.data.items.length === 0) break;
             for (const wo of res.data.items) {
                 if (wo.id == null || seen.has(String(wo.id))) continue;
                 seen.add(String(wo.id));

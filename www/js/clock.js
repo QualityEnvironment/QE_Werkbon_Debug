@@ -703,6 +703,25 @@ window.QEClock = {
                     return;
                 }
 
+                // v378: VANGNET SESSIE-VERLIES — de lokale sessie kan weg zijn
+                // (gewist na een mislukte poll-read, toestelwissel, app-data
+                // gewist) terwijl de dag in Robaws nog OPEN staat. Zonder deze
+                // herbouw werd een uitklok-scan dan stil een 2e INKLOK
+                // ("gelukt!"), bleef de dag open en verdwenen de ochtenduren
+                // in de 23:45-afsluiting van de dag erna (gemeten 24-25 aug).
+                if (!session.active) {
+                    try {
+                        await this.syncWithRobaws();
+                        const s2 = this.getSession();
+                        if (s2 && s2.active) {
+                            session = s2;
+                            console.log('[Clock] open dag in Robaws gevonden — sessie herbouwd, scan wordt een UITKLOK');
+                        }
+                    } catch (e) {
+                        console.warn('[Clock] sessie-herbouw-check faalde:', e && e.message);
+                    }
+                }
+
                 // ── ACTIEVE SESSIE → UITCLOCKEN ──
                 if (session.active) {
                     // v267/v272: het KILOMETER-FORMULIER is voortaan de
