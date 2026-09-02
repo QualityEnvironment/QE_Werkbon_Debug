@@ -1041,6 +1041,46 @@ window.QEClock = {
     // UITCLOCKEN (v58: post time-entry + zet Uitgeklokt)
     // =============================================
 
+    /** v381: de tijdsblok-grenzen van een uitklok — ÉÉN berekening voor de
+     *  klok (_clockOut) én de werkbon-overname (app._fillKlokurenForMonteur),
+     *  zodat werkbon en tijdsregistratie altijd dezelfde uren dragen.
+     *  Regels (v74/v94): kwartier-afronding met 4 min tolerantie — inklok
+     *  omhoog, uitklok omlaag — en bij een BUREAU-scan nooit vóór het
+     *  startuur van de werknemer (max(afronding, startuur)). */
+    berekenEntryTijden(session, endTimeRaw) {
+        const toMinutes = (hhmm) => {
+            const m = String(hhmm || '').match(/^([0-9]{1,2}):([0-9]{1,2})/);
+            return m ? ((parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0)) : 0;
+        };
+        const fromMinutes = (mins) => {
+            const h = Math.floor(mins / 60) % 24;
+            return String(h).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+        };
+        const TOLERANCE = 4;
+        const roundUp15 = (mins) => {
+            const rem = mins % 15;
+            if (rem > 0 && rem <= TOLERANCE) return mins - rem;
+            return Math.ceil(mins / 15) * 15;
+        };
+        const roundDown15 = (mins) => {
+            const rem = mins % 15;
+            const distUpper = (15 - rem) % 15;
+            if (distUpper > 0 && distUpper <= TOLERANCE) return mins + distUpper;
+            return Math.floor(mins / 15) * 15;
+        };
+        const actualStartMin = toMinutes(session && session.startTime);
+        const expectedStartMin = toMinutes(this.getExpectedStartTime());
+        const useStartuurCorrection = !!(session && session.tagType === 'bureau');
+        const entryStartMin = useStartuurCorrection
+            ? Math.max(roundUp15(actualStartMin), expectedStartMin)
+            : roundUp15(actualStartMin);
+        const entryEndMin = roundDown15(toMinutes(endTimeRaw));
+        return {
+            entryStartMin, entryEndMin,
+            entryStart: fromMinutes(entryStartMin), entryEnd: fromMinutes(entryEndMin),
+            useStartuurCorrection,
+        };
+    },
     async _clockOut(session, tag, opts) {
         const opts2 = opts || {};
         const now = await this._getNow();
@@ -1151,18 +1191,13 @@ window.QEClock = {
             if (distUpper > 0 && distUpper <= TOLERANCE) return mins + distUpper;
             return Math.floor(mins / 15) * 15;
         };
-        const useStartuurCorrection = (session.tagType === 'bureau');
-        let entryStartMin;
-        if (useStartuurCorrection) {
-            // Bureau-scan: als de scan VÓÓR de werknemer-startuur ligt, gebruiken
-            // we de startuur. Anders de gerondde scan-tijd (met v95 tolerantie).
-            // Math.max neemt vanzelf de latere van de twee.
-            entryStartMin = Math.max(roundUp15(actualStartMin), expectedStartMin);
-        } else {
-            // Camionet of L&L: gewoon afgeronde scan-tijd, géén startuur-correctie.
-            entryStartMin = roundUp15(actualStartMin);
-        }
-        const entryEndMin = roundDown15(toMinutes(endTimeRaw));  // v74: round DOWN naar kwartier
+        // v381: ÉÉN gedeelde berekening (berekenEntryTijden) — de werkbon-
+        // overname bij het uitklokken gebruikt exact dezelfde, zodat werkbon
+        // en tijdsregistratie nooit meer uiteenlopen (06:30-vs-06:45-melding).
+        const _et = this.berekenEntryTijden(session, endTimeRaw);
+        const useStartuurCorrection = _et.useStartuurCorrection;
+        const entryStartMin = _et.entryStartMin;
+        const entryEndMin = _et.entryEndMin;
         const entryStart = fromMinutes(entryStartMin);
         const entryEnd = fromMinutes(entryEndMin);
 

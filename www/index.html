@@ -1086,6 +1086,17 @@
             </div>
         </div>
 
+        <!-- v381: Taak-ontvangers — wie krijgt welke automatische taak (bureel) -->
+        <div class="card mb-prowcard" id="pgRowTaakOntvangers" style="margin-bottom:14px;padding:4px 18px;display:none">
+            <div class="mb-prow" style="border-bottom:none" onclick="app.openTaakOntvangers()">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Taak-ontvangers</div>
+                    <div class="mb-prow-s">Wie krijgt welke automatische taak in Robaws</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
+
         <!-- PIN wijzigen: inklapbaar zoals het prototype -->
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
@@ -1264,6 +1275,19 @@
         </div>
     </div>
     <div id="autoFlowList"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: TAAK-ONTVANGERS (v381 — bureel) ========== -->
+<div class="screen" id="screenTaakOntvangers">
+    <div class="section-header"><h2>Taak-ontvangers</h2></div>
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
+            Automatische taken (uren-aanpassingen, facturen, opvolging, keuringen…) gaan
+            standaard naar één persoon. Kies hier wie — de app én de QE-server
+            (automations) volgen dit meteen. Ook instelbaar in de hub (⚙ Instellingen).
+        </div>
+    </div>
+    <div id="taakOntvList"><div class="spinner"></div></div>
 </div>
 
 <!-- ========== SCREEN: LOGISTIEK (v346 — hub, alleen bureel) ========== -->

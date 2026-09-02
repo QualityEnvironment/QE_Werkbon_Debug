@@ -813,6 +813,9 @@ const app = {
             // v344: Automations-rij (Instellingen-groep) — alleen bureel
             const autoRow = document.getElementById('pgRowAutomations');
             if (autoRow) autoRow.style.display = _isBureel ? '' : 'none';
+            // v381: Taak-ontvangers-rij — alleen bureel
+            const taakRow = document.getElementById('pgRowTaakOntvangers');
+            if (taakRow) taakRow.style.display = _isBureel ? '' : 'none';
         }
 
         this.navigate('screenProfile');
@@ -1504,8 +1507,19 @@ const app = {
         } catch (_) { /* fallback: toesteltijd */ }
         const endTimeRaw = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
 
-        const entryStartMin = roundUp15(toMin(startTime));
-        const entryEndMin   = roundDown15(toMin(endTimeRaw));
+        // v381 (melding Levi): DEZELFDE grenzen als de klok — incl. de
+        // bureau-startuurcorrectie (inklok 06:30 in de bureau → de klok boekt
+        // 06:45 = startuur, maar de werkbon nam 06:30 over). Eén berekening
+        // in clock.js voor beide; hieronder alleen een terugval.
+        let entryStartMin, entryEndMin;
+        if (window.QEClock && typeof QEClock.berekenEntryTijden === 'function') {
+            const et = QEClock.berekenEntryTijden(Object.assign({}, session || {}, { startTime }), endTimeRaw);
+            entryStartMin = et.entryStartMin;
+            entryEndMin = et.entryEndMin;
+        } else {
+            entryStartMin = roundUp15(toMin(startTime));
+            entryEndMin = roundDown15(toMin(endTimeRaw));
+        }
         const entryStart = fromMin(entryStartMin);
         const entryEnd   = fromMin(entryEndMin);
 
@@ -1834,6 +1848,7 @@ const app = {
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
             screenAanvragen: 'Aanvragen',  // v278
+            screenTaakOntvangers: 'Taak-ontvangers',  // v381
             screenVerlofDetail: 'Verlofaanvraag',  // v278
             screenGoedkeuren: 'Goedkeuren',  // v278
             screenFactuurDetail: 'Factuur',  // v283
@@ -9924,13 +9939,19 @@ const app = {
 
     /** Verbruik in een jaar, gesplitst in budget en firma. */
     _budVerbruik(w, jaar) {
-        let budget = 0, firma = 0;
+        let budget = 0, firma = 0, premie = 0;
         for (const r of ((w.budget && w.budget.regels) || [])) {
             if (String(jaar) !== 'alles' && RobawsAPI.budgetJaarVan(r.datum) !== String(jaar)) continue;   // v372
             const bedrag = Number(r.totaal) || 0;
             if (r.laste === 'firma') firma += bedrag; else budget += bedrag;
         }
-        return { budget: Math.round(budget * 100) / 100, firma: Math.round(firma * 100) / 100 };
+        // v375: koperpremies verhogen het beschikbare budget van dat jaar
+        for (const p of ((w.budget && w.budget.premies) || [])) {
+            if (String(jaar) !== 'alles' && RobawsAPI.budgetJaarVan(p.datum) !== String(jaar)) continue;
+            premie += Number(p.bedrag) || 0;
+        }
+        return { budget: Math.round(budget * 100) / 100, firma: Math.round(firma * 100) / 100,
+            premie: Math.round(premie * 100) / 100 };
     },
 
     _budEur(n) {
@@ -9963,8 +9984,8 @@ const app = {
         this._budGroepen = groepen;
         let totBudget = 0, totVerbruik = 0, totFirma = 0;
         for (const g of groepen) {
-            totBudget += this._budJaarbudget(g.w);
             const v = this._budVerbruik(g.w, s.jaar);
+            totBudget += this._budJaarbudget(g.w) + v.premie;   // v375: premie hoort bij het budget
             totVerbruik += v.budget; totFirma += v.firma;
         }
         // Twee aparte totalen (vraag Levi): budget-verbruik én firma-kosten
@@ -9979,8 +10000,8 @@ const app = {
         html += groepen.map((g, idx) => {
             const w = g.w;
             const open = !!this._budOpen[g.key];
-            const budget = this._budJaarbudget(w);
             const v = this._budVerbruik(w, s.jaar);
+            const budget = this._budJaarbudget(w) + v.premie;   // v375: incl. koperpremie
             const rest = Math.round((budget - v.budget) * 100) / 100;
             const pct = budget > 0 ? Math.min(100, Math.round((v.budget / budget) * 100)) : 0;
             const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
@@ -10013,6 +10034,7 @@ const app = {
                 '  </div>') +
                 '</div>' +
                 (open ? '<div style="padding:0 16px 12px">' +
+                    (v.premie ? '<div style="padding:9px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13px;color:var(--green2,#3E7A54)">\uD83E\uDD49 Koperpremie ' + esc(RobawsAPI.budgetJaarLabel(s.jaar)) + ': <b>+' + this._budEur(v.premie) + '</b></div>' : '') +
                     (regels.length ? regels.map(r =>
                         '<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13px">' +
                         '<span style="flex-shrink:0;width:70px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._budDat(r.datum, true)) + '</span>' +
@@ -10211,8 +10233,9 @@ const app = {
         // overzicht op "Altijd" staat.
         let jaar = (this._budState && this._budState.jaar) || RobawsAPI.budgetJaarNu();
         if (jaar === 'alles') jaar = RobawsAPI.budgetJaarNu();
-        const budget = this._budJaarbudget(w);
-        const rest = Math.round((budget - this._budVerbruik(w, jaar).budget) * 100) / 100;
+        const vb = this._budVerbruik(w, jaar);
+        const budget = Math.round((this._budJaarbudget(w) + vb.premie) * 100) / 100;   // v375: incl. koperpremie
+        const rest = Math.round((budget - vb.budget) * 100) / 100;
         const lbl = RobawsAPI.budgetJaarLabel(jaar);
         el.innerHTML = rest <= 0
             ? '<span style="color:var(--red2,#B4372F);font-weight:600">Budget op</span>' + (rest < 0 ? ' (' + this._budEur(-rest) + ' over)' : '') +
@@ -10359,10 +10382,14 @@ const app = {
         const vanFirma = alle.filter(r => r.laste === 'firma');
         const op = Math.round(vanBudget.reduce((s, r) => s + (Number(r.totaal) || 0), 0) * 100) / 100;
         const firma = Math.round(vanFirma.reduce((s, r) => s + (Number(r.totaal) || 0), 0) * 100) / 100;
-        const rest = Math.round((budget - op) * 100) / 100;
-        const pct = budget > 0 ? Math.min(100, Math.round((op / budget) * 100)) : 0;
+        // v375: koperpremies van dit budgetjaar tellen bij het budget op
+        const premies = (b.premies || []).filter(p => RobawsAPI.budgetJaarVan(p.datum) === String(jaar));
+        const premieTot = Math.round(premies.reduce((s, p) => s + (Number(p.bedrag) || 0), 0) * 100) / 100;
+        const budgetTot = Math.round((budget + premieTot) * 100) / 100;
+        const rest = Math.round((budgetTot - op) * 100) / 100;
+        const pct = budgetTot > 0 ? Math.min(100, Math.round((op / budgetTot) * 100)) : 0;
         const kleur = rest < 0 || pct >= 90 ? 'var(--red2,#B4372F)' : (pct >= 60 ? 'var(--amber,#D97E24)' : 'var(--green2,#3E7A54)');
-        const jaren = [...new Set((b.regels || []).map(r => RobawsAPI.budgetJaarVan(r.datum)).filter(Boolean))];
+        const jaren = [...new Set((b.regels || []).concat(b.premies || []).map(r => RobawsAPI.budgetJaarVan(r.datum)).filter(Boolean))];
         if (jaren.indexOf(RobawsAPI.budgetJaarNu()) < 0) jaren.push(RobawsAPI.budgetJaarNu());
         jaren.sort().reverse();
         const REDEN = { kwijt: 'kwijt', kapot: 'kapot', versleten: 'versleten', nieuw: 'nieuw' };
@@ -10385,11 +10412,25 @@ const app = {
             '  <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g1,#85847C)">' +
             (rest < 0 ? 'Over je budget' : 'Nog beschikbaar') + ' \u00B7 ' + esc(jaarLbl) + '</div>' +
             '  <div style="font-size:34px;font-weight:700;letter-spacing:-1px;color:' + kleur + ';margin:4px 0 2px">' + this._budEur(rest < 0 ? -rest : rest) + '</div>' +
-            '  <div style="font-size:13px;color:var(--g2,#5F5E56)">' + this._budEur(op) + ' gebruikt van ' + this._budEur(budget) + '</div>' +
+            '  <div style="font-size:13px;color:var(--g2,#5F5E56)">' + this._budEur(op) + ' gebruikt van ' + this._budEur(budgetTot) +
+            (premieTot ? ' <span style="color:var(--green2,#3E7A54)">(waarvan +' + this._budEur(premieTot) + ' koperpremie)</span>' : '') + '</div>' +
             '  <div style="margin-top:12px;height:9px;border-radius:5px;background:var(--l2,#EBE8E0);overflow:hidden">' +
             '    <div style="height:100%;width:' + pct + '%;background:' + kleur + '"></div>' +
             '  </div>' +
             '</div>' +
+            // v375: koperpremies — wat erbij kwam
+            (premies.length
+                ? '<div class="section-header"><h2>Koperpremies</h2></div>' +
+                  '<p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 10px">De opbrengst van het koper wordt per kwartaal verdeeld en komt bij je budget.</p>' +
+                  '<div class="card" style="padding:4px 16px 10px;margin-bottom:14px">' +
+                  premies.slice().sort((a, b2) => String(b2.datum || '').localeCompare(String(a.datum || ''))).map(p =>
+                      '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 2px;border-top:1px solid var(--l2,#EBE8E0);font-size:13.5px">' +
+                      '<span style="flex-shrink:0;width:70px;color:var(--g2,#5F5E56);font-variant-numeric:tabular-nums">' + esc(this._budDat(p.datum, true)) + '</span>' +
+                      '<span style="flex:1;min-width:0;color:var(--ink,#26334B)">\uD83E\uDD49 ' + esc(p.oms || 'Koperpremie') + ' ' + esc(p.kw || '') +
+                      '<div style="font-size:11.5px;color:var(--g1,#85847C)">' + (Number(p.uren) ? p.uren.toString().replace(".", ",") + ' gepresteerde uren' : '') + (p.bonus ? ' \u00B7 volledigheidsbonus' : '') + '</div></span>' +
+                      '<span style="flex-shrink:0;font-weight:700;font-variant-numeric:tabular-nums;color:var(--green2,#3E7A54)">+' + this._budEur(p.bedrag) + '</span>' +
+                      '</div>').join('') + '</div>'
+                : '') +
             // Waaraan besteed
             '<div class="section-header"><h2>Waaraan besteed</h2></div>' +
             (vanBudget.length
@@ -10518,6 +10559,67 @@ const app = {
         }
     },
     /** v344: Automations heeft een eigen scherm onder Instellingen. */
+    // ===== v381: TAAK-ONTVANGERS (bureel) — wie krijgt welke automatische taak =====
+    // Bron = Worker (KV taken:ontvangers); ook instelbaar in de hub (⚙).
+    openTaakOntvangers() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this.navigate('screenTaakOntvangers', true);
+        this.loadTaakOntvangers();
+    },
+    async loadTaakOntvangers() {
+        const box = document.getElementById('taakOntvList');
+        if (!box) return;
+        box.innerHTML = '<div class="spinner"></div>';
+        try {
+            const alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
+            if (!alg || !alg.key) throw new Error('Geen algemene sleutel — log opnieuw in.');
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-taak-ontvangers',
+                { headers: { 'X-App-Key': alg.key + ':' + alg.secret } }, 10000);
+            if (!r.ok) throw new Error(r.status === 404 ? 'De QE-server is nog niet bijgewerkt (Worker v395).' : ('Worker ' + r.status));
+            const j = await r.json();
+            const gebr = {};
+            for (const g of (j.gebruikers || [])) gebr[g.id] = g.naam;
+            try { localStorage.setItem('qe_taak_gebruikers', JSON.stringify(gebr)); } catch (_) {}
+            RobawsAPI._taakGebruikers = gebr;
+            const kanOpslaan = RobawsAPI.hasPersonalKey();
+            box.innerHTML = Object.keys(j.labels || {}).map(k => {
+                const opties = (j.gebruikers || []).map(g =>
+                    '<option value="' + this.escapeHtml(g.id) + '"' + (String((j.ontvangers || {})[k]) === String(g.id) ? ' selected' : '') + '>' + this.escapeHtml(g.naam) + '</option>').join('');
+                return '<div class="card" style="padding:12px 14px;margin-bottom:8px">'
+                    + '<div style="font-size:13.5px;font-weight:600;color:var(--ink);margin-bottom:6px">' + this.escapeHtml(j.labels[k]) + '</div>'
+                    + '<select data-taak="' + k + '"' + (kanOpslaan ? '' : ' disabled') + ' style="width:100%;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-size:14px">' + opties + '</select>'
+                    + '</div>';
+            }).join('') + (kanOpslaan
+                ? '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="app.saveTaakOntvangers()">Opslaan</button>'
+                : '<div style="font-size:12.5px;color:var(--qe-grey);margin-top:6px">Aanpassen kan alleen met een persoonlijke sleutel (bureel) — of via de hub (⚙ Instellingen).</div>');
+        } catch (e) {
+            box.innerHTML = '<p class="text-grey text-sm text-center">' + this.escapeHtml((e && e.message) || 'Laden mislukt') + '</p>';
+        }
+    },
+    async saveTaakOntvangers() {
+        const box = document.getElementById('taakOntvList');
+        if (!box) return;
+        const map = {};
+        box.querySelectorAll('select[data-taak]').forEach(s => { map[s.dataset.taak] = s.value; });
+        try {
+            let cred = null;
+            try { cred = JSON.parse(localStorage.getItem('qe_api_cred') || 'null'); } catch (_) {}
+            if (!cred || !cred.key || !cred.secret) throw new Error('geen persoonlijke sleutel');
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-taak-ontvangers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-App-Key': cred.key + ':' + cred.secret },
+                body: JSON.stringify({ taakOntvangers: map }),
+            }, 10000);
+            let j = {};
+            try { j = await r.json(); } catch (_) {}
+            if (!r.ok) throw new Error(j.error || ('Worker ' + r.status));
+            try { localStorage.setItem('qe_taak_ontvangers', JSON.stringify(j.ontvangers || map)); } catch (_) {}
+            RobawsAPI._taakOntvangersToepassen(j.ontvangers || map);
+            this.toast('Taak-ontvangers bewaard');
+        } catch (e) {
+            this.toast('Opslaan mislukt: ' + ((e && e.message) || '?'), true);
+        }
+    },
     openAutomations() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
         this.navigate('screenAutomations', true);
@@ -15187,10 +15289,10 @@ const app = {
             await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                 title: `Uren aanpassing — ${user ? user.name : 'onbekend'}`,
                 description: description,
-                assignedUserId: RobawsAPI.TASK_USERS.OPVOLGING, // v222b: Vince (uren-aanpassing)
+                assignedUserId: RobawsAPI.TASK_USERS.URENAANPASSING, // v381: instelbaar (standaard Rolf, keuze Levi 1 sep)
             });
 
-            this.toast('Aanvraag verstuurd naar Vince');
+            this.toast('Aanvraag verstuurd naar ' + RobawsAPI.taakOntvangerNaam('URENAANPASSING'));
             this.navigate('screenDagoverzicht');
             this.loadDagoverzicht();
         } catch (e) {

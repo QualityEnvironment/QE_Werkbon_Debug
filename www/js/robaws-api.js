@@ -196,6 +196,7 @@ const RobawsAPI = {
             try {
                 const a = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
                 if (a && a.key && a.secret) { this._algKey = a.key; this._algSecret = a.secret; }
+                try { this._taakOntvangersLaden(); } catch (_e2) {}   // v381
             } catch (_e) {}
         }
         // v336: zonder kluis-key én zonder noodklep-key kán er niets werken —
@@ -287,10 +288,35 @@ const RobawsAPI = {
     // v222b: vaste ontvangers voor automatische taken — één plek i.p.v.
     // losse hardcoded id's. Facturen & betalingen → Els (boekhouding),
     // werkbon-opvolging → Vince, artikel-aanmaak → Felicity.
+    // v381: INSTELBAAR (Profiel → Instellingen → Taak-ontvangers, en de hub ⚙).
+    // De Worker geeft de actuele stand bij elke login mee (localStorage
+    // qe_taak_ontvangers); dit zijn de standaardwaarden. Robaws-USER-ids.
     TASK_USERS: {
-        FACTUREN:  '3',  // Els
-        OPVOLGING: '5',  // Vince
-        ARTIKELS:  '6',  // Felicity
+        FACTUREN:       '3',  // Els
+        OPVOLGING:      '5',  // Vince
+        ARTIKELS:       '6',  // Felicity
+        URENAANPASSING: '2',  // Rolf (was Vince — keuze Levi 1 sep 2026)
+        OFFERTES:       '5',  // Vince
+        KEURINGEN:      '5',  // Vince
+        URENBEWAKING:   '8',  // Levi
+    },
+    TASK_KEYS: { FACTUREN: 'facturen', OPVOLGING: 'opvolging', ARTIKELS: 'artikels', URENAANPASSING: 'urenAanpassing', OFFERTES: 'offertes', KEURINGEN: 'keuringen', URENBEWAKING: 'urenBewaking' },
+    _taakGebruikers: {},
+    _taakOntvangersToepassen(map) {
+        if (!map || typeof map !== 'object') return;
+        for (const [K, k] of Object.entries(this.TASK_KEYS)) {
+            if (map[k] != null && /^[0-9]{1,6}$/.test(String(map[k]))) this.TASK_USERS[K] = String(map[k]);
+        }
+    },
+    _taakOntvangersLaden() {
+        try { this._taakOntvangersToepassen(JSON.parse(localStorage.getItem('qe_taak_ontvangers') || 'null')); } catch (_e) {}
+        try { this._taakGebruikers = JSON.parse(localStorage.getItem('qe_taak_gebruikers') || 'null') || {}; } catch (_e) { this._taakGebruikers = {}; }
+    },
+    /** Voornaam van de ontvanger van een taaksoort (voor toasts), bv. 'Rolf'. */
+    taakOntvangerNaam(K) {
+        const id = this.TASK_USERS[K];
+        const g = this._taakGebruikers || {};
+        return (g[id] && String(g[id]).split(' ')[0]) || 'bureel';
     },
 
     // === AUTH HEADERS ===
@@ -2202,6 +2228,11 @@ const RobawsAPI = {
                     console.log('[RobawsAPI] Algemene key = API-account (kluis)');
                 } else if (wres.ok) {
                     this.clearAlgemeneCredentials(true);  // overgangsmodus: bundel-key
+                }
+                // v381: taak-ontvangers komen bij de login mee (instelbaar in hub/app)
+                if (wres.ok && wj.taakOntvangers) {
+                    try { localStorage.setItem('qe_taak_ontvangers', JSON.stringify(wj.taakOntvangers)); } catch (_e) {}
+                    this._taakOntvangersToepassen(wj.taakOntvangers);
                 }
                 if (wres.ok && wj.key && wj.secret) {
                     this.setActiveCredentials(wj.key, wj.secret, emailLower, wj.soort);
@@ -6933,7 +6964,9 @@ const RobawsAPI = {
         let page = 0;
         const MAX_PAGES = 20;      // ~2000 clients ruim genoeg voor QE
         do {
-            const res = await this.get(`clients?limit=100&offset=${page * 100}`);
+            // v380: nieuwste eerst — binnen de 2000-cap zijn recente klanten
+            // veel vaker het zoekdoel (sort=id:desc werkt op /clients, gemeten).
+            const res = await this.get(`clients?limit=100&offset=${page * 100}&sort=id:desc`);
             const items = (res.data && res.data.items) || [];
             if (items.length === 0) break;
             all.push(...items);
@@ -6953,6 +6986,38 @@ const RobawsAPI = {
     async searchClients(query, limit = 15) {
         const q = String(query || '').trim().toLowerCase();
         if (!q || q.length < 2) return [];
+        // v380 (vraag Levi): eerst de WORKER-ZOEKINDEX — dezelfde zoekmotor
+        // als het Belscherm (naam/klantnr/telefoon/straat over ALLE ±13.800
+        // klanten + verse overlay). Het oude client-side pad hieronder zag
+        // maar de eerste 2.000 klanten (MAX_PAGES=20) en vond dus bijna
+        // niets; het blijft staan als terugval voor een oude Worker.
+        try {
+            const alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
+            if (alg && alg.key && alg.secret) {
+                const wr = await this._fetchWithTimeout(
+                    this.WORKER_AUTH_URL + '/bel-api/app-klant-zoek?q=' + encodeURIComponent(q),
+                    { headers: { 'X-App-Key': alg.key + ':' + alg.secret } }, 8000);
+                if (wr.ok) {
+                    const wj = await wr.json();
+                    if (wj && Array.isArray(wj.hits) && !wj.bouwNodig) {
+                        return wj.hits.slice(0, limit).map(h => {
+                            const addr = { addressLine1: h.straat || null, postalCode: h.postcode || null, city: h.stad || null };
+                            const addrTxt = [h.straat, [h.postcode, h.stad].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+                            return {
+                                id: h.id,
+                                name: h.name || '',
+                                email: h.email || '',
+                                tel: h.tel || h.gsm || '',
+                                address: addrTxt,
+                                rawAddress: (h.straat || h.stad) ? addr : null,
+                            };
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[RobawsAPI] Worker-klantzoek faalde — terugval op lokale zoek:', e && e.message);
+        }
         const all = await this._fetchAllClientsCached();
         const matches = [];
         for (const c of all) {
