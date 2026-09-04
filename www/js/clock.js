@@ -655,18 +655,34 @@ window.QEClock = {
                             // lokale sessie gewoon verouderd: opruimen en door.
                             // Voorheen kreeg de werknemer dan "Nog ingeklokt van
                             // gisteren" terwijl bureel "succes uitgeklokt" zag.
+                            // v382: de controle-read krijgt 's ochtends geregeld een 429
+                            // (burst-teller van de gedeelde key). Onbekend is NIET open:
+                            // één herkansing na 1,5 s, en blijft het onbekend dan vragen
+                            // we NIET om af te sluiten (dat gaf de valse 'nog uitklokken'
+                            // + een 429 bij het afsluiten). De oude sessie blijft staan en
+                            // wordt bij de volgende scan opnieuw gecontroleerd.
                             let robawsDicht = null;
-                            try {
-                                const wr = await RobawsAPI.get('work-orders/' + oldOpen.session.workOrderId, { bypassCache: true });
-                                if (wr.code === 200 && wr.data) {
-                                    const uf = wr.data.extraFields && wr.data.extraFields.Uitgeklokt;
-                                    const uv = uf ? String(uf.stringValue ?? uf.value ?? '').trim() : '';
-                                    robawsDicht = uv || false;
-                                } else if (wr.code === 404) {
-                                    robawsDicht = 'verwijderd';
-                                }
-                            } catch (_) { /* onbekend → gewone flow */ }
-                            if (robawsDicht) {
+                            let controleGelukt = false;
+                            for (let poging = 0; poging < 2 && !controleGelukt; poging++) {
+                                if (poging > 0) await new Promise(r => setTimeout(r, 1500));
+                                try {
+                                    const wr = await RobawsAPI.get('work-orders/' + oldOpen.session.workOrderId, { bypassCache: true });
+                                    if (wr.code === 200 && wr.data) {
+                                        const uf = wr.data.extraFields && wr.data.extraFields.Uitgeklokt;
+                                        const uv = uf ? String(uf.stringValue ?? uf.value ?? '').trim() : '';
+                                        robawsDicht = uv || false;
+                                        controleGelukt = true;
+                                    } else if (wr.code === 404) {
+                                        robawsDicht = 'verwijderd';
+                                        controleGelukt = true;
+                                    } else {
+                                        console.warn('[Clock] gisteren-check: werkbon-read gaf', wr.code, '(poging ' + (poging + 1) + ')');
+                                    }
+                                } catch (e) { console.warn('[Clock] gisteren-check faalde (poging ' + (poging + 1) + '):', e && e.message); }
+                            }
+                            if (!controleGelukt) {
+                                if (window.app && app.toast) app.toast('Kon ' + oldOpen.dStr + ' niet controleren bij Robaws (even druk) — de scan gaat door; het wordt bij de volgende scan opnieuw bekeken');
+                            } else if (robawsDicht) {
                                 try { localStorage.removeItem(oldOpen.key); } catch (_) {}
                                 if (window.app) {
                                     app.toast(robawsDicht === 'verwijderd'
@@ -687,7 +703,7 @@ window.QEClock = {
                                     { name: 'Automatische afsluiting (middernacht)' },
                                     { forcedEndTime: '23:45', skipKilometers: true });
                                 if (!yRes.ok) {
-                                    scanResult = { ok: false, message: 'Afsluiten van ' + oldOpen.dStr + ' mislukte:\n' + (yRes.message || '') };
+                                    scanResult = { ok: false, message: 'Afsluiten van ' + oldOpen.dStr + ' mislukte:\n' + this._netFout(yRes.message || '') };
                                     return;
                                 }
                                 if (window.app) app.toast(oldOpen.dStr + ' afgesloten om 23:45');
@@ -1040,6 +1056,16 @@ window.QEClock = {
     // =============================================
     // UITCLOCKEN (v58: post time-entry + zet Uitgeklokt)
     // =============================================
+
+    /** v382: netwerk-/API-fouten in mensentaal voor de scan-overlays. Een
+     *  429 (te veel verzoeken — de gedeelde seconde-teller van de key, druk
+     *  rond de ochtendscans + automations) is geen 'fout' van de werknemer. */
+    _netFout(msg) {
+        const m = String(msg || '');
+        if (/\b429\b/.test(m)) return 'Robaws is even te druk (te veel verzoeken tegelijk). Wacht een halve minuut en scan opnieuw — er is niets verloren.';
+        if (/failed to fetch|net::err|networkerror|timeout|load failed/i.test(m)) return 'Geen verbinding met Robaws. Controleer je netwerk en scan opnieuw — er is niets verloren.';
+        return m;
+    },
 
     /** v381: de tijdsblok-grenzen van een uitklok — ÉÉN berekening voor de
      *  klok (_clockOut) én de werkbon-overname (app._fillKlokurenForMonteur),
@@ -1473,7 +1499,7 @@ window.QEClock = {
             console.error('[Clock] time-entry POST exception:', e.message);
             return {
                 ok: false,
-                message: 'Uitklokken mislukt:\n' + e.message,
+                message: 'Uitklokken mislukt:\n' + this._netFout(e.message),
                 refresh: true,
             };
         }

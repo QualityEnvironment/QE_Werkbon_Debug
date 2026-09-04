@@ -7205,11 +7205,16 @@ const RobawsAPI = {
         const today = this._localDateStr();
         const allItems = [];
         const seen = new Set();
-        // v83b: pagination fix — Robaws negeert ?page=N, gebruik ?offset=N*limit
+        // v382: DAG-FILTER i.p.v. de 300 nieuwste werkbonnen — fromDate/toDate
+        // filtert écht op de werkbon-datum (gemeten 3 sep: 11 bonnen, alle van
+        // vandaag, incl. de eigen klok-bon; eerder v357/v364). Dit was de
+        // zwaarste read van de app (3×100, bij elke sync én elke scan) en dus
+        // de grootste 429-bron rond de ochtendscans. Paginering blijft voor
+        // de zekerheid (meer dan 100 bonnen op één dag).
         const LIMIT = 100;
         for (let p = 0; p < 3; p++) {
             const offset = p * LIMIT;
-            const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&sort=id:desc`);
+            const res = await this.get(`work-orders?limit=${LIMIT}&offset=${offset}&fromDate=${today}&toDate=${today}`);
             // v378: een MISLUKTE read (429/5xx/replica-storing) mag NOOIT als
             // "geen werkbon vandaag" gelden — de sync wiste dan de lokale
             // sessie en de eerstvolgende uitklok-scan werd stil een 2e INKLOK
