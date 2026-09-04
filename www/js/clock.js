@@ -670,7 +670,12 @@ window.QEClock = {
                                     if (wr.code === 200 && wr.data) {
                                         const uf = wr.data.extraFields && wr.data.extraFields.Uitgeklokt;
                                         const uv = uf ? String(uf.stringValue ?? uf.value ?? '').trim() : '';
-                                        robawsDicht = uv || false;
+                                        // v383: een VERGRENDELDE of GECONTROLEERDE dag is dicht, ook
+                                        // als het Uitgeklokt-veld leeg bleef (uren-controle zet dat
+                                        // veld niet; T264048 1 sep: gelockt, Uitgeklokt leeg → elke
+                                        // ochtend de afsluit-vraag + 423 bij het afsluiten).
+                                        const gelockt = !!wr.data.lockedAt || /gecontrol/i.test(String(wr.data.status || ''));
+                                        robawsDicht = uv || (gelockt ? 'vergrendeld' : false);
                                         controleGelukt = true;
                                     } else if (wr.code === 404) {
                                         robawsDicht = 'verwijderd';
@@ -687,7 +692,9 @@ window.QEClock = {
                                 if (window.app) {
                                     app.toast(robawsDicht === 'verwijderd'
                                         ? 'De open dag van ' + oldOpen.dStr + ' bestaat niet meer in Robaws — genegeerd'
-                                        : oldOpen.dStr + ' was al afgesloten om ' + robawsDicht + ' — de scan gaat gewoon door');
+                                        : robawsDicht === 'vergrendeld'
+                                            ? oldOpen.dStr + ' is al gecontroleerd en vergrendeld door bureel — genegeerd, de scan gaat gewoon door'
+                                            : oldOpen.dStr + ' was al afgesloten om ' + robawsDicht + ' — de scan gaat gewoon door');
                                 }
                             } else {
                                 const sluiten = await this._showConfirmModal(
@@ -703,10 +710,18 @@ window.QEClock = {
                                     { name: 'Automatische afsluiting (middernacht)' },
                                     { forcedEndTime: '23:45', skipKilometers: true });
                                 if (!yRes.ok) {
-                                    scanResult = { ok: false, message: 'Afsluiten van ' + oldOpen.dStr + ' mislukte:\n' + this._netFout(yRes.message || '') };
-                                    return;
-                                }
+                                    if (/\b423\b/.test(String(yRes.message || ''))) {
+                                        // v383: intussen vergrendeld door bureel → niets meer te boeken;
+                                        // spooksessie opruimen, scan van vandaag gaat door.
+                                        try { localStorage.removeItem(oldOpen.key); } catch (_) {}
+                                        if (window.app) app.toast(oldOpen.dStr + ' is intussen gecontroleerd en vergrendeld door bureel — genegeerd, de scan gaat gewoon door');
+                                    } else {
+                                        scanResult = { ok: false, message: 'Afsluiten van ' + oldOpen.dStr + ' mislukte:\n' + this._netFout(yRes.message || '') };
+                                        return;
+                                    }
+                                } else {
                                 if (window.app) app.toast(oldOpen.dStr + ' afgesloten om 23:45');
+                                }
                             }
                         }
                     } catch (e) { console.warn('[Clock] gisteren-check faalde:', e && e.message); }
@@ -1062,6 +1077,7 @@ window.QEClock = {
      *  rond de ochtendscans + automations) is geen 'fout' van de werknemer. */
     _netFout(msg) {
         const m = String(msg || '');
+        if (/\b423\b/.test(m)) return 'Deze dag is al gecontroleerd en vergrendeld door bureel — er kan niets meer aan geboekt worden.';
         if (/\b429\b/.test(m)) return 'Robaws is even te druk (te veel verzoeken tegelijk). Wacht een halve minuut en scan opnieuw — er is niets verloren.';
         if (/failed to fetch|net::err|networkerror|timeout|load failed/i.test(m)) return 'Geen verbinding met Robaws. Controleer je netwerk en scan opnieuw — er is niets verloren.';
         return m;
@@ -2251,7 +2267,9 @@ window.QEClock = {
         const tijdLabel  = (ef.Tijd && ef.Tijd.stringValue) || 'Op tijd';
 
         // Active: ingeklokt-tijd staat, maar uitgeklokt nog leeg
-        let isActive = !!ingeklokt && !uitgeklokt;
+        // v383: een vergrendelde bon (bureel heeft de dag gecontroleerd) is nooit
+        // meer actief — elke schrijfactie erop geeft 423.
+        let isActive = !!ingeklokt && !uitgeklokt && !wo.lockedAt;
 
         const session = this.getSession() || this._newSession();
 
