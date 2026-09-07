@@ -300,6 +300,15 @@ const RobawsAPI = {
         KEURINGEN:      '5',  // Vince
         URENBEWAKING:   '8',  // Levi
     },
+    /** v384: mag de ingelogde persoon dit app-onderdeel zien? Geen lijst in
+     *  localStorage = geen beperking (ook nieuwe onderdelen zichtbaar). */
+    magAppTool(key) {
+        try {
+            const l = JSON.parse(localStorage.getItem('qe_app_tools') || 'null');
+            if (!Array.isArray(l)) return true;
+            return l.indexOf(String(key)) >= 0;
+        } catch (_e) { return true; }
+    },
     TASK_KEYS: { FACTUREN: 'facturen', OPVOLGING: 'opvolging', ARTIKELS: 'artikels', URENAANPASSING: 'urenAanpassing', OFFERTES: 'offertes', KEURINGEN: 'keuringen', URENBEWAKING: 'urenBewaking' },
     _taakGebruikers: {},
     _taakOntvangersToepassen(map) {
@@ -2230,6 +2239,13 @@ const RobawsAPI = {
                     this.clearAlgemeneCredentials(true);  // overgangsmodus: bundel-key
                 }
                 // v381: taak-ontvangers komen bij de login mee (instelbaar in hub/app)
+                // v384: welke app-onderdelen deze persoon mag zien (null = alles)
+                if (wres.ok) {
+                    try {
+                        if (Array.isArray(wj.mijnTools)) localStorage.setItem('qe_app_tools', JSON.stringify(wj.mijnTools));
+                        else localStorage.removeItem('qe_app_tools');
+                    } catch (_e) {}
+                }
                 if (wres.ok && wj.taakOntvangers) {
                     try { localStorage.setItem('qe_taak_ontvangers', JSON.stringify(wj.taakOntvangers)); } catch (_e) {}
                     this._taakOntvangersToepassen(wj.taakOntvangers);
@@ -7266,3 +7282,4 @@ const RobawsAPI = {
     },
 
 };
+/* QE-EIND robaws-api */

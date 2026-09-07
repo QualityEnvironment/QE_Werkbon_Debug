@@ -1097,6 +1097,17 @@
             </div>
         </div>
 
+        <!-- v384: Toegang tot onderdelen — wie ziet Klokken/Logistiek (bureel) -->
+        <div class="card mb-prowcard" id="pgRowAppRechten" style="margin-bottom:14px;padding:4px 18px;display:none">
+            <div class="mb-prow" style="border-bottom:none" onclick="app.openAppRechten()">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Toegang tot onderdelen</div>
+                    <div class="mb-prow-s">Wie ziet Klokken en Logistiek in de app</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
+
         <!-- PIN wijzigen: inklapbaar zoals het prototype -->
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow" style="border-bottom:none" onclick="QEMarble.toggleCollapse('mbPinBody','mbPinChev')">
@@ -1275,6 +1286,19 @@
         </div>
     </div>
     <div id="autoFlowList"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: TOEGANG TOT ONDERDELEN (v384 — bureel) ========== -->
+<div class="screen" id="screenAppRechten">
+    <div class="section-header"><h2>Toegang tot onderdelen</h2></div>
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
+            Vink aan wie <b>Klokken</b> en <b>Logistiek</b> in de app ziet. Alles aangevinkt
+            = geen beperking (die persoon ziet ook nieuwe onderdelen vanzelf). Logistiek
+            blijft daarnaast bureel-only. Een wijziging geldt vanaf de volgende login.
+        </div>
+    </div>
+    <div id="appRechtenList"><div class="spinner"></div></div>
 </div>
 
 <!-- ========== SCREEN: TAAK-ONTVANGERS (v381 — bureel) ========== -->
@@ -1495,7 +1519,7 @@
         </svg>
         Planning
     </button>
-    <button class="nav-item" data-screen="screenClock" onclick="app.navigate('screenClock')">
+    <button class="nav-item" data-screen="screenClock" id="navKlok" onclick="app.navigate('screenClock')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
         </svg>
@@ -1785,5 +1809,78 @@
         </svg>
     </div>
 </div>
+
+<!-- v384: BUNDEL-VANGNET (melding Levi 4 sep: Jens kreeg een scherm zonder
+     opmaak, Keng "RobawsAPI is not defined"). Een OTA-update die halverwege
+     afbreekt laat bestanden achter die groot genoeg zijn voor de validatie
+     maar inhoudelijk afgekapt: de app start dan half en de werknemer staat
+     stil. Dit blokje draait ALS LAATSTE, hangt van niets af (eigen inline
+     stijl — de CSS kan juist het ontbrekende deel zijn) en biedt herstel. -->
+<script>
+(function qeBundelCheck() {
+    function css() {
+        try {
+            var t = document.createElement("div");
+            t.className = "btn btn-primary";
+            t.style.cssText = "position:absolute;left:-9999px;top:-9999px";
+            document.body.appendChild(t);
+            var c = getComputedStyle(t);
+            var ok = (c.paddingTop !== "0px") || (c.borderRadius !== "0px");
+            t.parentNode.removeChild(t);
+            return ok;
+        } catch (e) { return true; }   // twijfel = niet lastigvallen
+    }
+    function toon(mist) {
+        if (document.getElementById("qeHerstel")) return;
+        var d = document.createElement("div");
+        d.id = "qeHerstel";
+        d.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#F4F2ED;color:#26334B;"
+            + "font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:28px 22px;overflow:auto";
+        d.innerHTML = '<div style="max-width:420px;margin:8vh auto 0">'
+            + '<div style="font-size:40px;line-height:1;margin-bottom:14px">&#128295;</div>'
+            + '<div style="font-size:23px;font-weight:700;letter-spacing:-.4px;margin-bottom:10px">De app is niet volledig bijgewerkt</div>'
+            + '<div style="color:#5b6478;margin-bottom:6px">De laatste update is halverwege afgebroken, waardoor een deel van de app ontbreekt. Je gegevens zijn veilig — er is niets verloren.</div>'
+            + '<div style="color:#8A90A0;font-size:12.5px;margin-bottom:20px">Ontbreekt: ' + mist.join(", ") + '</div>'
+            + '<button id="qeHerstelBtn" style="width:100%;padding:15px;border:0;border-radius:12px;background:#26334B;color:#fff;font:600 15px inherit;cursor:pointer;margin-bottom:10px">App herstellen</button>'
+            + '<button id="qeOpnieuwBtn" style="width:100%;padding:15px;border:1px solid #D8D4CB;border-radius:12px;background:#FDFCFA;color:#26334B;font:600 15px inherit;cursor:pointer">Opnieuw proberen</button>'
+            + '<div id="qeHerstelUitleg" style="color:#8A90A0;font-size:12.5px;margin-top:18px"></div></div>';
+        document.body.appendChild(d);
+        document.getElementById("qeOpnieuwBtn").onclick = function () { location.reload(); };
+        document.getElementById("qeHerstelBtn").onclick = function () {
+            var u = document.getElementById("qeHerstelUitleg");
+            try {
+                if (window.QEBridge && typeof QEBridge.resetToBuiltIn === "function") {
+                    u.textContent = "Bezig met herstellen\u2026 de app herstart zichzelf en haalt daarna de update opnieuw op.";
+                    QEBridge.resetToBuiltIn();
+                    return;
+                }
+            } catch (e) {}
+            u.innerHTML = "Automatisch herstellen lukt niet op dit toestel.<br>Ga naar <b>Instellingen &rsaquo; Apps &rsaquo; QE Werkbon &rsaquo; Opslag</b> en tik op <b>Gegevens wissen</b>. Open de app daarna opnieuw en log in.";
+        };
+    }
+    function check() {
+        var mist = [];
+        // LET OP: RobawsAPI en QEClock zijn top-level const — die staan NIET
+        // op window (bekende valkuil). typeof op de kale naam werkt wel en
+        // gooit niet als de naam onbekend is.
+        try { if (typeof RobawsAPI === "undefined") mist.push("Robaws-koppeling"); }
+        catch (e) { mist.push("Robaws-koppeling"); }
+        try { if (typeof app === "undefined") mist.push("het hoofdscherm"); }
+        catch (e) { mist.push("het hoofdscherm"); }
+        try { if (typeof QEClock === "undefined") mist.push("het kloksysteem"); }
+        catch (e) { mist.push("het kloksysteem"); }
+        if (!css()) mist.push("de opmaak");
+        if (mist.length) {
+            try { console.error("[QE] onvolledige bundel:", mist.join(", ")); } catch (e) {}
+            toon(mist);
+        }
+    }
+    // Na het laden + ruime marge: alle scripts staan synchroon in de pagina,
+    // dus wat er dan niet is, komt ook niet meer.
+    if (document.readyState === "complete") setTimeout(check, 1200);
+    else window.addEventListener("load", function () { setTimeout(check, 1200); });
+})();
+</script>
+
 </body>
 </html>

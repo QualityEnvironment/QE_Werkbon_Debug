@@ -624,8 +624,14 @@ const app = {
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
         // v346: Logistiek-tab alleen voor bureel
         try {
+            // v384: Logistiek = bureel + toegangsrecht; Klokken = toegangsrecht.
+            // Geen beperking ingesteld → alles zichtbaar (hub-patroon).
             const nl = document.getElementById('navLogistiek');
-            if (nl) nl.style.display = (this.currentUser && this.currentUser.role === 'bureel') ? '' : 'none';
+            const magLog = (this.currentUser && this.currentUser.role === 'bureel')
+                && RobawsAPI.magAppTool('logistiek');
+            if (nl) nl.style.display = magLog ? '' : 'none';
+            const nk = document.getElementById('navKlok');
+            if (nk) nk.style.display = RobawsAPI.magAppTool('klok') ? '' : 'none';
         } catch (_e) {}
         // Avatar in header laden
         this.refreshAvatar();
@@ -816,6 +822,9 @@ const app = {
             // v381: Taak-ontvangers-rij — alleen bureel
             const taakRow = document.getElementById('pgRowTaakOntvangers');
             if (taakRow) taakRow.style.display = _isBureel ? '' : 'none';
+            // v384: Toegang-rij (wie ziet Klokken/Logistiek) — alleen bureel
+            const toeRow = document.getElementById('pgRowAppRechten');
+            if (toeRow) toeRow.style.display = _isBureel ? '' : 'none';
         }
 
         this.navigate('screenProfile');
@@ -1849,6 +1858,7 @@ const app = {
             screenAfwezigheid: 'Afwezigheid melden',  // v219
             screenAanvragen: 'Aanvragen',  // v278
             screenTaakOntvangers: 'Taak-ontvangers',  // v381
+            screenAppRechten: 'Toegang tot onderdelen',  // v384
             screenVerlofDetail: 'Verlofaanvraag',  // v278
             screenGoedkeuren: 'Goedkeuren',  // v278
             screenFactuurDetail: 'Factuur',  // v283
@@ -10561,6 +10571,76 @@ const app = {
     /** v344: Automations heeft een eigen scherm onder Instellingen. */
     // ===== v381: TAAK-ONTVANGERS (bureel) — wie krijgt welke automatische taak =====
     // Bron = Worker (KV taken:ontvangers); ook instelbaar in de hub (⚙).
+    // ===== v384: TOEGANG TOT ONDERDELEN (bureel) — wie ziet Klokken/Logistiek =====
+    openAppRechten() {
+        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        this.navigate('screenAppRechten', true);
+        this.loadAppRechten();
+    },
+    async loadAppRechten() {
+        const box = document.getElementById('appRechtenList');
+        if (!box) return;
+        box.innerHTML = '<div class="spinner"></div>';
+        try {
+            const alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null');
+            if (!alg || !alg.key) throw new Error('Geen algemene sleutel — log opnieuw in.');
+            const res = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-rechten',
+                { headers: { 'X-App-Key': alg.key + ':' + alg.secret } }, 10000);
+            if (!res.ok) throw new Error(res.status === 404 ? 'De QE-server is nog niet bijgewerkt.' : ('Worker ' + res.status));
+            const j = await res.json();
+            const emps = await RobawsAPI.getActiveEmployees();
+            const mensen = (emps || []).filter(e => e && e.email).sort((x, y) => String(x.name).localeCompare(String(y.name)));
+            this._appRechten = j.rechten || {};
+            this._appTools = j.tools || [];
+            const kanOpslaan = RobawsAPI.hasPersonalKey();
+            box.innerHTML = mensen.map(e => {
+                const em = String(e.email).toLowerCase();
+                const eigen = this._appRechten[em];
+                const vinkjes = this._appTools.map(t => {
+                    const aan = !Array.isArray(eigen) || eigen.indexOf(t.key) >= 0;
+                    return '<label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--g2)">'
+                        + '<input type="checkbox" data-em="' + this.escapeHtml(em) + '" data-tool="' + this.escapeHtml(t.key) + '"'
+                        + (aan ? ' checked' : '') + (kanOpslaan ? '' : ' disabled')
+                        + ' style="width:17px;height:17px">' + this.escapeHtml(t.naam) + '</label>';
+                }).join('');
+                return '<div class="card" style="padding:11px 14px;margin-bottom:8px">'
+                    + '<div style="font-size:13.5px;font-weight:600;color:var(--ink)">' + this.escapeHtml(e.name || em) + '</div>'
+                    + '<div style="font-size:11.5px;color:var(--g3);margin-bottom:7px">' + this.escapeHtml(em) + '</div>'
+                    + '<div style="display:flex;gap:16px;flex-wrap:wrap">' + vinkjes + '</div></div>';
+            }).join('') + (kanOpslaan
+                ? '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="app.saveAppRechten()">Opslaan</button>'
+                : '<div style="font-size:12.5px;color:var(--qe-grey);margin-top:6px">Aanpassen kan alleen met een persoonlijke sleutel (bureel).</div>');
+        } catch (e) {
+            box.innerHTML = '<p class="text-grey text-sm text-center">' + this.escapeHtml((e && e.message) || 'Laden mislukt') + '</p>';
+        }
+    },
+    async saveAppRechten() {
+        const box = document.getElementById('appRechtenList');
+        if (!box) return;
+        const map = {};
+        box.querySelectorAll('input[data-em]').forEach(i => {
+            const em = i.dataset.em;
+            if (!map[em]) map[em] = [];
+            if (i.checked) map[em].push(i.dataset.tool);
+        });
+        try {
+            let cred = null;
+            try { cred = JSON.parse(localStorage.getItem('qe_api_cred') || 'null'); } catch (_) {}
+            if (!cred || !cred.key || !cred.secret) throw new Error('geen persoonlijke sleutel');
+            const res = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-rechten', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-App-Key': cred.key + ':' + cred.secret },
+                body: JSON.stringify({ rechten: map }),
+            }, 10000);
+            let j = {};
+            try { j = await res.json(); } catch (_) {}
+            if (!res.ok) throw new Error(j.error || ('Worker ' + res.status));
+            this.toast('Toegang bewaard — werkt bij de volgende login van die persoon');
+        } catch (e) {
+            this.toast('Opslaan mislukt: ' + ((e && e.message) || '?'), true);
+        }
+    },
+
     openTaakOntvangers() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
         this.navigate('screenTaakOntvangers', true);

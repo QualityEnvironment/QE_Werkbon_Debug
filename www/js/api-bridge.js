@@ -861,3 +861,4 @@ const APIBridge = {
 
 // Auto-initialisatie
 APIBridge.init();
+/* QE-EIND api-bridge */

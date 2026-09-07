@@ -789,6 +789,16 @@ window.QEClock = {
                     // km-formulier = bevestiging (annuleerbaar, geen uitklok
                     // zolang er niet bevestigd is). Faalt het formulier zelf,
                     // dan klokken we NIET uit — een nieuwe scan probeert opnieuw.
+                    // v384: locatie-eis vóór het km-formulier — anders vult de
+                    // werknemer eerst kilometers in en strandt de uitklok daarna.
+                    let gpsUit = null;
+                    try {
+                        gpsUit = await this._gpsVerplicht('uitklokken');
+                    } catch (e) {
+                        scanResult = { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar', refresh: false };
+                        return;
+                    }
+
                     let kmConfirmed = true;
                     if (window.app && typeof app.promptKilometers === 'function') {
                         try {
@@ -805,7 +815,7 @@ window.QEClock = {
                     }
 
                     showLoad();
-                    scanResult = await this._clockOut(session, tag);
+                    scanResult = await this._clockOut(session, tag, { gps: gpsUit });
                     return;
                 }
 
@@ -951,16 +961,14 @@ window.QEClock = {
             console.log('[Clock] Startuur check:', time, 'vs verwacht:', expectedStart, '->', onTimeLabel);
         }
 
-        // GPS
+        // GPS — v384: VERPLICHT. Er wordt niets aangemaakt of geschreven
+        // vóór dit punt, dus hier stoppen is veilig.
         let gpsLat = null, gpsLng = null, gpsText = '';
         try {
-            const pos = await this._getGPS();
-            gpsLat = pos.latitude;
-            gpsLng = pos.longitude;
-            gpsText = `https://maps.google.com/?q=${gpsLat.toFixed(6)},${gpsLng.toFixed(6)}`;
+            const g = await this._gpsVerplicht('inklokken');
+            gpsLat = g.lat; gpsLng = g.lng; gpsText = g.tekst;
         } catch (e) {
-            console.warn('[Clock] GPS niet beschikbaar:', e.message);
-            gpsText = 'GPS niet beschikbaar';
+            return { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar', refresh: false };
         }
 
         // v70: opmerking krijgt "klok-in: " prefix + tijd, om bij clock-out
@@ -1286,16 +1294,30 @@ window.QEClock = {
         // v72: GPS-fetch met short timeout + cached fallback. Op slechte ontvangst
         // wachten we maximaal 3 sec; daarna gebruiken we de in-scan GPS uit de sessie
         // zodat de uit-scan niet 10s+ blokkeert.
+        // v384: de scan-flow haalde de locatie al VERPLICHT op en geeft ze
+        // hier door (opts.gps). Alleen de automatische middernacht-afsluiting
+        // (forcedEndTime) mag zonder — die draait de dag erna, ergens anders,
+        // en mag nooit blijven hangen op ontvangst.
         let outGpsText = '';
-        try {
-            const pos2 = await this._getGPS({ timeoutMs: 3000, maximumAge: 60000 });
-            outGpsText = `https://maps.google.com/?q=${pos2.latitude.toFixed(6)},${pos2.longitude.toFixed(6)}`;
-        } catch(_) {
-            // Fallback: gebruik de GPS van de in-scan (zit nog in session)
-            if (session.gpsLat != null && session.gpsLng != null) {
-                outGpsText = `https://maps.google.com/?q=${session.gpsLat.toFixed(6)},${session.gpsLng.toFixed(6)}`;
-            } else {
-                outGpsText = 'GPS niet beschikbaar';
+        if (opts2.gps && opts2.gps.tekst) {
+            outGpsText = opts2.gps.tekst;
+        } else if (opts2.forcedEndTime) {
+            try {
+                const pos2 = await this._getGPS({ timeoutMs: 3000, maximumAge: 60000 });
+                outGpsText = `https://maps.google.com/?q=${pos2.latitude.toFixed(6)},${pos2.longitude.toFixed(6)}`;
+            } catch(_) {
+                if (session.gpsLat != null && session.gpsLng != null) {
+                    outGpsText = `https://maps.google.com/?q=${session.gpsLat.toFixed(6)},${session.gpsLng.toFixed(6)}`;
+                } else {
+                    outGpsText = 'GPS niet beschikbaar';
+                }
+            }
+        } else {
+            try {
+                const g = await this._gpsVerplicht('uitklokken');
+                outGpsText = g.tekst;
+            } catch (e) {
+                return { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar', refresh: false };
             }
         }
         const klokUitLine = `klok-uit: ${tag.name} \u2014 ${outGpsText} \u2014 ${endTimeRaw}`;
@@ -1915,6 +1937,34 @@ window.QEClock = {
     // =============================================
     // GPS
     // =============================================
+
+    /** v384 (vraag Levi): klokken KAN NIET zonder locatie. Twee pogingen —
+     *  eerst vers (10 s), daarna met een recente fix uit de cache (8 s, max
+     *  2 min oud) zodat een korte hapering geen blokkade wordt. Lukt het dan
+     *  nog niet, dan gooit deze helper met een tekst die de werknemer zelf
+     *  kan oplossen. L&L blijft bewust buiten deze eis (een open L&L-blok
+     *  binnen in het magazijn mag nooit vastlopen op ontvangst). */
+    async _gpsVerplicht(fase) {
+        const pogingen = [{ timeoutMs: 10000, maximumAge: 0 }, { timeoutMs: 8000, maximumAge: 120000 }];
+        let laatste = null;
+        for (const opt of pogingen) {
+            try {
+                const pos = await this._getGPS(opt);
+                if (pos && pos.latitude != null && pos.longitude != null) {
+                    return {
+                        lat: pos.latitude, lng: pos.longitude,
+                        tekst: "https://maps.google.com/?q=" + pos.latitude.toFixed(6) + "," + pos.longitude.toFixed(6),
+                    };
+                }
+            } catch (e) { laatste = e; }
+        }
+        console.warn("[Clock] GPS verplicht maar niet beschikbaar:", laatste && laatste.message);
+        const err = new Error("QE_GEEN_GPS");
+        err.gebruikerstekst = "Zonder locatie kan je niet " + fase + ".\n\n"
+            + "Zet Locatie (GPS) aan op je toestel en geef de app toestemming. "
+            + "Sta je binnen? Ga even naar buiten of bij een raam en scan opnieuw.";
+        throw err;
+    },
 
     _getGPS(opts) {
         // v251: opts werden berekend maar daarna hardcoded overschreven —
@@ -2663,8 +2713,22 @@ window.QEClock = {
      * Sessieloos: alles gaat via Robaws; de telefoon van de werknemer pikt
      * de registratie bij de eerstvolgende sync vanzelf op (Robaws is leidend).
      */
+    /** v384: klokt bureel ZICHZELF manueel in/uit, dan hoort de locatie er
+     *  net zo goed bij als bij een scan — anders is de locatie-eis te
+     *  omzeilen via de klokadmin. Iemand ANDERS manueel klokken blijft
+     *  zonder locatie (jouw positie zegt niets over die persoon). */
+    async _gpsAlsIkHetZelfBen(att, fase) {
+        const u = RobawsAPI.getLoggedInUser();
+        const ik = u ? String(u.robawsEmployeeId) : null;
+        if (!ik || !att || String(att.employeeId) !== ik) return null;
+        const g = await this._gpsVerplicht(fase);   // gooit bij geen locatie
+        return g.tekst;
+    },
     async manualClockIn(att, timeHHMM, byName) {
         if (!att || !att.userId) return { ok: false, message: 'Geen Robaws-gebruikers-id voor ' + ((att && att.name) || '?') };
+        let gpsZelf = null;   // v384: eigen inklok → locatie verplicht + geregistreerd
+        try { gpsZelf = await this._gpsAlsIkHetZelfBen(att, 'jezelf inklokken'); }
+        catch (e) { return { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar' }; }
         try {
             const bestaand = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(att.userId);
             if (bestaand && bestaand.id) {
@@ -2693,7 +2757,8 @@ window.QEClock = {
                 dateStr: this._localDate(),
                 ingeklokt: timeHHMM,
                 tijdLabel,
-                opmerking: 'klok-in: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM,
+                opmerking: 'klok-in: Manueel door ' + (byName || 'bureel') + ' — '
+                    + (gpsZelf ? gpsZelf + ' — ' : '') + timeHHMM,
             });
             // v327: leesverificatie — bestaat de werkbon écht met Ingeklokt?
             const vf = await this._verifyWerkbonState(wo.workOrderId, { ingekloktLeeg: false });
@@ -2714,6 +2779,9 @@ window.QEClock = {
      * heropende dag op via de sync (start = laatste klok-in-regel).
      */
     async manualSecondClockIn(att, timeHHMM, byName) {
+        let gpsZelf2 = null;   // v384: eigen 2e inklok → locatie verplicht + geregistreerd
+        try { gpsZelf2 = await this._gpsAlsIkHetZelfBen(att, 'jezelf inklokken'); }
+        catch (e) { return { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar' }; }
         if (!att || !att.workOrderId) {
             return { ok: false, message: ((att && att.name) || '?') + ' heeft vandaag nog geen tijdsregistratie — gebruik "Inklokken"' };
         }
@@ -2729,7 +2797,8 @@ window.QEClock = {
         }
         try {
             await RobawsAPI.reopenTimeRegistration(att.workOrderId,
-                'klok-in: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM);
+                'klok-in: Manueel door ' + (byName || 'bureel') + ' — '
+                + (gpsZelf2 ? gpsZelf2 + ' — ' : '') + timeHHMM);
         } catch (e) {
             return { ok: false, message: '2e inklok mislukt: ' + ((e && e.message) || e) };
         }
@@ -2754,6 +2823,9 @@ window.QEClock = {
      */
     async manualClockOut(att, timeHHMM, byName, vanHHMM) {
         if (!att || !att.userId) return { ok: false, message: 'Geen Robaws-gebruikers-id' };
+        let gpsZelfUit = null;   // v384: eigen uitklok → locatie verplicht + geregistreerd
+        try { gpsZelfUit = await this._gpsAlsIkHetZelfBen(att, 'jezelf uitklokken'); }
+        catch (e) { return { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar' }; }
         let wo = null;
         try {
             wo = await RobawsAPI.getTodaysOpenTimeRegistrationWorkOrder(att.userId);
@@ -2938,7 +3010,8 @@ window.QEClock = {
             // nieuwe poging met dezelfde tijd sluit dan alleen nog af).
             try {
                 await RobawsAPI.setTimeRegistrationUitgeklokt(wo.id, timeHHMM,
-                    'klok-uit: Manueel door ' + (byName || 'bureel') + ' — ' + timeHHMM +
+                    'klok-uit: Manueel door ' + (byName || 'bureel') + ' — '
+                    + (gpsZelfUit ? gpsZelfUit + ' — ' : '') + timeHHMM +
                     (isExtraBlok ? ' (extra blok ' + entryStart + '-' + entryEnd + ')' : ''));
             } catch (ePut) {
                 return { ok: false,
@@ -3006,3 +3079,4 @@ window.QEClock = {
     },
 
 };
+/* QE-EIND clock */
