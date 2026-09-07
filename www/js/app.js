@@ -10589,10 +10589,18 @@ const app = {
             if (!res.ok) throw new Error(res.status === 404 ? 'De QE-server is nog niet bijgewerkt.' : ('Worker ' + res.status));
             const j = await res.json();
             const emps = await RobawsAPI.getActiveEmployees();
-            const mensen = (emps || []).filter(e => e && e.email).sort((x, y) => String(x.name).localeCompare(String(y.name)));
+            // v385 (vraag Levi): alleen BUREEL in de lijst, net als de
+            // rechten-matrix in de software-hub. Techniekers en monteurs
+            // klokken sowieso en zien Logistiek toch niet.
+            const mensen = (emps || []).filter(e => e && e.email && e.role === 'bureel')
+                .sort((x, y) => String(x.name).localeCompare(String(y.name)));
             this._appRechten = j.rechten || {};
             this._appTools = j.tools || [];
             const kanOpslaan = RobawsAPI.hasPersonalKey();
+            if (!mensen.length) {
+                box.innerHTML = '<p class="text-grey text-sm text-center">Geen bureel-medewerkers gevonden.</p>';
+                return;
+            }
             box.innerHTML = mensen.map(e => {
                 const em = String(e.email).toLowerCase();
                 const eigen = this._appRechten[em];

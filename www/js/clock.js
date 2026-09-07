@@ -1945,7 +1945,12 @@ window.QEClock = {
      *  kan oplossen. L&L blijft bewust buiten deze eis (een open L&L-blok
      *  binnen in het magazijn mag nooit vastlopen op ontvangst). */
     async _gpsVerplicht(fase) {
-        const pogingen = [{ timeoutMs: 10000, maximumAge: 0 }, { timeoutMs: 8000, maximumAge: 120000 }];
+        // v385 (vraag Levi): ZO SNEL MOGELIJK een duidelijke melding. Eerste
+        // poging kort en vers (5 s), daarna één korte herkansing die een fix
+        // van hooguit 2 minuten oud aanvaardt (3 s) — samen dus maximaal ~8 s.
+        // Is de TOESTEMMING geweigerd (code 1), dan stoppen we meteen: nog een
+        // poging levert gegarandeerd dezelfde fout op.
+        const pogingen = [{ timeoutMs: 5000, maximumAge: 0 }, { timeoutMs: 3000, maximumAge: 120000 }];
         let laatste = null;
         for (const opt of pogingen) {
             try {
@@ -1956,13 +1961,18 @@ window.QEClock = {
                         tekst: "https://maps.google.com/?q=" + pos.latitude.toFixed(6) + "," + pos.longitude.toFixed(6),
                     };
                 }
-            } catch (e) { laatste = e; }
+            } catch (e) {
+                laatste = e;
+                if (e && e.code === 1) break;   // PERMISSION_DENIED — herhalen heeft geen zin
+            }
         }
-        console.warn("[Clock] GPS verplicht maar niet beschikbaar:", laatste && laatste.message);
+        console.warn("[Clock] GPS verplicht maar niet beschikbaar:", laatste && (laatste.message || laatste.code));
+        const geweigerd = !!(laatste && laatste.code === 1);
         const err = new Error("QE_GEEN_GPS");
-        err.gebruikerstekst = "Zonder locatie kan je niet " + fase + ".\n\n"
-            + "Zet Locatie (GPS) aan op je toestel en geef de app toestemming. "
-            + "Sta je binnen? Ga even naar buiten of bij een raam en scan opnieuw.";
+        err.gebruikerstekst = "Geen GPS locatie\n\n" + (geweigerd
+            ? "De app heeft geen toestemming voor je locatie. Zet die aan bij de app-instellingen van je toestel en scan opnieuw."
+            : "Zonder locatie kan je niet " + fase + ". Zet Locatie (GPS) aan op je toestel; "
+              + "sta je binnen, ga dan even naar buiten of bij een raam en scan opnieuw.");
         throw err;
     },
 
