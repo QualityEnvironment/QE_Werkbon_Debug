@@ -902,7 +902,12 @@ textarea.form-input {
     z-index: 300;
     opacity: 0;
     transition: all 0.3s var(--ease);
-    white-space: nowrap;
+    /* v386: een toast met een langere tekst werd afgekapt tot een
+       onleesbare balk — nu breekt hij netjes af over meerdere regels. */
+    white-space: pre-line;
+    max-width: min(92vw, 420px);
+    text-align: center;
+    line-height: 1.4;
     box-shadow: var(--shadow-lg);
 }
 .toast.show {

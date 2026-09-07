@@ -16030,6 +16030,14 @@ const app = {
      *  zodat een eerdere (succes-)timer een nieuwe fout-toast niet
      *  voortijdig kan verbergen. */
     toast(message, isError) {
+        // v386 (melding Levi: de rode balk was onleesbaar) — een lange
+        // foutmelding past niet in een toast; die krijgt het Marble-
+        // foutscherm, waar de volledige tekst in past.
+        const _txt = String(message == null ? '' : message);
+        if (isError && (_txt.length > 80 || _txt.indexOf('\n') >= 0)
+                && window.QEMarble && typeof QEMarble.foutTekst === 'function') {
+            try { QEMarble.foutTekst(_txt); return; } catch (_e) { /* val terug op de toast */ }
+        }
         const el = document.getElementById('toast');
         el.textContent = message;
         el.classList.toggle('error', !!isError);

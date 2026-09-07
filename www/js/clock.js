@@ -607,9 +607,16 @@ window.QEClock = {
             let scanResult = null;
 
             // v126: helper om de loading-spinner te tonen
-            const showLoad = () => {
+            // v386: eigen tekst mogelijk — zo weet de werkman waaróp de app
+            // wacht (bv. tijdens het zoeken naar de locatie).
+            const showLoad = (txt) => {
                 if (window.app && typeof app.showScanLoading === 'function') {
-                    try { app.showScanLoading('Bezig met verwerken…'); } catch(_) {}
+                    try { app.showScanLoading(txt || 'Bezig met verwerken…'); } catch(_) {}
+                }
+            };
+            const hideLoad = () => {
+                if (window.app && typeof app.hideScanLoading === 'function') {
+                    try { app.hideScanLoading(); } catch(_) {}
                 }
             };
 
@@ -792,12 +799,14 @@ window.QEClock = {
                     // v384: locatie-eis vóór het km-formulier — anders vult de
                     // werknemer eerst kilometers in en strandt de uitklok daarna.
                     let gpsUit = null;
+                    showLoad('Locatie zoeken…');   // v386: tonen dat de scan bezig is
                     try {
                         gpsUit = await this._gpsVerplicht('uitklokken');
                     } catch (e) {
                         scanResult = { ok: false, message: e.gebruikerstekst || 'Locatie niet beschikbaar', refresh: false };
-                        return;
+                        return;   // de finally van de scan-flow haalt de loader weg
                     }
+                    hideLoad();   // km-formulier komt hierna — loader mag weg
 
                     let kmConfirmed = true;
                     if (window.app && typeof app.promptKilometers === 'function') {
@@ -820,7 +829,7 @@ window.QEClock = {
                 }
 
                 // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
-                showLoad();
+                showLoad('Locatie zoeken…');   // v386: eerst de locatie, daarna Robaws
                 scanResult = await this._clockIn(session, tag);
             } finally {
                 // v126: loading-spinner uit voor de SUCCES/MISLUKT overlay opent
@@ -1944,12 +1953,43 @@ window.QEClock = {
      *  nog niet, dan gooit deze helper met een tekst die de werknemer zelf
      *  kan oplossen. L&L blijft bewust buiten deze eis (een open L&L-blok
      *  binnen in het magazijn mag nooit vastlopen op ontvangst). */
+    /** v387 (vraag Levi): ontbreekt de Android-locatietoestemming, vraag ze
+     *  dan OPNIEUW bij de scan — vroeger werd dat alleen bij de allereerste
+     *  start gevraagd, dus wie toen weigerde kon nooit meer klokken. Zodra
+     *  de werkman toestaat gaat de scan vanzelf verder (we wachten hooguit
+     *  25 s op zijn antwoord). Geeft true als er (nu) toestemming is,
+     *  false als ze ontbreekt, en null als de app het niet kan weten
+     *  (oude APK of browser) — dan gewoon de gewone GPS-poging doen. */
+    async _zorgVoorLocatieToestemming() {
+        const B = window.QEBridge;
+        if (!B || typeof B.heeftLocatiePermissie !== 'function') return null;
+        try {
+            if (B.heeftLocatiePermissie()) return true;
+        } catch (_) { return null; }
+        if (typeof B.vraagLocatiePermissie !== 'function') return false;
+        try {
+            if (window.app && typeof app.showScanLoading === 'function') {
+                app.showScanLoading('Toestemming voor locatie…');
+            }
+            B.vraagLocatiePermissie();
+        } catch (_) { return false; }
+        // Wachten tot de systeemprompt beantwoord is (max 25 s).
+        for (let i = 0; i < 50; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            try { if (B.heeftLocatiePermissie()) return true; } catch (_) { return null; }
+        }
+        return false;
+    },
+
     async _gpsVerplicht(fase) {
         // v385 (vraag Levi): ZO SNEL MOGELIJK een duidelijke melding. Eerste
         // poging kort en vers (5 s), daarna één korte herkansing die een fix
         // van hooguit 2 minuten oud aanvaardt (3 s) — samen dus maximaal ~8 s.
         // Is de TOESTEMMING geweigerd (code 1), dan stoppen we meteen: nog een
         // poging levert gegarandeerd dezelfde fout op.
+        // v387: eerst de Android-toestemming — zonder die permissie geeft
+        // elke GPS-poging toch meteen "geweigerd".
+        const toestemming = await this._zorgVoorLocatieToestemming();
         const pogingen = [{ timeoutMs: 5000, maximumAge: 0 }, { timeoutMs: 3000, maximumAge: 120000 }];
         let laatste = null;
         for (const opt of pogingen) {
@@ -1967,12 +2007,23 @@ window.QEClock = {
             }
         }
         console.warn("[Clock] GPS verplicht maar niet beschikbaar:", laatste && (laatste.message || laatste.code));
-        const geweigerd = !!(laatste && laatste.code === 1);
+        const geweigerd = !!(laatste && laatste.code === 1) || toestemming === false;
         const err = new Error("QE_GEEN_GPS");
         err.gebruikerstekst = "Geen GPS locatie\n\n" + (geweigerd
-            ? "De app heeft geen toestemming voor je locatie. Zet die aan bij de app-instellingen van je toestel en scan opnieuw."
+            ? "De app mag je locatie niet gebruiken. Tik op Toestaan wanneer Android het vraagt, "
+              + "of zet Locatie aan bij Instellingen > Apps > QE Werkbon > Machtigingen, en scan opnieuw."
             : "Zonder locatie kan je niet " + fase + ". Zet Locatie (GPS) aan op je toestel; "
               + "sta je binnen, ga dan even naar buiten of bij een raam en scan opnieuw.");
+        // v387: definitief geweigerd → open de app-instellingen zodat de
+        // werkman het met één tik kan rechtzetten.
+        if (geweigerd) {
+            try {
+                const B = window.QEBridge;
+                if (B && typeof B.openAppInstellingen === 'function') {
+                    setTimeout(function () { try { B.openAppInstellingen(); } catch (_) {} }, 2500);
+                }
+            } catch (_) {}
+        }
         throw err;
     },
 

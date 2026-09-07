@@ -132,6 +132,18 @@
             '  <div class="mb-sucsub" id="mbSucSub"></div>' +
             '  <div class="mb-gradline"></div>' +
             '</div>' +
+            /* v386: FOUT — zelfde Marble-opmaak als het succes-scherm, maar
+               rood en zonder auto-sluiten binnen een seconde. Hergebruikt de
+               bestaande klassen zodat hij vanzelf meegaat met het thema. */
+            '<div id="mbFout" class="mb-fullveil mb-succes" style="display:none">' +
+            '  <div class="mb-succircle" style="background:#C8322B">' +
+            '    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"></path></svg>' +
+            '  </div>' +
+            '  <div class="mb-suctitle" id="mbFoutTitle" style="animation:none;opacity:1"></div>' +
+            '  <div class="mb-sucsub" id="mbFoutSub" style="animation:none;opacity:1"></div>' +
+            '  <div class="mb-gradline" style="animation:none;opacity:1"></div>' +
+            '  <div class="mb-dayhint" style="margin-top:18px;animation:none;opacity:.75">Tik om te sluiten</div>' +
+            '</div>' +
             /* login-wipe */
             '<div id="mbWipe" style="display:none">' +
             '  <div class="mb-wipeinner">' +
@@ -420,6 +432,43 @@
 
     /* ---------- succes-overlay ---------- */
     var flashT = null;
+    /* v386: foutmelding in Marble-stijl (vraag Levi — het rode kaartje was
+       nog de oude stijl). Blijft 8 s staan of tot er getikt wordt; bij een
+       lange tekst wordt de eerste regel de kop en de rest de uitleg. */
+    var foutT = null;
+    function fout(title, sub, onDone) {
+        var el = document.getElementById('mbFout');
+        if (!el) return;
+        var fTitle = document.getElementById('mbFoutTitle');
+        var fSub = document.getElementById('mbFoutSub');
+        fTitle.textContent = title || 'Niet gelukt';
+        fSub.textContent = sub || '';
+        el.style.display = 'none'; void el.offsetWidth;
+        el.style.display = 'flex';
+        // Bewust GEEN opkom-animatie hier (zie de markup): een foutmelding
+        // moet leesbaar zijn ook als animaties niet draaien.
+        haptic('error');
+        var done = false;
+        var close = function () {
+            if (done) return; done = true;
+            el.style.display = 'none'; el.onclick = null;
+            if (typeof onDone === 'function') { try { onDone(); } catch (e) {} }
+        };
+        el.onclick = close;
+        clearTimeout(foutT);
+        foutT = setTimeout(close, 8000);
+    }
+    /* Eerste regel = kop, rest = uitleg. Is die eerste regel eerder een zin
+       dan een kop, dan blijft de hele tekst uitleg onder "Niet gelukt". */
+    function foutUitTekst(message, onDone) {
+        var msg = String(message || '').trim();
+        var regels = msg.split(/\n+/).map(function (r) { return r.trim(); }).filter(Boolean);
+        var kop = regels.length > 1 ? regels[0] : '';
+        if (kop && (kop.length > 42 || /[.!?]$/.test(kop))) kop = '';
+        var rest = kop ? regels.slice(1).join(' ') : regels.join(' ');
+        fout(kop || 'Niet gelukt', rest, onDone);
+    }
+
     function flash(title, sub, ms, onDone, hap) {
         var el = document.getElementById('mbSucces');
         document.getElementById('mbSucTitle').textContent = title || 'Gelukt';
@@ -620,9 +669,10 @@
         if (app.showScanResult && !app.showScanResult._mb) {
             var origScan = app.showScanResult.bind(app);
             app.showScanResult = function (success, message, onDone, duration) {
-                if (!success) return origScan(success, message, onDone, duration);
                 var loading = document.getElementById('scanLoading');
                 if (loading) { try { loading.remove(); } catch (e) {} }
+                // v386: ook FOUTEN in Marble-stijl (was het oude rode kaartje)
+                if (!success) { foutUitTekst(message, onDone); return; }
                 var msg = String(message || '');
                 var oneLine = msg.replace(/\s*\n\s*/g, ' · ');
                 if (/^Uitgeklokt om/i.test(msg)) {
@@ -662,6 +712,8 @@
         showLoader: showLoader,
         hideLoader: hideLoader,
         flash: flash,
+        fout: fout,
+        foutTekst: foutUitTekst,
         daySummary: daySummary,
         friday: friday,
         haptic: haptic,
