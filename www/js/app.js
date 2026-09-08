@@ -630,8 +630,10 @@ const app = {
             const magLog = (this.currentUser && this.currentUser.role === 'bureel')
                 && RobawsAPI.magAppTool('logistiek');
             if (nl) nl.style.display = magLog ? '' : 'none';
-            const nk = document.getElementById('navKlok');
-            if (nk) nk.style.display = RobawsAPI.magAppTool('klok') ? '' : 'none';
+            // v388: de Klok-TAB blijft altijd zichtbaar — iedereen klokt.
+            // Het "klok"-recht regelt alleen de bureel-extra's ín de klok
+            // (team-aanwezigheid, anderen handmatig klokken, tagbeheer);
+            // zie showClockScreen.
         } catch (_e) {}
         // Avatar in header laden
         this.refreshAvatar();
@@ -8339,7 +8341,13 @@ const app = {
         const user = RobawsAPI.getLoggedInUser();
         const adminSection = document.getElementById('clockAdminSection');
         const tagAdminSection = document.getElementById('clockTagAdmin');
-        if (user && user.role === 'bureel') {
+        // v388 (correctie Levi): bureel-extra's in de klok — team-aanwezigheid,
+        // anderen handmatig in-/uitklokken en het NFC-tagbeheer — hangen aan het
+        // recht "Klok-beheer". Staat dat uit, dan werkt de klok voor die
+        // bureel-medewerker precies zoals bij een monteur of technieker.
+        const magKlokBeheer = !!(user && user.role === 'bureel')
+            && RobawsAPI.magAppTool('klok');
+        if (magKlokBeheer) {
             adminSection.style.display = 'block';
             this.loadClockAdmin();
             if (tagAdminSection) tagAdminSection.style.display = 'block';
