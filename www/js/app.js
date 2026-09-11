@@ -10164,9 +10164,35 @@ const app = {
         }), 'Fles geregistreerd: ' + nr);
     },
 
-    // ---- QR scannen: live camera (BarcodeDetector, anders jsQR), of een foto ----
+    // ---- Etiket scannen (v390): 1) native scanner uit de APK (QEBridge.scanBarcode,
+    //      Google ML Kit — eigen camera-UI, leest QR én streepjescodes), 2) anders de
+    //      webcamera met BarcodeDetector → ZXing → jsQR, 3) anders een foto (ZXing/jsQR),
+    //      4) altijd: het nummer typen. De WebView geeft de camera pas vrij als de APK
+    //      onPermissionRequest heeft (1.244+); oudere APK's landen dus op 3/4. ----
+    GAS_SCAN_FORMATEN: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'itf', 'upc_a', 'upc_e'],
+    _gfScanNatiefKan() {
+        try { return !!(window.QEBridge && typeof QEBridge.scanBarcode === 'function'); } catch (_) { return false; }
+    },
     openGasScan(doel) {
         this._gfScanDoel = doel === 'nummer' ? 'nummer' : 'fiche';
+        if (this._gfScanNatiefKan() && !this._gfScanNatiefKapot) {
+            this._gfScanNatiefBezig = true;
+            try { QEBridge.scanBarcode(); return; } catch (e) { this._gfScanNatiefBezig = false; }
+        }
+        this._gfScanWebOpen();
+    },
+    /** Terugroep uit Java (QEBridge.scanBarcode → app._gfScanNatief). tekst = gelezen
+     *  code; fout = 'geannuleerd' (gebruiker sloot de scanner) of een reden. */
+    _gfScanNatief(tekst, fout) {
+        this._gfScanNatiefBezig = false;
+        if (tekst) { this._gfScanVerwerk(String(tekst)); return; }
+        if (fout && fout !== 'geannuleerd') {
+            this._gfScanNatiefKapot = true;   // deze sessie niet meer proberen (module niet beschikbaar)
+            this.toast('Scanner niet beschikbaar (' + fout + ') — we gebruiken de camera in de app', true);
+            this._gfScanWebOpen();
+        }
+    },
+    _gfScanWebOpen() {
         const oud = document.getElementById('gfScanSheet');
         if (oud) oud.remove();
         const ov = document.createElement('div');
@@ -10175,11 +10201,13 @@ const app = {
         ov.innerHTML =
             '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px"><div style="font-size:16px;font-weight:700">Scan het etiket op de fles</div>' +
             '<button onclick="app._gfScanStop(true)" style="border:none;background:none;font-size:26px;line-height:1;color:#fff;padding:4px 8px;cursor:pointer">&times;</button></div>' +
-            '<div style="flex:1;position:relative;overflow:hidden;background:#000"><video id="gfScanVideo" playsinline autoplay muted style="width:100%;height:100%;object-fit:cover"></video>' +
-            '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none"><div style="width:62vw;max-width:300px;aspect-ratio:1;border:3px solid rgba(249,157,62,.9);border-radius:16px"></div></div></div>' +
-            '<div id="gfScanStatus" style="padding:10px 16px;font-size:13px;color:#C9CFDA;text-align:center;min-height:38px">Camera starten\u2026</div>' +
+            '<div id="gfScanVak" style="flex:1;position:relative;overflow:hidden;background:#000">' +
+            '<video id="gfScanVideo" playsinline autoplay muted style="width:100%;height:100%;object-fit:cover;visibility:hidden"></video>' +
+            '<div id="gfScanPaneel" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:#C9CFDA;background:#0F1626"><div style="font-size:44px">📷</div><div id="gfScanPaneelTekst" style="font-size:14px;line-height:1.45">Camera starten…</div></div>' +
+            '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none"><div id="gfScanKader" style="display:none;width:84vw;max-width:520px;height:36vw;max-height:220px;border:3px solid rgba(249,157,62,.9);border-radius:16px"></div></div></div>' +
+            '<div id="gfScanStatus" style="padding:10px 16px;font-size:13px;color:#C9CFDA;text-align:center;min-height:38px">Camera starten…</div>' +
             '<div style="display:flex;gap:8px;padding:0 16px calc(16px + env(safe-area-inset-bottom))">' +
-            '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="document.getElementById(\'gfScanFoto\').click()">\uD83D\uDCF8 Foto nemen</button>' +
+            '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="document.getElementById(\'gfScanFoto\').click()">📸 Foto nemen</button>' +
             '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="app._gfScanHandmatig()">Flesnummer typen</button></div>' +
             '<input type="file" id="gfScanFoto" accept="image/*" capture="environment" style="display:none" onchange="app._gfScanFoto(this)">';
         document.body.appendChild(ov);
@@ -10188,93 +10216,175 @@ const app = {
     async _gfScanStart() {
         const video = document.getElementById('gfScanVideo');
         const status = document.getElementById('gfScanStatus');
+        const paneel = document.getElementById('gfScanPaneel');
+        const paneelTekst = document.getElementById('gfScanPaneelTekst');
         const zeg = (t) => { if (status) status.textContent = t; };
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('geen camera-API');
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
             this._gfStream = stream;
-            if (!video) return;
+            if (!video || !document.getElementById('gfScanSheet')) { this._gfScanStop(); return; }
             video.srcObject = stream;
+            // pas als er echt beeld is: video tonen, startpaneel weg, richtkader erbij (kader hoort niet over de uitleg te staan)
+            const toon = () => { video.style.visibility = 'visible'; if (paneel) paneel.style.display = 'none'; const kd = document.getElementById('gfScanKader'); if (kd) kd.style.display = ''; };
+            video.addEventListener('playing', toon, { once: true });
             await video.play().catch(() => {});
-            let detector = null;
-            // Messer-etiket = Code 128 (streepjescode), ons etiket = QR — beide lezen
+            if (video.readyState >= 2) toon();
+            // Decoder: ingebouwde BarcodeDetector → ZXing (QR + streepjescodes) → jsQR (alleen QR)
+            let detector = null, zx = false;
             if (window.BarcodeDetector) {
-                try { detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'itf', 'upc_a', 'upc_e'] }); }
+                try { detector = new BarcodeDetector({ formats: this.GAS_SCAN_FORMATEN }); }
                 catch (_) { try { detector = new BarcodeDetector({ formats: ['qr_code', 'code_128'] }); } catch (_2) { detector = null; } }
             }
-            if (!detector) await this._qrLaadJsqr();
-            zeg(detector ? 'Richt op de streepjescode of QR\u2026' : 'Richt op de QR-code\u2026 (streepjescodes: neem een foto of typ het nummer)');
+            if (!detector) { try { await this._gfLaadZxing(); zx = true; } catch (_) { zx = false; } }
+            if (!detector && !zx) { try { await this._qrLaadJsqr(); } catch (_) {} }
+            if (!detector && !zx && !window.jsQR) { zeg('Herkenning niet beschikbaar — neem een foto of typ het nummer.'); return; }
+            zeg(detector || zx ? 'Richt op de streepjescode of QR-code van het etiket…' : 'Richt op de QR-code… (streepjescode: neem een foto of typ het nummer)');
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            let bezig = false;
+            let bezig = false, n = 0, detFouten = 0;
             const stap = async () => {
                 if (!document.getElementById('gfScanSheet') || !this._gfStream) return;
-                if (!bezig && video.readyState >= 2) {
+                if (!bezig && video.readyState >= 2 && (video.videoWidth || 0) > 0) {
                     bezig = true;
                     try {
+                        const k = this._gfScanKader(video);
+                        canvas.width = k.dw; canvas.height = k.dh;
+                        ctx.drawImage(video, k.sx, k.sy, k.sw, k.sh, 0, 0, k.dw, k.dh);
                         let tekst = null;
                         if (detector) {
-                            const res = await detector.detect(video);
+                            const res = await detector.detect(canvas);
                             if (res && res[0]) tekst = res[0].rawValue;
+                        } else if (zx) {
+                            tekst = this._gfZxingDecode(canvas);
                         } else if (window.jsQR) {
-                            const w = Math.min(640, video.videoWidth || 640);
-                            const h = Math.round(w * (video.videoHeight || 480) / (video.videoWidth || 640));
-                            canvas.width = w; canvas.height = h;
-                            ctx.drawImage(video, 0, 0, w, h);
-                            const img = ctx.getImageData(0, 0, w, h);
-                            const r = jsQR(img.data, w, h, { inversionAttempts: 'dontInvert' });
+                            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            const r = jsQR(img.data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
                             if (r && r.data) tekst = r.data;
                         }
                         if (tekst) { this._gfScanStop(); this._gfScanVerwerk(tekst); return; }
-                    } catch (_) {}
+                        n++;
+                        if (n === 40) zeg('Nog niets gelezen. Hou de code recht, dichtbij en scherp in het kader — of neem een foto.');
+                    } catch (_) {
+                        // BarcodeDetector aanwezig maar kapot (komt voor op WebViews) → na 5 fouten over op ZXing
+                        if (detector && ++detFouten >= 5) { detector = null; try { await this._gfLaadZxing(); zx = true; } catch (_2) {} }
+                    }
                     bezig = false;
                 }
-                this._gfScanTimer = setTimeout(stap, 180);
+                this._gfScanTimer = setTimeout(stap, detector ? 150 : 220);
             };
             stap();
         } catch (e) {
-            zeg('Live camera niet beschikbaar \u2014 neem een foto van de code.');
+            // De WebView gaf de camera niet vrij (APK zonder onPermissionRequest, of geweigerd).
+            if (video) video.style.visibility = 'hidden';
+            if (paneel) paneel.style.display = 'flex';
+            if (paneelTekst) paneelTekst.innerHTML = '<b style="color:#fff">Live camera niet beschikbaar in deze app-versie.</b><br>Neem een foto van het etiket — de streepjescode wordt uit de foto gelezen — of typ het nummer dat onder de streepjes staat.';
+            zeg('Camera niet beschikbaar — neem een foto van het etiket.');
             setTimeout(() => { const f = document.getElementById('gfScanFoto'); if (f) f.click(); }, 300);
         }
+    },
+    /** Het oranje kader → uitsnede in videopixels (object-fit: cover), zodat de decoder
+     *  alleen het relevante stuk beeld ziet (sneller én betrouwbaarder). */
+    _gfScanKader(video) {
+        const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+        let sx = 0, sy = 0, sw = vw, sh = vh;
+        try {
+            const c = document.getElementById('gfScanVak').getBoundingClientRect();
+            const k = document.getElementById('gfScanKader').getBoundingClientRect();
+            if (c.width > 0 && c.height > 0 && k.width > 0 && k.height > 0) {
+                const schaal = Math.max(c.width / vw, c.height / vh);   // cover
+                sw = Math.min(vw, Math.round((k.width + 24) / schaal));
+                sh = Math.min(vh, Math.round((k.height + 24) / schaal));
+                sx = Math.max(0, Math.round((vw - sw) / 2));
+                sy = Math.max(0, Math.round((vh - sh) / 2));
+            }
+        } catch (_) {}
+        const dw = Math.min(1024, sw), dh = Math.max(1, Math.round(sh * dw / sw));
+        return { sx, sy, sw, sh, dw, dh };
     },
     _gfScanStop(sluit) {
         if (this._gfScanTimer) { clearTimeout(this._gfScanTimer); this._gfScanTimer = null; }
         if (this._gfStream) { try { this._gfStream.getTracks().forEach(t => t.stop()); } catch (_) {} this._gfStream = null; }
+        this._gfScanNatiefBezig = false;
         if (sluit) { const s2 = document.getElementById('gfScanSheet'); if (s2) s2.remove(); }
     },
-    /** jsQR pas laden als het nodig is (257 KB — hoeft niet bij elke start mee). */
-    _qrLaadJsqr() {
-        if (window.jsQR) return Promise.resolve();
-        if (this._jsqrBelofte) return this._jsqrBelofte;
-        this._jsqrBelofte = new Promise((ok, nee) => {
+    /** Bibliotheken pas laden als het nodig is (jsQR 257 KB, ZXing 336 KB — niet bij elke start). */
+    _gfLaadScript(pad, globaal, sleutel) {
+        if (window[globaal]) return Promise.resolve();
+        if (this[sleutel]) return this[sleutel];
+        this[sleutel] = new Promise((ok, nee) => {
             const sc = document.createElement('script');
-            sc.src = 'js/jsqr.js';
-            sc.onload = () => ok();
-            sc.onerror = () => { this._jsqrBelofte = null; nee(new Error('QR-lezer laden mislukt')); };
+            sc.src = pad;
+            sc.onload = () => { if (window[globaal]) ok(); else { this[sleutel] = null; nee(new Error(pad + ' geladen maar ' + globaal + ' ontbreekt')); } };
+            sc.onerror = () => { this[sleutel] = null; nee(new Error(pad + ' laden mislukt')); };
             document.head.appendChild(sc);
         });
-        return this._jsqrBelofte;
+        return this[sleutel];
+    },
+    _qrLaadJsqr() { return this._gfLaadScript('js/jsqr.js', 'jsQR', '_jsqrBelofte'); },
+    _gfLaadZxing() { return this._gfLaadScript('js/zxing.js', 'ZXing', '_zxingBelofte'); },
+    /** ZXing-decode van een canvas: QR + Code 128/39, EAN, ITF, UPC, Data Matrix;
+     *  TRY_HARDER probeert ook 90° gedraaid. Niets gevonden = null (geen fout). */
+    _gfZxingDecode(canvas) {
+        const Z = window.ZXing;
+        if (!Z) return null;
+        if (!this._gfZxReader) {
+            const hints = new Map();
+            hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.ITF, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.DATA_MATRIX]);
+            hints.set(Z.DecodeHintType.TRY_HARDER, true);
+            this._gfZxReader = new Z.MultiFormatReader();
+            this._gfZxReader.setHints(hints);
+        }
+        try {
+            const bron = new Z.HTMLCanvasElementLuminanceSource(canvas);
+            const res = this._gfZxReader.decodeWithState(new Z.BinaryBitmap(new Z.HybridBinarizer(bron)));
+            const t = res && res.getText ? res.getText() : null;
+            return t ? String(t).trim() : null;
+        } catch (_) { return null; }
+        finally { try { this._gfZxReader.reset(); } catch (_) {} }
     },
     async _gfScanFoto(input) {
         const file = input && input.files && input.files[0];
         if (!file) return;
         const status = document.getElementById('gfScanStatus');
-        if (status) status.textContent = 'Foto lezen\u2026';
+        const zeg = (t) => { if (status) status.textContent = t; };
+        zeg('Foto lezen…');
         try {
-            await this._qrLaadJsqr();
             const url = URL.createObjectURL(file);
             const img = await new Promise((ok, nee) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => nee(new Error('foto onleesbaar')); i.src = url; });
-            const sch = Math.min(1, 1200 / Math.max(img.width, img.height));
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(img.width * sch); canvas.height = Math.round(img.height * sch);
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            // foto → canvas op maat; draai = 90° gedraaid (streepjescode verticaal gefotografeerd)
+            const teken = (maxPx, draai) => {
+                const sch = Math.min(1, maxPx / Math.max(img.width || 1, img.height || 1));
+                const w = Math.max(1, Math.round((img.width || 1) * sch)), h = Math.max(1, Math.round((img.height || 1) * sch));
+                const c = document.createElement('canvas');
+                const g = (c.width = draai ? h : w, c.height = draai ? w : h, c.getContext('2d'));
+                if (draai) { g.translate(h, 0); g.rotate(Math.PI / 2); }
+                g.drawImage(img, 0, 0, w, h);
+                return c;
+            };
+            let tekst = null;
+            // 1) ZXing: vol formaat eerst (streepjes), ook gedraaid, dan kleiner (QR)
+            try { await this._gfLaadZxing(); } catch (_) {}
+            if (window.ZXing) {
+                for (const [px, draai] of [[1600, false], [1600, true], [1000, false], [1000, true], [640, false]]) {
+                    tekst = this._gfZxingDecode(teken(px, draai));
+                    if (tekst) break;
+                }
+            }
+            // 2) jsQR als vangnet voor QR
+            if (!tekst) {
+                try { await this._qrLaadJsqr(); } catch (_) {}
+                if (window.jsQR) {
+                    const c = teken(1200);
+                    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+                    const r = jsQR(d.data, c.width, c.height);
+                    if (r && r.data) tekst = r.data;
+                }
+            }
             URL.revokeObjectURL(url);
-            const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const r = jsQR(d.data, canvas.width, canvas.height);
-            if (r && r.data) { this._gfScanStop(); this._gfScanVerwerk(r.data); }
-            else if (status) status.textContent = 'Geen QR-code gevonden. Is het een streepjescode (Messer-etiket)? Typ dan het nummer eronder.';
-        } catch (e) { if (status) status.textContent = 'Foto lezen mislukt: ' + ((e && e.message) || '?'); }
+            if (tekst) { this._gfScanStop(); this._gfScanVerwerk(tekst); }
+            else zeg('Geen code gevonden in de foto. Tip: dichtbij, scherp, streepjescode horizontaal en goed verlicht — probeer nog een foto of typ het nummer.');
+        } catch (e) { zeg('Foto lezen mislukt: ' + ((e && e.message) || '?')); }
         finally { input.value = ''; }
     },
     _gfScanHandmatig() {
