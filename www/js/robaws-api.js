@@ -1421,6 +1421,245 @@ const RobawsAPI = {
     },
 
     // =============================================
+    // v388: GASFLESSEN IN HUUR (Logistiek — bureel)
+    // Elke fles = een Materieel-item; de NATIEVE velden doen het werk
+    // (Robaws-doc 'Materieel' + live gemeten 11 sep 2026):
+    //   assignedProjectId  = op welk project de fles staat
+    //   stockLocationId    = anders: camionet of magazijn
+    //   assignedEmployeeId = verantwoordelijke
+    //   status             = 'actief' (in huur) of 'ingeleverd'
+    //   serialNumber       = flesnummer (Robaws' eigen barcode-drager)
+    //   brand              = leverancier (Air Liquide, Linde, …)
+    // Extravelden (DATE, Levi maakt ze aan): 'Huur sinds' en
+    // 'Ingeleverd op'. Ontbreekt 'Huur sinds', dan telt createdAt.
+    // Herkenning: Type-optie met 'gasfles' in de naam (hoofdletter-
+    // en nummer-ongevoelig, dus '14. Gasflessen' werkt ook).
+    // =============================================
+    GAS_SOORTEN: ['Zuurstof', 'Acetyleen', 'Argon', 'Menggas', 'Propaan', 'CO2', 'Stikstof'],
+    GAS_TYPE_DEFAULT: '14. Gasflessen',
+    GAS_LANG_DAGEN: 180,
+    GAS_QR_BASE: 'https://mijnqe.be/m/',
+    /** Leveranciers zoals ze in Robaws staan (gemeten 11 sep 2026). De flessen
+     *  komen van Antwerp Gasdepot (dealer van Messer) — de Messer-etiketten op
+     *  de flessen dragen een Code 128-streepjescode met het flesnummer. */
+    GAS_LEVERANCIERS: [
+        { naam: 'Antwerp Gasdepot', supplierId: '1100', match: /gasdepot|gas depot|\bagd\b/i },
+        { naam: 'Messer Belgium',   supplierId: '55',   match: /messer/i },
+        { naam: 'Westfalen',        supplierId: '623',  match: /westfalen/i },
+    ],
+    GAS_LEVERANCIER_STANDAARD: 'Antwerp Gasdepot',
+    /** Messer Belgium NV factureert de cilinderHUUR (gemeten 11 sep 2026):
+     *  per huurtype een lijn met het aantal CILINDERDAGEN × dagprijs
+     *  ('Huur Cilinder Industrieel 932 × € 0,4964'). Gedeeld door de
+     *  factuurperiode = hoeveel flessen Messer denkt dat wij hebben —
+     *  dé toets voor het register. Flesnummers staan er NIET op. */
+    GAS_HUUR_SUPPLIER_ID: '55',
+    gasHuurParse(fact, lijnen, vorigeDatumISO) {
+        const nr = String(fact.invoiceNumber || '');
+        const datum = String(fact.date || '').slice(0, 10);
+        let dagen = null;
+        if (vorigeDatumISO && datum) {
+            const g = Math.round((Date.parse(datum + 'T12:00:00Z') - Date.parse(String(vorigeDatumISO).slice(0, 10) + 'T12:00:00Z')) / 86400000);
+            if (g >= 20 && g <= 70) dagen = g;   // Messer factureert per 1 of 2 maanden
+        }
+        if (!dagen) {
+            const m = nr.match(/(\d{1,2})\s*-\s*(\d{4})/);   // '… / 04 - 2026'
+            const jaar = m ? Number(m[2]) : Number(datum.slice(0, 4)), maand = m ? Number(m[1]) : Number(datum.slice(5, 7));
+            dagen = (jaar && maand) ? new Date(Date.UTC(jaar, maand, 0)).getUTCDate() : 30;
+        }
+        const types = [];
+        let cd = 0, kost = 0;
+        for (const l of (lijnen || [])) {
+            const oms = String(l.description || '').trim();
+            if (!/huur/i.test(oms)) continue;
+            const q = Number(l.quantity) || 0, p = Number(l.price) || 0;
+            const b = types.find((t) => t.naam === oms);
+            if (b) { b.cilinderdagen += q; b.kost += q * p; } else types.push({ naam: oms, cilinderdagen: q, kost: q * p });
+            cd += q; kost += q * p;
+        }
+        types.forEach((t) => { t.kost = Math.round(t.kost * 100) / 100; t.flessen = Math.round(t.cilinderdagen / dagen * 10) / 10; });
+        return { id: String(fact.id), nummer: nr, datum, dagen, cilinderdagen: cd, kost: Math.round(kost * 100) / 100,
+            flessen: Math.round(cd / dagen * 10) / 10, perJaar: Math.round(kost / dagen * 365), types };
+    },
+    async gasHuurcontrole() {
+        const nu = Date.now();
+        if (this._gasHuurCache && (nu - this._gasHuurCache.at) < 3600e3) return this._gasHuurCache.data;
+        const r = await this.get('purchase-invoices?supplierId=' + this.GAS_HUUR_SUPPLIER_ID + '&sort=id:desc&limit=4');
+        if (r.code !== 200) throw new Error('Facturen laden mislukt (' + r.code + ')');
+        const data = r.data || {};
+        const facts = (data.items || (Array.isArray(data) ? data : ((data.data && data.data.items) || []))).slice(0, 4);
+        const uit = [];
+        for (let i = 0; i < Math.min(3, facts.length); i++) {
+            const d = await this.get('purchase-invoices/' + facts[i].id + '?include=lineItems');
+            const det = (d.code === 200 && d.data) ? d.data : facts[i];
+            uit.push(this.gasHuurParse(det, det.lineItems || [], facts[i + 1] ? facts[i + 1].date : null));
+        }
+        const res = { facturen: uit, leverancier: 'Messer Belgium' };
+        this._gasHuurCache = { at: nu, data: res };
+        return res;
+    },
+    gasSupplierId(naam) {
+        const n = String(naam || '');
+        const l = this.GAS_LEVERANCIERS.find(x => x.match.test(n));
+        return l ? l.supplierId : null;
+    },
+
+    isGasfles(m) {
+        const t = m && m.extraFields && m.extraFields['Type'];
+        const v = t ? (t.stringValue ?? t.value ?? '') : '';
+        return /gasfles/i.test(String(v || ''));
+    },
+
+    /** Gassoort uit de naam ('Zuurstof 50L · 123456' → Zuurstof). */
+    gasSoort(m) {
+        const naam = String((m && m.name) || '');
+        for (const g of this.GAS_SOORTEN) if (new RegExp('^' + g + '\\b', 'i').test(naam)) return g;
+        const eerste = naam.split(/[\s·]+/)[0];
+        return eerste || 'Gasfles';
+    },
+
+    _gasVeld(m, naam) {
+        const f = m && m.extraFields && m.extraFields[naam];
+        const v = f ? (f.dateValue ?? f.stringValue ?? f.value ?? null) : null;
+        return v ? String(v).slice(0, 10) : null;
+    },
+    gasHuurSinds(m) { return this._gasVeld(m, 'Huur sinds') || (m && m.createdAt ? String(m.createdAt).slice(0, 10) : null); },
+    gasIngeleverdOp(m) { return this._gasVeld(m, 'Ingeleverd op'); },
+    gasIsIngeleverd(m) { return String((m && m.status) || '').toLowerCase() === 'ingeleverd'; },
+
+    /** Dagen in huur: van 'Huur sinds' tot vandaag (of tot de inleverdatum). */
+    gasDagen(m, vandaagISO) {
+        const van = this.gasHuurSinds(m);
+        if (!van) return null;
+        const tot = this.gasIsIngeleverd(m) ? (this.gasIngeleverdOp(m) || vandaagISO) : vandaagISO;
+        const t = tot || new Date().toISOString().slice(0, 10);
+        return Math.max(0, Math.round((Date.parse(t + 'T12:00:00Z') - Date.parse(van + 'T12:00:00Z')) / 86400000));
+    },
+
+    /** Bestaat een extraveld op Materieel al? (definitie-lijst, 10 min cache;
+     *  bij twijfel true — de UI mag nooit blokkeren op deze check) */
+    async materialVeldBestaat(naam) {
+        try {
+            const nu = Date.now();
+            if (!this._matVeldCache || (nu - this._matVeldCache.at) > 600e3) {
+                const r = await this.get('resource-types/material/extra-fields');
+                if (r.code !== 200 || !r.data) return true;
+                const lijst = Array.isArray(r.data) ? r.data : (r.data.items || []);
+                if (!lijst.length) return true;
+                this._matVeldCache = { at: nu, labels: lijst.map(f => String(f.label || f.name || '').trim()) };
+            }
+            return this._matVeldCache.labels.indexOf(String(naam)) >= 0;
+        } catch (e) { return true; }
+    },
+
+    /** Projecten voor de kiezer: naam via dezelfde keten als de Worker
+     *  (planningName → name → extraveld 'Naam Project'), status + gemeente. */
+    async getProjectsVoorPicker() {
+        const nu = Date.now();
+        if (this._projPickCache && (nu - this._projPickCache.at) < 3600e3) return this._projPickCache.items;
+        const uit = [];
+        for (let off = 0; off < 300; off += 100) {
+            const r = await this.get('projects?limit=100&offset=' + off);
+            if (r.code !== 200) break;
+            const data = r.data || {};
+            const items = data.items || (data.data && data.data.items) || [];
+            for (const p of items) {
+                const ev = p.extraFields && p.extraFields['Naam Project'];
+                const naam = ((p.planningName || p.name || p.title) || (ev && ev.stringValue) || '').trim();
+                uit.push({ id: String(p.id), logicId: p.logicId || '', name: naam || ('Project ' + (p.logicId || p.id)),
+                    status: String(p.status || ''), stad: (p.siteAddress && p.siteAddress.city) || '' });
+            }
+            if (items.length < 100) break;
+        }
+        const dood = /afgesloten|gesloten|geannuleerd|verloren|archief/i;
+        uit.sort((a, b) => (dood.test(a.status) - dood.test(b.status)) || a.name.localeCompare(b.name));
+        this._projPickCache = { at: nu, items: uit };
+        return uit;
+    },
+
+    /** Nieuwe fles: kale POST met de natieve velden, daarna merge-PATCH
+     *  voor Type + 'Huur sinds' (extravelden plakken pas na definitie). */
+    async createGasfles({ soort, inhoud, flesnr, leverancier, huurSinds, empId, projectId, locId, typeNaam }) {
+        const nr = String(flesnr || '').trim();
+        if (!nr) throw new Error('Flesnummer ontbreekt');
+        const naam = [String(soort || 'Gasfles').trim(), String(inhoud || '').trim()].filter(Boolean).join(' ') + ' · ' + nr;
+        const basis = {
+            name: naam,
+            brand: String(leverancier || '').trim() || null,
+            serialNumber: nr,
+            status: 'actief',
+            assignedEmployeeId: empId ? String(empId) : null,
+            assignedProjectId: projectId ? String(projectId) : null,
+            stockLocationId: (!projectId && locId) ? String(locId) : null,
+            supplierId: this.gasSupplierId(leverancier),   // natieve leverancier-koppeling
+        };
+        const res = await this.post('materials', basis);
+        if (res.code !== 200 && res.code !== 201) throw new Error('Aanmaken gaf status ' + res.code);
+        const id = res.data && res.data.id;
+        if (!id) throw new Error('Aanmaken gaf geen id terug');
+        const extra = { 'Type': { type: 'SELECT', stringValue: String(typeNaam || this.GAS_TYPE_DEFAULT) } };
+        if (huurSinds) extra['Huur sinds'] = { type: 'DATE', dateValue: String(huurSinds).slice(0, 10) };
+        // ids nogmaals via merge-PATCH — zekerheid als de POST ze zou negeren
+        const p = await this.patchMerge('materials/' + id, {
+            assignedEmployeeId: basis.assignedEmployeeId, assignedProjectId: basis.assignedProjectId,
+            stockLocationId: basis.stockLocationId, supplierId: basis.supplierId, extraFields: extra,
+        });
+        if (p.code !== 200 && p.code !== 201 && p.code !== 204) console.warn('[Gasfles] velden zetten faalde op #' + id + ' (' + p.code + ')');
+        return String(id);
+    },
+
+    /** Waar staat de fles: óf op een project, óf op een stocklocatie —
+     *  nooit allebei (één waarheid). */
+    async setMaterialWaar(materialId, { projectId, locId }) {
+        const body = projectId
+            ? { assignedProjectId: String(projectId), stockLocationId: null }
+            : { assignedProjectId: null, stockLocationId: locId ? String(locId) : null };
+        const res = await this.patchMerge('materials/' + materialId, body);
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+    async setMaterialEmployee(materialId, empId) {
+        const res = await this.patchMerge('materials/' + materialId, { assignedEmployeeId: empId ? String(empId) : null });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+    async gasflesInleveren(materialId, datumISO) {
+        const d = String(datumISO || new Date().toISOString().slice(0, 10)).slice(0, 10);
+        const res = await this.patchMerge('materials/' + materialId, {
+            status: 'ingeleverd', assignedProjectId: null, stockLocationId: null,
+            extraFields: { 'Ingeleverd op': { type: 'DATE', dateValue: d } },
+        });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+    async gasflesHeractiveer(materialId) {
+        const res = await this.patchMerge('materials/' + materialId, {
+            status: 'actief', extraFields: { 'Ingeleverd op': { type: 'DATE', dateValue: null } },
+        });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+    async setMaterialHuurSinds(materialId, datumISO) {
+        const res = await this.patchMerge('materials/' + materialId, {
+            extraFields: { 'Huur sinds': { type: 'DATE', dateValue: datumISO ? String(datumISO).slice(0, 10) : null } },
+        });
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        return true;
+    },
+
+    /** QR-inhoud → {id} (onze URL of een kaal nummer) of {serie} (flesnummer). */
+    qrParseMaterial(tekst) {
+        const t = String(tekst || '').trim();
+        if (!t) return null;
+        const m = t.match(/\/m\/(\d{1,9})(?:[/?#]|$)/);
+        if (m) return { id: m[1] };
+        // Messer-etiket = Code 128 met een 9-cijferig flesnummer; materieel-ids
+        // zijn kort. Kort getal → beide kandidaten (flesnummer wint bij de match).
+        if (/^\d{1,6}$/.test(t)) return { id: t, serie: t };
+        return { serie: t.replace(/\s+/g, '') };
+    },
+
+    // =============================================
     // v361: KLEDIJ & PBM (Logistiek — bureel)
     //
     // Uitgiftes staan als JSON in het extraveld "Kledij" (LONG_TEXT) op de
