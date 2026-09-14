@@ -260,7 +260,8 @@
             ['Projecten', 'Zoek tussen alle projecten en maak onderweg dagplanningen voor de monteurs.']
         ] },
         screenProjecten: { name: 'PROJECTEN', steps: [
-            ['Zoeken', 'Typ een deel van de naam, het P-nummer, de klant of de gemeente — de zoekopdracht kijkt in álle projecten, ook de afgesloten.', '#prjZoek'],
+            ['Zoeken', 'Typ een deel van de naam, het P-nummer, de klant of de gemeente — de zoekopdracht kijkt ook in de afgesloten projecten.', '#prjZoek'],
+            ['Mijn projecten', 'Standaard zie je alleen de projecten waar jij projectleider bent. Kies een andere projectleider in de lijst, of tik "✕ Filter weg" voor alle projecten.', '#prjLeiderBalk'],
             ['Lopend of alles', 'Zonder zoekterm zie je standaard de lopende projecten; "Alles" toont ook de afgewerkte.', '#prjFilters'],
             ['Ingepland?', 'Onder elk lopend project staat of er de komende twee weken al iemand ingepland is.']
         ] },

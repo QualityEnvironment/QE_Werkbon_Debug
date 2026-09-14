@@ -18969,9 +18969,12 @@ const app = {
         try { this._refreshAanvraagGoedkeurCount(); } catch (_e) {}
         const sub = document.getElementById('orgProjectenSub');
         if (!sub) return;
-        RobawsAPI.getProjectenOverzicht().then(lijst => {
-            const lopend = lijst.filter(p => !p.afgesloten).length;
-            sub.textContent = lopend + ' lopende projecten — zoek en plan dagen in';
+        Promise.all([RobawsAPI.getProjectenOverzicht(), RobawsAPI.getActiveEmployees().catch(() => [])]).then(([lijst, emps]) => {
+            this._prjLijst = lijst;
+            this._prjZetLeiders(emps);
+            const lopend = lijst.filter(p => !p.afgesloten);
+            const mijn = lopend.filter(p => this._prjIsMijn(p)).length;
+            sub.textContent = mijn + (mijn === 1 ? ' lopend project van jou' : ' lopende projecten van jou') + ' · ' + lopend.length + ' in totaal';
         }).catch(() => {});
     },
 
@@ -19019,7 +19022,12 @@ const app = {
         if (!this._prjLijst || force) el.innerHTML = '<div class="spinner"></div>';
         else this.renderProjecten();
         try {
-            this._prjLijst = await RobawsAPI.getProjectenOverzicht({ force: !!force });
+            const [lijst, emps] = await Promise.all([
+                RobawsAPI.getProjectenOverzicht({ force: !!force }),
+                RobawsAPI.getActiveEmployees().catch(() => []),
+            ]);
+            this._prjLijst = lijst;
+            this._prjZetLeiders(emps);
             this.renderProjecten();
         } catch (e) {
             el.innerHTML = '<div class="card" style="padding:16px;text-align:center"><div style="font-size:13.5px;color:var(--g2);margin-bottom:10px">'
@@ -19043,6 +19051,126 @@ const app = {
         this.renderProjecten();
     },
 
+    // v392 (vraag Levi): standaard alleen je EIGEN projecten, filter weg met één tik,
+    // en filteren op projectleider. Projectleider = extraveld "Verantwoordelijke
+    // project:" (wint, zelfde regel als het werfdossier) of anders de native
+    // projectleider siteManagerId (= Robaws-gebruiker → werknemersfiche).
+    // GEMETEN 14 sep: 36/39 projecten hebben er één (Bart, Bjorn, Rolf, Levi);
+    // executorId is de UITVOERDER (monteur) en telt bewust niet mee.
+    // Sleutel = de werknemersfiche als die te vinden is ("Bart Spoormans" en
+    // bart@qe.be worden zo dezelfde persoon), anders de voornaam.
+    _prjLeider: 'mijn',
+
+    _prjZetLeiders(emps) {
+        let lijst = (emps || []).filter(e => e && e.employeeId != null);
+        // geen werknemerslijst (bv. leesrecht weg) → de vaste EMPLOYEES-map heeft ook userId's
+        if (!lijst.length && RobawsAPI.EMPLOYEES) {
+            lijst = Object.entries(RobawsAPI.EMPLOYEES).map(([email, v]) => Object.assign({ email }, v)).filter(e => e.employeeId != null);
+        }
+        const perUser = {}, perNaam = {}, perVoornaam = {};
+        const normNaam = (n) => this._prjNorm(n).replace(/\s+/g, ' ').trim();
+        for (const e of lijst) {
+            if (e.userId != null) perUser[String(e.userId)] = e;
+            const vol = normNaam(e.name);
+            if (!vol) continue;
+            perNaam[vol] = e;
+            const vn = vol.split(' ')[0];
+            (perVoornaam[vn] = perVoornaam[vn] || []).push(e);
+        }
+        const viaNaam = (naam) => {
+            const vol = normNaam(naam);
+            if (!vol) return null;
+            if (perNaam[vol]) return perNaam[vol];
+            const kand = perVoornaam[vol.split(' ')[0]] || [];
+            return kand.length === 1 ? kand[0] : null;
+        };
+        const leiders = {};
+        for (const p of (this._prjLijst || [])) {
+            let l = null;
+            if (p.verantwoordelijke) {
+                const e = viaNaam(p.verantwoordelijke);
+                l = e ? { sleutel: 'e' + e.employeeId, naam: e.name || p.verantwoordelijke }
+                    : { sleutel: 'n' + normNaam(p.verantwoordelijke).split(' ')[0], naam: p.verantwoordelijke };
+            } else if (p.siteManagerId) {
+                const e = perUser[p.siteManagerId];
+                l = e ? { sleutel: 'e' + e.employeeId, naam: e.name || ('Gebruiker #' + p.siteManagerId) }
+                    : { sleutel: 'u' + p.siteManagerId, naam: 'Gebruiker #' + p.siteManagerId };
+            }
+            leiders[p.id] = l;
+        }
+        this._prjLeiders = leiders;
+        const u = this.currentUser || RobawsAPI.getLoggedInUser() || {};
+        const mijnFiche = u.robawsEmployeeId != null ? String(u.robawsEmployeeId) : '';
+        const ik = lijst.find(e => String(e.employeeId) === mijnFiche) || viaNaam(u.name || '');
+        const sleutels = new Set();
+        if (ik) sleutels.add('e' + ik.employeeId);
+        if (mijnFiche) sleutels.add('e' + mijnFiche);
+        if (u.name) sleutels.add('n' + normNaam(u.name).split(' ')[0]);
+        this._prjMijnSleutels = sleutels;
+    },
+
+    _prjIsMijn(p) {
+        const l = this._prjLeiders ? this._prjLeiders[p.id] : null;
+        return !!(l && this._prjMijnSleutels && this._prjMijnSleutels.has(l.sleutel));
+    },
+
+    _prjLeiderOk(p) {
+        const f = this._prjLeider;
+        if (f === 'alle' || !this._prjLeiders) return true;
+        if (f === 'mijn') return this._prjIsMijn(p);
+        const l = this._prjLeiders[p.id];
+        if (f === '_geen') return !l;
+        return !!(l && l.sleutel === f);
+    },
+
+    _prjLeiderNaam() {
+        const f = this._prjLeider;
+        if (f === 'mijn') return 'jouw projecten';
+        if (f === '_geen') return 'projecten zonder projectleider';
+        const p = (this._prjLijst || []).find(x => this._prjLeiders && this._prjLeiders[x.id] && this._prjLeiders[x.id].sleutel === f);
+        return p ? this._prjLeiders[p.id].naam : 'deze projectleider';
+    },
+
+    prjZetLeider(v) {
+        this._prjLeider = v || 'alle';
+        this.renderProjecten();
+    },
+
+    /** Keuzelijst Projectleider + "✕ Filter weg" (tellers volgen Lopend/Alles). */
+    _prjLeiderBalk(statusOk) {
+        const el = document.getElementById('prjLeiderBalk');
+        if (!el) return;
+        if (!this._prjLeiders || !this._prjLijst) { el.innerHTML = ''; return; }
+        const basis = this._prjLijst.filter(statusOk);
+        const namen = {}, tel = {};
+        let mijn = 0, geen = 0;
+        for (const p of basis) {
+            const l = this._prjLeiders[p.id];
+            if (!l) { geen++; continue; }
+            tel[l.sleutel] = (tel[l.sleutel] || 0) + 1;
+            if (!namen[l.sleutel] || String(l.naam).length > String(namen[l.sleutel]).length) namen[l.sleutel] = l.naam;
+            if (this._prjIsMijn(p)) mijn++;
+        }
+        const f = this._prjLeider;
+        const sleutels = Object.keys(tel).sort((a, b) => String(namen[a]).localeCompare(String(namen[b])));
+        if (f !== 'mijn' && f !== 'alle' && f !== '_geen' && !tel[f]) {
+            tel[f] = 0;
+            namen[f] = this._prjLeiderNaam();
+            sleutels.push(f);
+        }
+        const opt = (v, t) => '<option value="' + this.escapeHtml(v) + '"' + (v === f ? ' selected' : '') + '>' + this.escapeHtml(t) + '</option>';
+        el.innerHTML = '<div class="prj-leiderbalk">'
+            + '<select class="form-input prj-leiderkeuze" aria-label="Projectleider" onchange="app.prjZetLeider(this.value)">'
+            + opt('mijn', 'Mijn projecten (' + mijn + ')')
+            + opt('alle', 'Alle projectleiders (' + basis.length + ')')
+            + '<optgroup label="Projectleider">'
+            + sleutels.map(s => opt(s, namen[s] + ' (' + tel[s] + ')')).join('')
+            + (geen || f === '_geen' ? opt('_geen', 'Niet ingevuld (' + geen + ')') : '')
+            + '</optgroup></select>'
+            + (f !== 'alle' ? '<button type="button" class="mb-minibtn prj-filterweg" onclick="app.prjZetLeider(\'alle\')">✕ Filter weg</button>' : '')
+            + '</div>';
+    },
+
     /** projectId → { eerste: datum, dagen: aantal } voor vandaag t/m 13 dagen vooruit. */
     _prjKomend() {
         const uit = {};
@@ -19063,24 +19191,42 @@ const app = {
         document.querySelectorAll('#prjFilters .mb-subtab').forEach(b => b.classList.toggle('active', b.dataset.f === this._prjFilter));
         const woorden = this._prjNorm(this._prjZoek).trim().split(/\s+/).filter(Boolean);
         const komend = this._prjKomend();
-        let lijst = this._prjLijst.filter(p => {
-            if (!woorden.length) return this._prjFilter === 'alles' || !p.afgesloten;
+        // v392: status (zoeken kijkt ook in afgesloten) → zoekterm → projectleider
+        const statusOk = (p) => woorden.length > 0 || this._prjFilter === 'alles' || !p.afgesloten;
+        const zoekOk = (p) => {
+            if (!woorden.length) return true;
+            const l = this._prjLeiders ? this._prjLeiders[p.id] : null;
             const hooi = this._prjNorm([p.logicId, p.naam, p.naamProject, p.klant, p.eindklant, p.adresTekst,
-                p.adres.addressLine2, p.verantwoordelijke, p.status, p.type].join(' '));
+                p.adres.addressLine2, p.verantwoordelijke, l ? l.naam : '', p.status, p.type].join(' '));
             return woorden.every(w => hooi.indexOf(w) >= 0);
-        });
+        };
+        this._prjLeiderBalk((p) => this._prjFilter === 'alles' || !p.afgesloten);
+        const zonderLeider = this._prjLijst.filter(p => statusOk(p) && zoekOk(p));
+        let lijst = zonderLeider.filter(p => this._prjLeiderOk(p));
         const rang = (p) => p.afgesloten ? 2 : (/voorbereiding/i.test(p.status) ? 1 : 0);
         lijst.sort((a, b) => rang(a) - rang(b) || String(b.logicId).localeCompare(String(a.logicId), undefined, { numeric: true }));
         const telling = document.getElementById('prjTelling');
         if (telling) {
-            const afg = this._prjLijst.filter(p => p.afgesloten).length;
+            const afg = this._prjLijst.filter(p => p.afgesloten && this._prjLeiderOk(p)).length;
             telling.textContent = woorden.length
                 ? (lijst.length + (lijst.length === 1 ? ' project gevonden' : ' projecten gevonden') + ' (in alle projecten)')
                 : (lijst.length + (lijst.length === 1 ? ' project' : ' projecten') + (this._prjFilter === 'lopend' && afg ? ' · ' + afg + ' afgesloten verborgen' : ''));
         }
         if (!lijst.length) {
-            el.innerHTML = '<div class="card" style="padding:18px;text-align:center;color:var(--g1);font-size:13.5px">'
-                + (woorden.length ? 'Geen project gevonden voor "' + this.escapeHtml(this._prjZoek) + '".' : 'Geen projecten.') + '</div>';
+            const elders = zonderLeider.length;
+            let html = '<div class="card" style="padding:18px;text-align:center;color:var(--g1);font-size:13.5px;line-height:1.5">';
+            if (this._prjLeider !== 'alle' && elders > 0) {
+                html += (woorden.length
+                        ? 'Geen treffers voor "' + this.escapeHtml(this._prjZoek) + '" bij ' + this.escapeHtml(this._prjLeiderNaam()) + '.'
+                        : (this._prjLeider === 'mijn'
+                            ? 'Je bent bij geen enkel ' + (this._prjFilter === 'lopend' ? 'lopend ' : '') + 'project projectleider.'
+                            : 'Geen ' + (this._prjFilter === 'lopend' ? 'lopende ' : '') + 'projecten bij ' + this.escapeHtml(this._prjLeiderNaam()) + '.'))
+                    + '<br><button type="button" class="btn btn-outline btn-sm" style="margin-top:10px" onclick="app.prjZetLeider(\'alle\')">'
+                    + (woorden.length ? 'Zoek in alle projecten (' + elders + ')' : 'Toon alle projecten (' + elders + ')') + '</button>';
+            } else {
+                html += woorden.length ? 'Geen project gevonden voor "' + this.escapeHtml(this._prjZoek) + '".' : 'Geen projecten.';
+            }
+            el.innerHTML = html + '</div>';
             return;
         }
         el.innerHTML = lijst.map(p => {

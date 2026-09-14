@@ -1093,3 +1093,6 @@ body.a11y-cvd-palette {
 .dp-regie input { width: 20px; height: 20px; }
 .dp-bewaar { margin: 2px 0 24px; }
 .dp-bewaar:disabled { opacity: .5; }
+.prj-leiderbalk { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.prj-leiderkeuze { flex: 1; min-width: 0; }
+.prj-filterweg { white-space: nowrap; border-radius: 16px; flex-shrink: 0; }

@@ -984,6 +984,7 @@
 <!-- ========== SCREEN: PROJECTEN (v391, bureel) ========== -->
 <div class="screen" id="screenProjecten">
     <input type="search" id="prjZoek" class="form-input prj-zoek" placeholder="Zoek op naam, P-nummer, klant of gemeente…" autocomplete="off" oninput="app.prjZoeken(this.value)">
+    <div id="prjLeiderBalk"></div>
     <div class="mb-subtabs" id="prjFilters">
         <button class="mb-subtab active" data-f="lopend" onclick="app.prjZetFilter('lopend')">Lopend</button>
         <button class="mb-subtab" data-f="alles" onclick="app.prjZetFilter('alles')">Alles</button>

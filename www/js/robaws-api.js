@@ -7589,6 +7589,7 @@ const RobawsAPI = {
             verantwoordelijke: this._efTekst(ef, 'Verantwoordelijke project:'),
             type: this._efTekst(ef, 'Type projecten'),
             datum: x.date || '',
+            siteManagerId: x.siteManagerId ? String(x.siteManagerId) : null,   // v392: native projectleider (Robaws-gebruiker)
         };
     },
 
