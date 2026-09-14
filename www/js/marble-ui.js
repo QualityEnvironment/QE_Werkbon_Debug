@@ -50,6 +50,9 @@
         screenUrenAnalyse: { sub: 'Alle werknemers', title: 'Uren-analyse' },
         screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
         screenAanvragen:   { sub: 'Verlof · Materiaal · Materieel', title: 'Aanvragen' },
+        screenOrganisatie: { sub: 'Aanvragen · Projecten', title: 'Organisatie' },
+        screenProjecten:   { sub: 'Alle projecten — tik om dagen in te plannen', title: 'Projecten' },
+        screenToestel:     { sub: 'Toestemmingen en toestelfuncties', title: 'Toestel' },
         screenRecap:       { sub: 'Terugblik per maand', title: 'Maandrecap' },
         screenJaar:        { sub: 'Boekjaar 2025-2026 · bouwverlof', title: 'Jaaroverzicht' },
         screenVerlofDetail:{ sub: 'Details & communicatie', title: 'Verlofaanvraag' },
@@ -251,6 +254,31 @@
             ['Materieel lenen', 'Onder Materieel reserveer je een camionet of machine: kies datums, dien in, en na goedkeuring zijn die dagen voor jou vast. "Vorige aanvragingen" toont de status van al je aanvragen.'],
             ['Goedkeuren (bureel)', 'Bureel ziet bovenaan een Goedkeuren-kaart met een teller: verlof, facturen en materieel die op een beslissing wachten.', '#aanvraagGoedkeurenCard']
         ] },
+        screenOrganisatie: { name: 'ORGANISATIE', steps: [
+            ['Compartimenten', 'Organisatie bundelt alles wat geen klokken of werkbon is: je aanvragen, en voor bureel ook de projecten.'],
+            ['Aanvragen', 'Verlof, materiaal, materieel en budget — plus de Goedkeuren-kaart met de teller van wat op jou wacht.'],
+            ['Projecten', 'Zoek tussen alle projecten en maak onderweg dagplanningen voor de monteurs.']
+        ] },
+        screenProjecten: { name: 'PROJECTEN', steps: [
+            ['Zoeken', 'Typ een deel van de naam, het P-nummer, de klant of de gemeente — de zoekopdracht kijkt in álle projecten, ook de afgesloten.', '#prjZoek'],
+            ['Lopend of alles', 'Zonder zoekterm zie je standaard de lopende projecten; "Alles" toont ook de afgewerkte.', '#prjFilters'],
+            ['Ingepland?', 'Onder elk lopend project staat of er de komende twee weken al iemand ingepland is.']
+        ] },
+        screenProjectDetail: { name: 'PROJECT', steps: [
+            ['Werf en klant', 'Bovenaan de klant, het werfadres (met Route) en de verantwoordelijke.'],
+            ['Dagplanning maken', 'Met "+ Dagplanning maken" plan je één of meerdere dagen in voor één of meerdere personen.'],
+            ['Ingepland', 'De geplande dagen per datum. Tik een planning om ze te kopiëren naar andere dagen of te verwijderen.']
+        ] },
+        screenDagplanningNieuw: { name: 'DAGPLANNING', steps: [
+            ['Wie', 'Tik de personen aan. "bezet" of "verlof" betekent dat die persoon op een gekozen dag al iets heeft — plannen mag, de app waarschuwt.'],
+            ['Wanneer', 'Tik dagen aan in de kalender (meerdere mag) of gebruik de snelknoppen. Elke dag wordt een eigen dagplanning.'],
+            ['Uren, kleur en titel', 'Standaard 06:45–15:30, de kleur van de gekozen monteur en het projectnummer als titel — alles aanpasbaar.'],
+            ['Inplannen', 'De app slaat dagen over die al precies zo op dit project staan en controleert na het bewaren of elke planning echt in Robaws staat.']
+        ] },
+        screenToestel: { name: 'TOESTEL', steps: [
+            ['Toestemmingen', 'Hier zie je welke toestemmingen de app heeft. "Alles in één keer toestaan" vraagt ze meteen allemaal.', '#toestelInhoud'],
+            ['Geblokkeerd?', 'Heb je eerder "niet meer vragen" gekozen, dan opent de app de instellingen zodat je het daar kan aanzetten.']
+        ] },
         screenVerlofDetail: { name: 'VERLOFAANVRAAG', steps: [
             ['Status & periode', 'Bovenaan je aanvraag met de beslissing: aangevraagd, goedgekeurd of geweigerd.'],
             ['Communicatie', 'De draad toont alle opmerkingen — ook die van bureel. Typ onderaan om te reageren; je bericht staat op jouw naam.', '#verlofChatList']
@@ -311,7 +339,13 @@
         /* bureel krijgt de goedkeur-hub in de rondleiding */
         try {
             var u = (window.RobawsAPI && RobawsAPI.getLoggedInUser) ? RobawsAPI.getLoggedInUser() : null;
-            if (u && u.role === 'bureel') list.push('screenGoedkeuren');
+            if (u && u.role === 'bureel') {
+                list.push('screenGoedkeuren');
+                /* v391: bureel krijgt Organisatie + Projecten (vóór Aanvragen) */
+                var ai = list.indexOf('screenAanvragen');
+                if (ai >= 0) list.splice(ai, 0, 'screenOrganisatie');
+                list.push('screenProjecten');
+            }
         } catch (e) { /* rondleiding mag nooit crashen op een rol-check */ }
         var admin = document.getElementById('adminCard');
         var ana = document.getElementById('urenAnalyseCard');

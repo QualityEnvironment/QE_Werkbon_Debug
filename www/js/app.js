@@ -1837,7 +1837,8 @@ const app = {
 
         // Update nav
         document.querySelectorAll('.nav-item').forEach(n => {
-            n.classList.toggle('active', n.dataset.screen === screenId);
+            n.classList.toggle('active', n.dataset.screen === screenId
+                || (n.dataset.screens || '').split(',').indexOf(screenId) >= 0);  // v391
         });
 
         // Update header
@@ -1859,6 +1860,11 @@ const app = {
             screenClock: 'Klok',
             screenAfwezigheid: 'Afwezigheid melden',  // v219
             screenAanvragen: 'Aanvragen',  // v278
+            screenOrganisatie: 'Organisatie',  // v391
+            screenProjecten: 'Projecten',  // v391
+            screenProjectDetail: 'Project',  // v391
+            screenDagplanningNieuw: 'Dagplanning maken',  // v391
+            screenToestel: 'Toestel & toestemmingen',  // v391
             screenTaakOntvangers: 'Taak-ontvangers',  // v381
             screenAppRechten: 'Toegang tot onderdelen',  // v384
             screenVerlofDetail: 'Verlofaanvraag',  // v278
@@ -1871,7 +1877,10 @@ const app = {
 
         const backBtn = document.getElementById('headerBack');
         // Geen back-button op hoofdschermen EN op betaalschermen (factuur is al aangemaakt, mag niet herhaald worden)
-        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenAanvragen', 'screenClock', 'screenPayment', 'screenOverschrijving'];
+        // v391: Aanvragen is een compartiment van Organisatie — alleen wie geen hub
+        // heeft (monteur/technieker) krijgt het als hoofdscherm zonder terugknop.
+        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenOrganisatie', 'screenClock', 'screenPayment', 'screenOverschrijving'];
+        if (!this._orgMagProjecten()) noBackScreens.push('screenAanvragen');
         backBtn.classList.toggle('visible', !noBackScreens.includes(screenId));
 
         // Scroll to top
@@ -1886,6 +1895,12 @@ const app = {
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
         if (screenId === 'screenAanvragen') this.openAanvragenTab();  // v278
         if (screenId === 'screenGoedkeuren') this.loadGoedkeuren();  // v278
+        // v391: Organisatie · Projecten · Toestel
+        if (screenId === 'screenOrganisatie') this.loadOrganisatie();
+        if (screenId === 'screenProjecten') this.loadProjecten();
+        if (screenId === 'screenProjectDetail') { this.renderProjectDetail(); this.loadProjectPlanning(); }
+        if (screenId === 'screenDagplanningNieuw' && !this._dp) setTimeout(() => this.goBack(), 0);
+        if (screenId === 'screenToestel') this.loadToestel();
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -1934,6 +1949,18 @@ const app = {
                     break;
                 case 'screenProfile':
                     // Profiel heeft geen dynamische data — niets te refreshen
+                    break;
+                case 'screenOrganisatie':   // v391
+                    this.loadOrganisatie();
+                    break;
+                case 'screenProjecten':
+                    await this.loadProjecten(true);
+                    break;
+                case 'screenProjectDetail':
+                    await this.loadProjectPlanning();
+                    break;
+                case 'screenToestel':
+                    this.loadToestel();
                     break;
                 default:
                     // Geen specifieke loader voor dit scherm: stilletjes niets doen.
@@ -12056,6 +12083,8 @@ const app = {
             ]);
             const n = (verlof.length || 0) + (fact.length || 0) + (mat.length || 0);
             if (n > 0) { badge.textContent = String(n); badge.style.display = ''; } else badge.style.display = 'none';
+            const orgBadge = document.getElementById('orgAanvragenBadge');  // v391
+            if (orgBadge) { if (n > 0) { orgBadge.textContent = String(n); orgBadge.style.display = ''; } else orgBadge.style.display = 'none'; }
             try { if (window.QEBridge && QEBridge.setApprovalCount) QEBridge.setApprovalCount(n); } catch (_e) {}
         } catch (e) { badge.style.display = 'none'; }
     },
@@ -18917,6 +18946,826 @@ const app = {
         const M = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
         const p = String(d).split('-');
         return parseInt(p[2], 10) + ' ' + (M[parseInt(p[1], 10) - 1] || '');
+    },
+
+    // ============================================================
+    // v391: ORGANISATIE — nieuw onderdeel in de onderbalk (was "Aanvragen").
+    // Compartimenten zoals bij Logistiek: Aanvragen (iedereen) + Projecten
+    // (bureel: zoeken tussen alle projecten en onderweg dagplanningen maken).
+    // Wie maar één compartiment heeft (monteur/technieker) gaat meteen naar
+    // Aanvragen. Daarnaast het scherm Toestel & toestemmingen (APK 1.245).
+    // ============================================================
+    _orgMagProjecten() {
+        const u = RobawsAPI.getLoggedInUser();
+        return !!(u && u.role === 'bureel') && RobawsAPI.magAppTool('projecten');
+    },
+
+    openOrganisatie() {
+        if (!this._orgMagProjecten()) { this.navigate('screenAanvragen'); return; }
+        this.navigate('screenOrganisatie');
+    },
+
+    loadOrganisatie() {
+        try { this._refreshAanvraagGoedkeurCount(); } catch (_e) {}
+        const sub = document.getElementById('orgProjectenSub');
+        if (!sub) return;
+        RobawsAPI.getProjectenOverzicht().then(lijst => {
+            const lopend = lijst.filter(p => !p.afgesloten).length;
+            sub.textContent = lopend + ' lopende projecten — zoek en plan dagen in';
+        }).catch(() => {});
+    },
+
+    _prjNorm(s) {
+        return String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    },
+
+    _prjTijd(d) {
+        return d ? String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
+    },
+
+    _prjDag(datum, lang) {
+        const d = new Date(datum + 'T12:00:00');
+        const D = lang ? ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'] : ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+        const M = lang ? ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december']
+            : ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+        return D[d.getDay()] + ' ' + d.getDate() + ' ' + M[d.getMonth()];
+    },
+
+    _prjStatusKlasse(p) {
+        if (p.afgesloten) return 'prj-st-dicht';
+        if (/voorbereiding/i.test(p.status)) return 'prj-st-voorb';
+        if (/actief|uitvoering|lopend/i.test(p.status)) return 'prj-st-actief';
+        return 'prj-st-ander';
+    },
+
+    /** Venster voor bezetting: vorige week t/m 4 weken vooruit (1 gedeelde, gecachte ophaling). */
+    _prjVensterBereik() {
+        return { van: RobawsAPI._localDateStr(new Date(), -7), tot: RobawsAPI._localDateStr(new Date(), 28) };
+    },
+
+    _prjFilter: 'lopend',
+    _prjZoek: '',
+
+    openProjecten() {
+        if (!this._orgMagProjecten()) { this.toast('Alleen voor bureel', true); return; }
+        this.navigate('screenProjecten', true);
+    },
+
+    async loadProjecten(force) {
+        const el = document.getElementById('prjLijst');
+        if (!el) return;
+        const zoek = document.getElementById('prjZoek');
+        if (zoek && zoek.value !== this._prjZoek) zoek.value = this._prjZoek;
+        if (!this._prjLijst || force) el.innerHTML = '<div class="spinner"></div>';
+        else this.renderProjecten();
+        try {
+            this._prjLijst = await RobawsAPI.getProjectenOverzicht({ force: !!force });
+            this.renderProjecten();
+        } catch (e) {
+            el.innerHTML = '<div class="card" style="padding:16px;text-align:center"><div style="font-size:13.5px;color:var(--g2);margin-bottom:10px">'
+                + this.escapeHtml((e && e.message) || 'Projecten laden mislukt') + '</div>'
+                + '<button class="btn btn-outline btn-sm" onclick="app.loadProjecten(true)">Opnieuw proberen</button></div>';
+            return;
+        }
+        const b = this._prjVensterBereik();
+        RobawsAPI.getPlanningVenster(b.van, b.tot, { force: !!force })
+            .then(items => { this._prjVenster = items; if (this.currentScreen === 'screenProjecten') this.renderProjecten(); })
+            .catch(() => {});
+    },
+
+    prjZoeken(waarde) {
+        this._prjZoek = String(waarde || '');
+        this.renderProjecten();
+    },
+
+    prjZetFilter(f) {
+        this._prjFilter = f === 'alles' ? 'alles' : 'lopend';
+        this.renderProjecten();
+    },
+
+    /** projectId → { eerste: datum, dagen: aantal } voor vandaag t/m 13 dagen vooruit. */
+    _prjKomend() {
+        const uit = {};
+        if (!this._prjVenster) return uit;
+        const van = RobawsAPI._localDateStr(new Date()), tot = RobawsAPI._localDateStr(new Date(), 13);
+        for (const i of this._prjVenster) {
+            if (!i.projectId || !i.datum || i.datum < van || i.datum > tot) continue;
+            const u = uit[i.projectId] || (uit[i.projectId] = { eerste: i.datum, dagen: new Set() });
+            if (i.datum < u.eerste) u.eerste = i.datum;
+            u.dagen.add(i.datum);
+        }
+        return uit;
+    },
+
+    renderProjecten() {
+        const el = document.getElementById('prjLijst');
+        if (!el || !this._prjLijst) return;
+        document.querySelectorAll('#prjFilters .mb-subtab').forEach(b => b.classList.toggle('active', b.dataset.f === this._prjFilter));
+        const woorden = this._prjNorm(this._prjZoek).trim().split(/\s+/).filter(Boolean);
+        const komend = this._prjKomend();
+        let lijst = this._prjLijst.filter(p => {
+            if (!woorden.length) return this._prjFilter === 'alles' || !p.afgesloten;
+            const hooi = this._prjNorm([p.logicId, p.naam, p.naamProject, p.klant, p.eindklant, p.adresTekst,
+                p.adres.addressLine2, p.verantwoordelijke, p.status, p.type].join(' '));
+            return woorden.every(w => hooi.indexOf(w) >= 0);
+        });
+        const rang = (p) => p.afgesloten ? 2 : (/voorbereiding/i.test(p.status) ? 1 : 0);
+        lijst.sort((a, b) => rang(a) - rang(b) || String(b.logicId).localeCompare(String(a.logicId), undefined, { numeric: true }));
+        const telling = document.getElementById('prjTelling');
+        if (telling) {
+            const afg = this._prjLijst.filter(p => p.afgesloten).length;
+            telling.textContent = woorden.length
+                ? (lijst.length + (lijst.length === 1 ? ' project gevonden' : ' projecten gevonden') + ' (in alle projecten)')
+                : (lijst.length + (lijst.length === 1 ? ' project' : ' projecten') + (this._prjFilter === 'lopend' && afg ? ' · ' + afg + ' afgesloten verborgen' : ''));
+        }
+        if (!lijst.length) {
+            el.innerHTML = '<div class="card" style="padding:18px;text-align:center;color:var(--g1);font-size:13.5px">'
+                + (woorden.length ? 'Geen project gevonden voor "' + this.escapeHtml(this._prjZoek) + '".' : 'Geen projecten.') + '</div>';
+            return;
+        }
+        el.innerHTML = lijst.map(p => {
+            const k = komend[p.id];
+            const plan = k
+                ? '<div class="prj-plan prj-plan-ja"><span class="prj-dot"></span>Ingepland vanaf ' + this.escapeHtml(this._prjDag(k.eerste))
+                    + (k.dagen.size > 1 ? ' · ' + k.dagen.size + ' dagen de komende 2 weken' : '') + '</div>'
+                : (!p.afgesloten && this._prjVenster ? '<div class="prj-plan">Niets ingepland de komende 2 weken</div>' : '');
+            const sub = [p.klant, p.adres.city].filter(Boolean).map(x => this.escapeHtml(x)).join(' · ');
+            return '<div class="card card-clickable prj-rij" onclick="app.openProjectDetail(\'' + this.escapeHtml(p.id) + '\')">'
+                + '<div class="prj-rij-kop"><span class="prj-nr">' + this.escapeHtml(p.logicId || '#' + p.id) + '</span>'
+                + '<span class="prj-status ' + this._prjStatusKlasse(p) + '">' + this.escapeHtml(p.status || 'zonder status') + '</span></div>'
+                + '<div class="prj-naam">' + this.escapeHtml(p.naam) + '</div>'
+                + (sub ? '<div class="prj-sub">' + sub + '</div>' : '')
+                + plan + '</div>';
+        }).join('');
+    },
+
+    // ---------------------------------------------------------------- detail
+    openProjectDetail(id) {
+        const p = (this._prjLijst || []).find(x => x.id === String(id));
+        if (!p) { this.toast('Project niet gevonden', true); return; }
+        this._prjHuidig = p;
+        this._prjPlanItems = null;
+        this.navigate('screenProjectDetail', true);
+    },
+
+    renderProjectDetail() {
+        const p = this._prjHuidig;
+        const el = document.getElementById('prjDetail');
+        if (!el) return;
+        if (!p) { el.innerHTML = ''; return; }
+        const rij = (label, waarde) => waarde
+            ? '<div class="prj-info-rij"><span class="prj-info-l">' + label + '</span><span class="prj-info-w">' + waarde + '</span></div>' : '';
+        const adres = p.adresTekst
+            ? this.escapeHtml(p.adresTekst) + (p.adres.addressLine2 ? '<br><span style="color:var(--g1)">' + this.escapeHtml(p.adres.addressLine2) + '</span>' : '')
+                + '<br><button class="mb-minibtn" style="margin-top:6px" onclick="app.prjRoute()">Route</button>'
+            : '';
+        el.innerHTML = '<div class="mb-head"><div class="mb-head-sub">' + this.escapeHtml([p.logicId, p.status].filter(Boolean).join(' · ')) + '</div>'
+            + '<div class="mb-head-title prj-titel">' + this.escapeHtml(p.naam) + '</div></div>'
+            + '<div class="card prj-info">'
+            + rij('Klant', this.escapeHtml(p.klant))
+            + rij('Eindklant', p.eindklant && p.eindklant !== p.klant ? this.escapeHtml(p.eindklant) : '')
+            + rij('Werf', adres)
+            + rij('Verantwoordelijke', this.escapeHtml(p.verantwoordelijke))
+            + rij('Type', this.escapeHtml(p.type))
+            + '</div>'
+            + '<button class="btn btn-primary btn-full" style="margin:4px 0 18px" onclick="app.openDagplanningNieuw()">+ Dagplanning maken</button>'
+            + '<div id="prjPlanLijst"><div class="spinner"></div></div>';
+    },
+
+    prjRoute() {
+        const p = this._prjHuidig;
+        if (!p || !p.adresTekst) return;
+        const url = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(p.adresTekst);
+        if (window.QENative && QENative.beschikbaar()) { QENative.navigeer(p.adresTekst); return; }
+        window.open(url, '_blank');
+    },
+
+    async loadProjectPlanning() {
+        const p = this._prjHuidig;
+        const box = document.getElementById('prjPlanLijst');
+        if (!p || !box) return;
+        if (!this._prjPlanItems) box.innerHTML = '<div class="spinner"></div>';
+        try {
+            const [items, types, emps] = await Promise.all([
+                RobawsAPI.getProjectPlanning(p.id),
+                RobawsAPI.getPlanningTypes().catch(() => []),
+                RobawsAPI.getActiveEmployees().catch(() => []),
+            ]);
+            if (this._prjHuidig !== p) return;
+            this._prjPlanItems = items;
+            this._dpTypes = types;
+            this._prjEmpNamen = {};
+            (emps || []).forEach(e => { this._prjEmpNamen[String(e.employeeId)] = String(e.name || '').split(' ')[0] || e.name; });
+            this.renderProjectPlanning();
+        } catch (e) {
+            box.innerHTML = '<div class="card" style="padding:14px;text-align:center"><div style="font-size:13px;color:var(--g2);margin-bottom:8px">'
+                + this.escapeHtml((e && e.message) || 'Planning laden mislukt') + '</div>'
+                + '<button class="btn btn-outline btn-sm" onclick="app.loadProjectPlanning()">Opnieuw proberen</button></div>';
+        }
+    },
+
+    _prjTypeKleur(typeId) {
+        const t = (this._dpTypes || []).find(x => x.id === String(typeId));
+        return (t && t.kleur) || 'var(--b2)';
+    },
+
+    _prjPlanRij(i) {
+        const p = this._prjHuidig;
+        const namen = i.employeeIds.map(id => (this._prjEmpNamen && this._prjEmpNamen[id]) || ('#' + id)).join(', ');
+        const titelAnders = i.summary && p && this._prjNorm(i.summary) !== this._prjNorm(p.naam)
+            && this._prjNorm(i.summary) !== this._prjNorm((p.logicId ? p.logicId + ' ' : '') + p.naam);
+        return '<div class="prj-plan-rij" onclick="app.prjPlanActie(\'' + this.escapeHtml(i.id) + '\')">'
+            + '<span class="prj-kleur" style="background:' + this.escapeHtml(this._prjTypeKleur(i.typeId)) + '"></span>'
+            + '<div class="prj-plan-info"><div class="prj-plan-t">' + this._prjTijd(i.start) + '–' + this._prjTijd(i.eind)
+            + ' · ' + this.escapeHtml(namen || 'niemand') + '</div>'
+            + (titelAnders ? '<div class="prj-plan-s">' + this.escapeHtml(i.summary) + '</div>' : '')
+            + '</div>'
+            + (i.regie ? '<span class="prj-tag">regie</span>' : '')
+            + (i.reeks ? '<span class="prj-tag">reeks</span>' : '')
+            + '<span class="mb-prow-arrow">›</span></div>';
+    },
+
+    renderProjectPlanning() {
+        const box = document.getElementById('prjPlanLijst');
+        const items = this._prjPlanItems;
+        if (!box || !items) return;
+        const vandaag = RobawsAPI._localDateStr(new Date());
+        const morgen = RobawsAPI._localDateStr(new Date(), 1);
+        const komend = items.filter(i => i.datum >= vandaag).sort((a, b) => (a.start || 0) - (b.start || 0));
+        const eerder = items.filter(i => i.datum && i.datum < vandaag).sort((a, b) => (b.start || 0) - (a.start || 0)).slice(0, 15);
+        const groep = (lijst) => {
+            let html = '', dag = null;
+            for (const i of lijst) {
+                if (i.datum !== dag) {
+                    dag = i.datum;
+                    const label = dag === vandaag ? 'Vandaag · ' + this._prjDag(dag) : dag === morgen ? 'Morgen · ' + this._prjDag(dag) : this._prjDag(dag, true);
+                    html += '<div class="prj-dagkop">' + this.escapeHtml(label) + '</div>';
+                }
+                html += this._prjPlanRij(i);
+            }
+            return html;
+        };
+        let html = '<div class="section-header"><h2>Ingepland</h2><span class="badge">' + komend.length + '</span></div>';
+        html += komend.length ? '<div class="card prj-plan-kaart">' + groep(komend) + '</div>'
+            : '<div class="card" style="padding:16px;text-align:center;color:var(--g1);font-size:13.5px;margin-bottom:14px">Nog niets ingepland op dit project.</div>';
+        if (eerder.length) {
+            const open = !!this._prjEerderOpen;
+            html += '<button class="mb-minibtn" style="margin:4px 0 10px" onclick="app._prjEerderOpen=!app._prjEerderOpen;app.renderProjectPlanning()">'
+                + (open ? 'Eerdere dagen verbergen' : 'Eerdere dagen tonen (' + eerder.length + ')') + '</button>';
+            if (open) html += '<div class="card prj-plan-kaart prj-eerder">' + groep(eerder) + '</div>';
+        }
+        box.innerHTML = html;
+    },
+
+    prjPlanActie(id) {
+        const i = (this._prjPlanItems || []).find(x => x.id === String(id));
+        if (!i) return;
+        const namen = i.employeeIds.map(e => (this._prjEmpNamen && this._prjEmpNamen[e]) || ('#' + e)).join(', ');
+        const t = (this._dpTypes || []).find(x => x.id === i.typeId);
+        const verleden = i.datum < RobawsAPI._localDateStr(new Date());
+        const html = '<div style="padding:4px 4px 8px">'
+            + '<div style="font-size:12px;color:var(--g1);margin-bottom:2px">' + this.escapeHtml(this._prjDag(i.datum, true)) + ' · '
+            + this._prjTijd(i.start) + '–' + this._prjTijd(i.eind) + '</div>'
+            + '<div style="font-size:17px;font-weight:600;color:var(--ink);margin-bottom:10px">' + this.escapeHtml(i.summary || '(zonder titel)') + '</div>'
+            + '<div style="font-size:13.5px;color:var(--g2);line-height:1.6;margin-bottom:14px">'
+            + 'Wie: ' + this.escapeHtml(namen || 'niemand') + '<br>'
+            + 'Kleur: <span class="prj-kleur" style="display:inline-block;vertical-align:-2px;background:' + this.escapeHtml(this._prjTypeKleur(i.typeId)) + '"></span> '
+            + this.escapeHtml((t && t.naam) || 'geen') + (i.regie ? '<br>Regie: ja' : '') + '</div>'
+            + '<button class="btn btn-primary btn-full" style="margin-bottom:10px" onclick="app.closeModal();app.prjPlanKopieer(\'' + this.escapeHtml(i.id) + '\')">Kopiëren naar andere dag(en)</button>'
+            + (i.reeks
+                ? '<div style="font-size:12.5px;color:var(--g1);line-height:1.5;margin-bottom:10px">Deze planning hoort bij een herhalende reeks in Robaws — aanpassen of verwijderen doe je in Robaws zelf.</div>'
+                : '<button class="btn btn-outline btn-full" style="margin-bottom:10px;color:var(--red2);border-color:var(--red2)" onclick="app.prjPlanVerwijder(\'' + this.escapeHtml(i.id) + '\')">'
+                    + (verleden ? 'Verwijderen (dag is voorbij)' : 'Verwijderen') + '</button>')
+            + '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Sluiten</button></div>';
+        this.showModal(html);
+    },
+
+    prjPlanKopieer(id) {
+        const i = (this._prjPlanItems || []).find(x => x.id === String(id));
+        if (i) this.openDagplanningNieuw({ kopie: i });
+    },
+
+    async prjPlanVerwijder(id) {
+        const i = (this._prjPlanItems || []).find(x => x.id === String(id));
+        if (!i || this._prjVerwijderBezig) return;
+        const tekst = 'Deze dagplanning verwijderen?\n\n' + this._prjDag(i.datum, true) + ' · ' + this._prjTijd(i.start) + '–' + this._prjTijd(i.eind)
+            + '\n' + (i.summary || '');
+        if (!confirm(tekst)) return;
+        this._prjVerwijderBezig = true;
+        this.closeModal();
+        try {
+            await RobawsAPI.deletePlanningItem(i.id);
+            this.toast('Dagplanning verwijderd');
+            this._prjPlanItems = (this._prjPlanItems || []).filter(x => x.id !== i.id);
+            this.renderProjectPlanning();
+            this.loadProjectPlanning();
+        } catch (e) {
+            this.toast('Verwijderen mislukt: ' + ((e && e.message) || '?'), true);
+        } finally {
+            this._prjVerwijderBezig = false;
+        }
+    },
+
+    // -------------------------------------------------- toestel & toestemmingen
+    openToestel() {
+        this.navigate('screenToestel', true);
+    },
+
+    loadToestel() {
+        const el = document.getElementById('toestelInhoud');
+        if (!el) return;
+        if (!this._toestelZichtLuister) {
+            this._toestelZichtLuister = true;
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && this.currentScreen === 'screenToestel') setTimeout(() => this.loadToestel(), 400);
+            });
+        }
+        const N = window.QENative;
+        if (!N || !N.beschikbaar()) {
+            let apk = '';
+            try { apk = (window.QEBridge && QEBridge.getApkVersionName) ? QEBridge.getApkVersionName() : ''; } catch (_e) {}
+            el.innerHTML = '<div class="card" style="padding:16px;font-size:13.5px;color:var(--g2);line-height:1.55">'
+                + (window.QEBridge
+                    ? 'Deze app (APK ' + this.escapeHtml(apk || 'ouder') + ') kent de nieuwe toestelfuncties nog niet. '
+                        + 'Installeer <b>APK 1.245</b> — daarna staan hier alle toestemmingen en kan je ze in één keer geven.'
+                    : 'Toestelfuncties zijn alleen beschikbaar in de Android-app.')
+                + '</div>';
+            return;
+        }
+        const info = N.info() || {};
+        const perms = info.permissies || {};
+        const hw = info.hardware || {};
+        const RIJEN = [
+            ['locatie', 'Locatie', 'Klokken met GPS'],
+            ['camera', 'Camera', "Foto's en etiketten scannen"],
+            ['meldingen', 'Meldingen', 'Goedkeuringen en herinneringen'],
+            ['microfoon', 'Microfoon', 'Spraak- en video-opnames'],
+            ['agenda', 'Agenda', 'Planning in je telefoonagenda'],
+            ['bluetooth', 'Apparaten in de buurt', 'Bluetooth-printers en meettoestellen'],
+            ['batterij', 'Altijd actief', 'Meldingen ook als de app op de achtergrond staat'],
+            ['installeren', 'Updates installeren', 'Een nieuwe APK rechtstreeks vanuit de app'],
+        ];
+        const pill = (st) => st === 'toegestaan' ? '<span class="prj-status prj-st-actief">Toegestaan</span>'
+            : st === 'niet-nodig' ? '<span class="prj-status prj-st-dicht">Niet nodig</span>'
+            : '<span class="prj-status prj-st-voorb">Niet toegestaan</span>';
+        const nietOk = RIJEN.filter(r => ['locatie', 'camera', 'meldingen', 'microfoon', 'agenda', 'bluetooth'].indexOf(r[0]) >= 0
+            && perms[r[0]] !== 'toegestaan' && perms[r[0]] !== 'niet-nodig');
+        el.innerHTML = (nietOk.length
+                ? '<button class="btn btn-primary btn-full" style="margin-bottom:14px" onclick="app.toestelAllesToestaan()">Alles in één keer toestaan</button>' : '')
+            + '<div class="card prj-plan-kaart">' + RIJEN.map(r => {
+                const st = perms[r[0]] || 'onbekend';
+                return '<div class="prj-plan-rij" style="cursor:default">'
+                    + '<div class="prj-plan-info"><div class="prj-plan-t">' + r[1] + '</div><div class="prj-plan-s">' + r[2] + '</div></div>'
+                    + pill(st)
+                    + (st !== 'toegestaan' && st !== 'niet-nodig'
+                        ? '<button class="mb-minibtn" style="margin-left:8px" onclick="app.toestelVraag(\'' + r[0] + '\')">Toestaan</button>' : '')
+                    + '</div>';
+            }).join('') + '</div>'
+            + '<div class="section-header"><h2>Toestel</h2></div>'
+            + '<div class="card" style="padding:14px 16px;font-size:13px;color:var(--g2);line-height:1.7">'
+            + 'App: ' + this.escapeHtml(info.versionName || '?') + ' · toestelfuncties v' + this.escapeHtml(String(info.apiVersie || '?')) + '<br>'
+            + 'Toestel: ' + this.escapeHtml([info.merk, info.model].filter(Boolean).join(' ')) + ' · Android ' + this.escapeHtml(String(info.android || '?')) + '<br>'
+            + 'Locatie (GPS): ' + (hw.locatieAan ? 'aan' : '<b style="color:var(--amber2)">uit</b>')
+            + ' · NFC: ' + (hw.nfc ? (hw.nfcAan ? 'aan' : '<b style="color:var(--amber2)">uit</b>') : 'geen')
+            + ' · Bluetooth: ' + (hw.bluetooth ? 'ja' : 'nee') + '</div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'
+            + (!hw.locatieAan ? '<button class="mb-minibtn" onclick="QENative.openInstelling(\'locatie\')">Locatie aanzetten</button>' : '')
+            + (hw.nfc && !hw.nfcAan ? '<button class="mb-minibtn" onclick="QENative.openInstelling(\'nfc\')">NFC aanzetten</button>' : '')
+            + '<button class="mb-minibtn" onclick="QENative.openInstelling(\'app\')">App-instellingen</button></div>';
+    },
+
+    async toestelVraag(naam) {
+        const N = window.QENative;
+        if (!N) return;
+        const r = await N.vraagPermissie([naam]);
+        const st = r && r.resultaat && r.resultaat[naam];
+        if (st === 'geblokkeerd' && confirm('Android vraagt dit niet meer opnieuw. De app-instellingen openen om het daar aan te zetten?')) {
+            N.openInstelling(naam === 'meldingen' ? 'meldingen' : 'app');
+        }
+        this.loadToestel();
+    },
+
+    async toestelAllesToestaan() {
+        const N = window.QENative;
+        if (!N) return;
+        await N.vraagPermissie(['locatie', 'camera', 'meldingen', 'microfoon', 'agenda', 'bluetooth']);
+        this.loadToestel();
+    },
+
+    // ------------------------------------------------------ dagplanning maken
+    // Eén dagplanning per gekozen DAG met alle gekozen personen samen (zoals
+    // bureel ze in Robaws maakt: bv. Hervé + Vince op één item). Standaard
+    // 06:45-15:30, kleur = planningstype van de (eerste) persoon, titel =
+    // projectnummer + naam, adres = werfadres. Bezetting en verlof van de
+    // gekozen personen staan erbij; dubbels op hetzelfde project worden
+    // overgeslagen; elke planning wordt teruggelezen als bewijs.
+    _dpVolgendeWerkdag() {
+        for (let n = 1; n < 8; n++) {
+            const d = new Date(Date.now() + n * 86400e3);
+            if (d.getDay() !== 0 && d.getDay() !== 6) return RobawsAPI._localDateStr(d);
+        }
+        return RobawsAPI._localDateStr(new Date(), 1);
+    },
+
+    _dpHtmlNaarTekst(html) {
+        if (!html) return '';
+        const t = String(html).replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]+>/g, '');
+        const ta = document.createElement('textarea');
+        ta.innerHTML = t;
+        return ta.value.replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    },
+
+    _dpTekstNaarHtml(tekst) {
+        const regels = String(tekst || '').split(/\r?\n/).map(r => r.trim());
+        if (!regels.some(Boolean)) return '';
+        return regels.map(r => '<p>' + (r ? this.escapeHtml(r) : '&nbsp;') + '</p>').join('');
+    },
+
+    async openDagplanningNieuw(opts) {
+        const p = this._prjHuidig;
+        if (!p) return;
+        const kopie = opts && opts.kopie;
+        this._dp = {
+            project: p,
+            datums: new Set(),
+            emp: new Set(kopie ? kopie.employeeIds : []),
+            start: kopie && kopie.start ? this._prjTijd(kopie.start) : '06:45',
+            eind: kopie && kopie.eind ? this._prjTijd(kopie.eind) : '15:30',
+            typeId: kopie ? kopie.typeId : null,
+            typeHandmatig: !!(kopie && kopie.typeId),
+            summary: kopie && kopie.summary ? kopie.summary : ((p.logicId ? p.logicId + ' ' : '') + p.naam),
+            beschrijving: kopie ? this._dpHtmlNaarTekst(kopie.description) : '',
+            regie: kopie ? !!kopie.regie : false,
+            extraDatum: false,
+            bezig: false,
+            kopie: !!kopie,
+        };
+        if (!kopie) this._dp.datums.add(this._dpVolgendeWerkdag());
+        this.navigate('screenDagplanningNieuw', true);
+        this.renderDagplanning();
+        try {
+            const [types, emps] = await Promise.all([
+                RobawsAPI.getPlanningTypes().catch(() => []),
+                RobawsAPI.getActiveEmployees().catch(() => []),
+            ]);
+            if (!this._dp || this._dp.project !== p) return;
+            this._dpTypes = types;
+            this._dpEmps = (emps || []).filter(e => e && e.employeeId != null);
+            const actief = new Set(this._dpEmps.map(e => String(e.employeeId)));
+            const weg = Array.from(this._dp.emp).filter(id => !actief.has(String(id)));
+            weg.forEach(id => this._dp.emp.delete(id));
+            if (weg.length) this.toast(weg.length + ' persoon/personen uit de kopie zijn niet meer actief en werden weggelaten');
+            if (!this._dp.typeHandmatig) this._dp.typeId = this._dpAutoType();
+            this.renderDagplanning();
+        } catch (_e) { /* scherm toont zelf wat ontbreekt */ }
+        const b = this._prjVensterBereik();
+        RobawsAPI.getPlanningVenster(b.van, b.tot)
+            .then(items => { this._dpVenster = items; if (this.currentScreen === 'screenDagplanningNieuw') this.renderDagplanning(); })
+            .catch(() => { this._dpVenster = null; });
+    },
+
+    _dpVoornaam(e) { return String((e && e.name) || '').trim().split(/\s+/)[0] || ''; },
+
+    _dpEmpLabel(e) {
+        if (/^agenda\b/i.test(String((e && e.name) || ''))) return String(e.name).trim();  // "Agenda Monteurs" voluit
+        const vn = this._dpVoornaam(e);
+        const zelfde = (this._dpEmps || []).filter(x => this._prjNorm(this._dpVoornaam(x)) === this._prjNorm(vn));
+        if (zelfde.length > 1) {
+            const delen = String(e.name || '').trim().split(/\s+/);
+            if (delen.length > 1) return vn + ' ' + delen[delen.length - 1].charAt(0) + '.';
+        }
+        return vn || String(e.name || '#' + e.employeeId);
+    },
+
+    /** Kleur kiezen zoals bureel: type met exact deze namen ("Sascha & Jens"), anders het type van de eerste persoon. */
+    _dpAutoType() {
+        const d = this._dp;
+        const types = this._dpTypes || [];
+        const emps = Array.from(d.emp).map(id => (this._dpEmps || []).find(e => String(e.employeeId) === String(id))).filter(Boolean);
+        if (!emps.length || !types.length) return null;
+        const set = emps.map(e => this._prjNorm(this._dpVoornaam(e))).sort().join('|');
+        if (emps.length > 1) {
+            for (const t of types) {
+                const delen = this._prjNorm(t.naam).split(/\s*(?:&|\+|,|\ben\b)\s*/).map(x => x.trim()).filter(Boolean);
+                if (delen.length === emps.length && delen.sort().join('|') === set) return t.id;
+            }
+        }
+        for (const e of emps) {
+            const t = types.find(x => this._prjNorm(x.naam) === this._prjNorm(this._dpVoornaam(e)));
+            if (t) return t.id;
+        }
+        return null;
+    },
+
+    /** Bezetting van één persoon op de gekozen dagen/uren (uit het gedeelde venster). */
+    _dpBezetting(empId) {
+        const d = this._dp;
+        if (!d || !this._dpVenster || !d.datums.size) return null;
+        let bezet = 0, verlof = 0;
+        const wat = [];
+        for (const datum of d.datums) {
+            const s = new Date(datum + 'T' + d.start + ':00'), e = new Date(datum + 'T' + d.eind + ':00');
+            if (isNaN(s.getTime()) || isNaN(e.getTime())) continue;
+            const hits = this._dpVenster.filter(i => i.start && i.eind && i.employeeIds.indexOf(String(empId)) >= 0 && i.start < e && i.eind > s);
+            if (!hits.length) continue;
+            if (hits.some(h => h.verlof)) { verlof++; wat.push(this._prjDag(datum) + ': verlof'); }
+            else {
+                bezet++;
+                const h = hits[0];
+                const eigen = h.projectId && h.projectId === String(d.project.id);
+                wat.push(this._prjDag(datum) + ': ' + (eigen ? 'al op dit project' : (h.summary || 'ingepland')) + ' (' + this._prjTijd(h.start) + '–' + this._prjTijd(h.eind) + ')');
+            }
+        }
+        return { bezet, verlof, n: d.datums.size, wat };
+    },
+
+    renderDagplanning() {
+        const el = document.getElementById('dpInhoud');
+        const d = this._dp;
+        if (!el || !d) return;
+        const p = d.project;
+        const vandaag = RobawsAPI._localDateStr(new Date());
+
+        // --- wie
+        let wie;
+        if (!this._dpEmps) {
+            wie = '<div class="spinner"></div>';
+        } else {
+            const groepen = [['monteur', 'Monteurs'], ['technieker', 'Techniekers'], ['bureel', 'Bureel'], ['agenda', "Agenda's"]];
+            const groepVan = (e) => /^agenda\b/i.test(String(e.name || '')) ? 'agenda' : (e.role || 'technieker');
+            wie = groepen.map(([sleutel, titel]) => {
+                const leden = this._dpEmps.filter(e => groepVan(e) === sleutel)
+                    .sort((a, b) => this._dpEmpLabel(a).localeCompare(this._dpEmpLabel(b)));
+                if (!leden.length) return '';
+                return '<div class="dp-groep">' + titel + '</div><div class="dp-chips">' + leden.map(e => {
+                    const id = String(e.employeeId);
+                    const aan = d.emp.has(id);
+                    const bz = this._dpBezetting(id);
+                    let st = '', cls = '';
+                    if (bz && bz.verlof) { st = bz.n > 1 ? 'verlof ' + bz.verlof + '/' + bz.n : 'verlof'; cls = ' dp-verlof'; }
+                    else if (bz && bz.bezet) { st = bz.n > 1 ? 'bezet ' + bz.bezet + '/' + bz.n : 'bezet'; cls = ' dp-bezet'; }
+                    return '<button type="button" class="dp-chip' + (aan ? ' aan' : '') + cls + '"'
+                        + (bz && bz.wat.length ? ' title="' + this.escapeHtml(bz.wat.join('\n')) + '"' : '')
+                        + ' onclick="app.dpWissel(\'' + this.escapeHtml(id) + '\')">'
+                        + this.escapeHtml(this._dpEmpLabel(e)) + (st ? '<span class="dp-chip-st">' + st + '</span>' : '') + '</button>';
+                }).join('') + '</div>';
+            }).join('');
+        }
+        const gekozen = Array.from(d.emp).map(id => (this._dpEmps || []).find(e => String(e.employeeId) === id)).filter(Boolean);
+        const meldingen = [];
+        gekozen.forEach(e => {
+            const bz = this._dpBezetting(String(e.employeeId));
+            if (bz && bz.wat.length) meldingen.push(this._dpEmpLabel(e) + ' — ' + bz.wat.join('; '));
+        });
+
+        // --- wanneer: 4 weken vanaf de maandag van deze week
+        const nu = new Date();
+        const ma = new Date(nu.getFullYear(), nu.getMonth(), nu.getDate() - ((nu.getDay() + 6) % 7), 12);
+        let cellen = '';
+        for (let i = 0; i < 28; i++) {
+            const dt = new Date(ma.getFullYear(), ma.getMonth(), ma.getDate() + i, 12);
+            const ds = RobawsAPI._localDateStr(dt);
+            const voorbij = ds < vandaag;
+            const aan = d.datums.has(ds);
+            const weekend = dt.getDay() === 0 || dt.getDay() === 6;
+            let stip = false;
+            if (this._dpVenster && d.emp.size && !voorbij) {
+                stip = this._dpVenster.some(it => it.datum === ds && it.employeeIds.some(x => d.emp.has(x)));
+            }
+            cellen += '<button type="button" class="dp-dag' + (aan ? ' aan' : '') + (voorbij ? ' voorbij' : '') + (weekend ? ' weekend' : '')
+                + (ds === vandaag ? ' vandaag' : '') + '"' + (voorbij ? ' disabled' : '')
+                + ' onclick="app.dpDag(\'' + ds + '\')">' + (dt.getDate() === 1 || i === 0 ? '<span class="dp-dag-m">' + ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'][dt.getMonth()] + '</span>' : '')
+                + dt.getDate() + (stip ? '<span class="dp-dag-stip"></span>' : '') + '</button>';
+        }
+        const eindRaster = RobawsAPI._localDateStr(new Date(ma.getFullYear(), ma.getMonth(), ma.getDate() + 27, 12));
+        const buiten = Array.from(d.datums).filter(x => x > eindRaster).sort();
+        const datumsLijst = Array.from(d.datums).sort();
+
+        // --- kleur
+        const types = this._dpTypes || [];
+        const type = types.find(t => t.id === d.typeId);
+        const typeOpties = '<option value="">Geen kleur</option>' + types.map(t =>
+            '<option value="' + this.escapeHtml(t.id) + '"' + (t.id === d.typeId ? ' selected' : '') + '>' + this.escapeHtml(t.naam) + '</option>').join('');
+
+        const fout = this._dpValideer();
+        const n = datumsLijst.length;
+        const knopTekst = d.bezig ? 'Bezig met inplannen…'
+            : (n ? (n === 1 ? '1 dagplanning inplannen' : n + ' dagplanningen inplannen') : 'Kies minstens één dag');
+
+        el.innerHTML = '<div class="mb-head"><div class="mb-head-sub">' + this.escapeHtml((d.kopie ? 'Kopie · ' : '') + [p.logicId, p.klant].filter(Boolean).join(' · ')) + '</div>'
+            + '<div class="mb-head-title prj-titel">' + this.escapeHtml(p.naam) + '</div></div>'
+            + (p.adresTekst ? '<div class="dp-adres">' + this.escapeHtml(p.adresTekst) + '</div>' : '<div class="dp-adres dp-waarsch">Dit project heeft geen werfadres — de planning krijgt geen locatie.</div>')
+
+            + '<div class="section-header"><h2>Wie</h2>' + (d.emp.size ? '<span class="badge">' + d.emp.size + '</span>' : '') + '</div>'
+            + '<div class="card dp-kaart">' + wie
+            + (meldingen.length ? '<div class="dp-melding">' + meldingen.map(m => this.escapeHtml(m)).join('<br>') + '</div>' : '')
+            + (this._dpVenster === null && this._dpEmps ? '<div class="dp-hint">Bezetting kon niet geladen worden — plannen kan wel.</div>' : '')
+            + '</div>'
+
+            + '<div class="section-header"><h2>Wanneer</h2>' + (n ? '<span class="badge">' + n + '</span>' : '') + '</div>'
+            + '<div class="card dp-kaart">'
+            + '<div class="dp-snel">'
+            + '<button type="button" class="mb-minibtn" onclick="app.dpSnel(\'morgen\')">Volgende werkdag</button>'
+            + '<button type="button" class="mb-minibtn" onclick="app.dpSnel(\'week\')">Rest van de week</button>'
+            + '<button type="button" class="mb-minibtn" onclick="app.dpSnel(\'volgende\')">Volgende week</button>'
+            + (n ? '<button type="button" class="mb-minibtn" onclick="app.dpSnel(\'wis\')">Wissen</button>' : '')
+            + '</div>'
+            + '<div class="dp-raster-kop"><span>ma</span><span>di</span><span>wo</span><span>do</span><span>vr</span><span>za</span><span>zo</span></div>'
+            + '<div class="dp-raster">' + cellen + '</div>'
+            + '<div class="dp-extra"><label for="dpExtraDatum">Andere datum:</label> <input type="date" id="dpExtraDatum" class="form-input" min="' + vandaag + '" onchange="app.dpExtraDatum(this.value)"></div>'
+            + (buiten.length ? '<div class="dp-buiten">' + buiten.map(x => '<button type="button" class="dp-chip aan" onclick="app.dpDag(\'' + x + '\')">'
+                + this.escapeHtml(this._prjDag(x)) + ' ×</button>').join('') + '</div>' : '')
+            + (n ? '<div class="dp-hint">' + this.escapeHtml(datumsLijst.map(x => this._prjDag(x)).join(', ')) + '</div>' : '')
+            + '</div>'
+
+            + '<div class="section-header"><h2>Uren</h2></div>'
+            + '<div class="card dp-kaart">'
+            + '<div class="dp-snel">'
+            + '<button type="button" class="mb-minibtn' + (d.start === '06:45' && d.eind === '15:30' ? ' dp-sel' : '') + '" onclick="app.dpUren(\'06:45\',\'15:30\')">Volle dag</button>'
+            + '<button type="button" class="mb-minibtn' + (d.start === '06:45' && d.eind === '12:00' ? ' dp-sel' : '') + '" onclick="app.dpUren(\'06:45\',\'12:00\')">Voormiddag</button>'
+            + '<button type="button" class="mb-minibtn' + (d.start === '12:00' && d.eind === '15:30' ? ' dp-sel' : '') + '" onclick="app.dpUren(\'12:00\',\'15:30\')">Namiddag</button>'
+            + '</div>'
+            + '<div class="dp-tijden"><div class="form-group" style="margin:0"><label>Van</label><input type="time" class="form-input" value="' + d.start + '" onchange="app.dpUren(this.value,null)"></div>'
+            + '<div class="form-group" style="margin:0"><label>Tot</label><input type="time" class="form-input" value="' + d.eind + '" onchange="app.dpUren(null,this.value)"></div></div>'
+            + '</div>'
+
+            + '<div class="section-header"><h2>Details</h2></div>'
+            + '<div class="card dp-kaart">'
+            + '<div class="form-group"><label>Titel in de planning</label><input type="text" class="form-input" maxlength="250" value="' + this.escapeHtml(d.summary) + '" oninput="app.dpVeld(\'summary\',this.value)" placeholder="Wat moet er gebeuren?"></div>'
+            + '<div class="form-group"><label>Kleur</label><div class="dp-kleurrij"><span class="dp-kleur" style="background:' + this.escapeHtml((type && type.kleur) || 'transparent') + '"></span>'
+            + '<select class="form-input" onchange="app.dpType(this.value)">' + typeOpties + '</select></div>'
+            + '<div class="dp-hint">' + (d.typeHandmatig ? 'Zelf gekozen.' : 'Automatisch volgens de gekozen personen.') + '</div></div>'
+            + '<div class="form-group"><label>Instructies (optioneel)</label><textarea class="form-input" rows="3" oninput="app.dpVeld(\'beschrijving\',this.value)" placeholder="Bv. wat mee te nemen, contactpersoon op de werf…">'
+            + this.escapeHtml(d.beschrijving) + '</textarea></div>'
+            + '<label class="dp-regie"><input type="checkbox"' + (d.regie ? ' checked' : '') + ' onchange="app.dpVeld(\'regie\',this.checked)"> Uren in regie</label>'
+            + '</div>'
+
+            + (fout && !d.bezig ? '<div class="dp-fout">' + this.escapeHtml(fout) + '</div>' : '')
+            + '<button type="button" class="btn btn-primary btn-full dp-bewaar"' + (fout || d.bezig ? ' disabled' : '') + ' onclick="app.dpBewaar()">' + knopTekst + '</button>';
+    },
+
+    _dpValideer() {
+        const d = this._dp;
+        if (!d) return 'Geen project gekozen';
+        if (!d.emp.size) return 'Kies wie er gaat.';
+        if (!d.datums.size) return 'Kies minstens één dag.';
+        if (!/^\d\d:\d\d$/.test(d.start) || !/^\d\d:\d\d$/.test(d.eind) || d.eind <= d.start) return 'Het einduur moet na het beginuur liggen.';
+        if (!String(d.summary || '').trim()) return 'Geef de planning een titel.';
+        return '';
+    },
+
+    dpWissel(id) {
+        const d = this._dp;
+        if (!d || d.bezig) return;
+        const k = String(id);
+        if (d.emp.has(k)) d.emp.delete(k); else d.emp.add(k);
+        if (!d.typeHandmatig) d.typeId = this._dpAutoType();
+        this.renderDagplanning();
+    },
+
+    dpDag(ds) {
+        const d = this._dp;
+        if (!d || d.bezig || !/^\d{4}-\d\d-\d\d$/.test(ds)) return;
+        if (ds < RobawsAPI._localDateStr(new Date())) return;
+        if (d.datums.has(ds)) d.datums.delete(ds); else d.datums.add(ds);
+        this.renderDagplanning();
+    },
+
+    dpExtraDatum(ds) {
+        if (!ds) return;
+        const d = this._dp;
+        if (d && !d.datums.has(ds)) this.dpDag(ds);
+    },
+
+    dpSnel(soort) {
+        const d = this._dp;
+        if (!d || d.bezig) return;
+        const nu = new Date();
+        const dag = (offset) => { const x = new Date(nu.getFullYear(), nu.getMonth(), nu.getDate() + offset, 12); return x; };
+        if (soort === 'wis') d.datums.clear();
+        else if (soort === 'morgen') d.datums.add(this._dpVolgendeWerkdag());
+        else if (soort === 'week') {
+            for (let i = 0; i < 7; i++) {
+                const x = dag(i);
+                if (i > 0 && x.getDay() === 1) break;
+                if (x.getDay() >= 1 && x.getDay() <= 5) d.datums.add(RobawsAPI._localDateStr(x));
+            }
+        } else if (soort === 'volgende') {
+            const totMa = ((8 - nu.getDay()) % 7) || 7;
+            for (let i = 0; i < 5; i++) d.datums.add(RobawsAPI._localDateStr(dag(totMa + i)));
+        }
+        this.renderDagplanning();
+    },
+
+    dpUren(start, eind) {
+        const d = this._dp;
+        if (!d || d.bezig) return;
+        if (start) d.start = start;
+        if (eind) d.eind = eind;
+        this.renderDagplanning();
+    },
+
+    dpType(id) {
+        const d = this._dp;
+        if (!d) return;
+        d.typeId = id || null;
+        d.typeHandmatig = true;
+        this.renderDagplanning();
+    },
+
+    /** Tekstvelden bewaren zonder te hertekenen (typen mag niet springen). */
+    dpVeld(veld, waarde) {
+        const d = this._dp;
+        if (!d) return;
+        if (veld === 'summary') d.summary = String(waarde || '');
+        else if (veld === 'beschrijving') d.beschrijving = String(waarde || '');
+        else if (veld === 'regie') d.regie = !!waarde;
+        const knop = document.querySelector('#dpInhoud .dp-bewaar');
+        const fout = this._dpValideer();
+        if (knop && !d.bezig) knop.disabled = !!fout;
+        const foutEl = document.querySelector('#dpInhoud .dp-fout');
+        if (foutEl) foutEl.textContent = fout;
+        else if (fout && knop) {
+            const div = document.createElement('div');
+            div.className = 'dp-fout';
+            div.textContent = fout;
+            knop.parentNode.insertBefore(div, knop);
+        }
+        if (!fout) { const f2 = document.querySelector('#dpInhoud .dp-fout'); if (f2) f2.remove(); }
+    },
+
+    async dpBewaar() {
+        const d = this._dp;
+        if (!d || d.bezig) return;
+        const fout = this._dpValideer();
+        if (fout) { this.toast(fout, true); return; }
+        const datums = Array.from(d.datums).sort();
+        const empIds = Array.from(d.emp);
+        const empKey = empIds.slice().sort().join(',');
+        const namen = empIds.map(id => {
+            const e = (this._dpEmps || []).find(x => String(x.employeeId) === id);
+            return e ? this._dpEmpLabel(e) : '#' + id;
+        });
+        const conflicten = [];
+        empIds.forEach((id, k) => {
+            const bz = this._dpBezetting(id);
+            if (bz && bz.wat.length) conflicten.push(namen[k] + ': ' + bz.wat.join('; '));
+        });
+        d.bezig = true;
+        this.renderDagplanning();
+        let bestaand = [];
+        try { bestaand = await RobawsAPI.getProjectPlanning(d.project.id); } catch (_e) {}
+        const isDubbel = (lijst, dt) => lijst.some(i => i.datum === dt && this._prjTijd(i.start) === d.start
+            && i.employeeIds.slice().sort().join(',') === empKey);
+        const dubbel = datums.filter(dt => isDubbel(bestaand, dt));
+        let vraag = (datums.length === 1 ? '1 dagplanning' : datums.length + ' dagplanningen') + ' maken?\n\n'
+            + d.project.naam + '\n' + namen.join(', ') + ' · ' + d.start + '–' + d.eind + '\n'
+            + datums.map(x => this._prjDag(x)).join(', ');
+        if (conflicten.length) vraag += '\n\nLet op:\n• ' + conflicten.join('\n• ');
+        if (dubbel.length) vraag += '\n\nStaat er al en wordt overgeslagen: ' + dubbel.map(x => this._prjDag(x)).join(', ');
+        const teDoen = datums.filter(dt => dubbel.indexOf(dt) < 0);
+        if (!teDoen.length) {
+            d.bezig = false;
+            this.renderDagplanning();
+            this.toast('Die planning(en) stonden er al — niets aangemaakt');
+            return;
+        }
+        if (!confirm(vraag)) { d.bezig = false; this.renderDagplanning(); return; }
+        const gelukt = [], mislukt = [], opmerkingen = [];
+        for (const dt of teDoen) {
+            try {
+                const r = await RobawsAPI.createProjectDagplanning({
+                    project: d.project, datum: dt, startTijd: d.start, eindTijd: d.eind,
+                    employeeIds: empIds, typeId: d.typeId, summary: String(d.summary).trim(),
+                    beschrijving: this._dpTekstNaarHtml(d.beschrijving), regie: d.regie,
+                });
+                gelukt.push(dt);
+                if (!r.bewijs) opmerkingen.push(this._prjDag(dt) + ' niet teruggelezen');
+                if (d.regie && !r.regieOk) opmerkingen.push(this._prjDag(dt) + ': regie-vinkje niet gezet');
+            } catch (e) {
+                // Mislukt of time-out ná verwerking? Eerst vers kijken of hij er toch staat.
+                let toch = false;
+                try { toch = isDubbel(await RobawsAPI.getProjectPlanning(d.project.id), dt); } catch (_e) {}
+                if (toch) gelukt.push(dt);
+                else mislukt.push({ dt, fout: (e && e.message) || '?' });
+            }
+            await new Promise(r => setTimeout(r, 250));
+        }
+        d.bezig = false;
+        if (mislukt.length) {
+            d.datums = new Set(mislukt.map(m => m.dt));  // alleen de mislukte dagen blijven aangevinkt
+            this.renderDagplanning();
+            this.toast((gelukt.length ? gelukt.length + ' ingepland; ' : '') + mislukt.length + ' mislukt ('
+                + mislukt.map(m => this._prjDag(m.dt)).join(', ') + '): ' + mislukt[0].fout + '\nTik opnieuw op inplannen voor de mislukte dagen.', true);
+            this._prjPlanItems = null;
+            return;
+        }
+        try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('success'); } catch (_e) {}
+        this.toast((gelukt.length === 1 ? '1 dagplanning ingepland' : gelukt.length + ' dagplanningen ingepland')
+            + (opmerkingen.length ? ' — ' + opmerkingen.join(', ') : ''), opmerkingen.length > 0);
+        this._prjPlanItems = null;
+        this._dp = null;
+        this.goBack();
     },
 };
 
