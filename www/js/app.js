@@ -623,17 +623,19 @@ const app = {
         document.body.classList.toggle('monteur-mode', this.isMonteur());
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
         // v346: Logistiek-tab alleen voor bureel
+        // v384: Logistiek = bureel + toegangsrecht; Klokken = toegangsrecht.
+        // v395: Logistiek per PERSOON en per onderdeel (ook monteurs: standaard
+        // gasflessen + eigen voertuig) — zie RobawsAPI.mijnLogistiekDelen.
+        // v388: de Klok-TAB blijft altijd zichtbaar — iedereen klokt. Het
+        // "klok"-recht regelt alleen de bureel-extra's ín de klok; zie
+        // showClockScreen.
+        this._pasNavRechtenToe();
+        // v395: rechten vers ophalen — een wijziging in de instellingen werkt
+        // zo bij de volgende start van de app, niet pas na opnieuw inloggen.
         try {
-            // v384: Logistiek = bureel + toegangsrecht; Klokken = toegangsrecht.
-            // Geen beperking ingesteld → alles zichtbaar (hub-patroon).
-            const nl = document.getElementById('navLogistiek');
-            const magLog = (this.currentUser && this.currentUser.role === 'bureel')
-                && RobawsAPI.magAppTool('logistiek');
-            if (nl) nl.style.display = magLog ? '' : 'none';
-            // v388: de Klok-TAB blijft altijd zichtbaar — iedereen klokt.
-            // Het "klok"-recht regelt alleen de bureel-extra's ín de klok
-            // (team-aanwezigheid, anderen handmatig klokken, tagbeheer);
-            // zie showClockScreen.
+            RobawsAPI.verversAppRechten()
+                .then(veranderd => { if (veranderd) this._pasNavRechtenToe(); })
+                .catch(() => {});
         } catch (_e) {}
         // Avatar in header laden
         this.refreshAvatar();
@@ -1879,7 +1881,7 @@ const app = {
         // Geen back-button op hoofdschermen EN op betaalschermen (factuur is al aangemaakt, mag niet herhaald worden)
         // v391: Aanvragen is een compartiment van Organisatie — alleen wie geen hub
         // heeft (monteur/technieker) krijgt het als hoofdscherm zonder terugknop.
-        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenOrganisatie', 'screenClock', 'screenPayment', 'screenOverschrijving'];
+        const noBackScreens = ['screenPlanning', 'screenUitgevoerd', 'screenOrganisatie', 'screenLogistiek', 'screenClock', 'screenPayment', 'screenOverschrijving'];   // v395: + Logistiek (onderbalk-tab)
         if (!this._orgMagProjecten()) noBackScreens.push('screenAanvragen');
         backBtn.classList.toggle('visible', !noBackScreens.includes(screenId));
 
@@ -1901,6 +1903,7 @@ const app = {
         if (screenId === 'screenProjectDetail') { this.renderProjectDetail(); this.loadProjectPlanning(); }
         if (screenId === 'screenDagplanningNieuw' && !this._dp) setTimeout(() => this.goBack(), 0);
         if (screenId === 'screenToestel') this.loadToestel();
+        if (screenId === 'screenLogistiek') this._logHubRender();   // v395: kaarten per toegangsrecht
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -4631,9 +4634,11 @@ const app = {
         document.getElementById('onderhoudGemeente').value = '';
         document.getElementById('onderhoudGemeenteResults').style.display = 'none';
 
-        // Auto-detectie: probeer zone af te leiden van adres (dagplanning → klant)
+        // Auto-detectie: zone uit de GEMEENTE van het werfadres (dagplanning → klant).
+        // v393: de gemeente staat erbij, zodat een fout voorstel meteen opvalt.
         const address = this.currentWO?.address || this.currentWO?.client?.address || '';
-        const autoZone = ONDERHOUD_DATA.detectZoneFromAddress(address);
+        const auto = ONDERHOUD_DATA.zoneVoorAdres(address);
+        const autoZone = auto ? auto.zone : null;
         const autoDiv = document.getElementById('onderhoudAutoZone');
         if (autoZone) {
             this._ohAutoZone = autoZone;
@@ -4641,7 +4646,7 @@ const app = {
             const zoneData = size.zones[autoZone];
             const priceStr = zoneData && zoneData.price ? ` — ${this.formatPrice(zoneData.price)}` : '';
             document.getElementById('onderhoudAutoZoneText').innerHTML =
-                `Zone ${autoZone} (€${verpl} verplaatsing)<span class="monteur-hide">${priceStr}</span>`;
+                `${this._zoneGemeenteLabel(auto)}Zone ${autoZone} (€${verpl} verplaatsing)<span class="monteur-hide">${priceStr}</span>`;
             autoDiv.style.display = '';
         } else {
             this._ohAutoZone = null;
@@ -4651,6 +4656,12 @@ const app = {
 
     onderhoudAcceptAutoZone() {
         if (this._ohAutoZone) this.onderhoudSelectZone(this._ohAutoZone);
+    },
+
+    // v393: "Lier (2500) · " vóór de zone in het adres-voorstel
+    _zoneGemeenteLabel(auto) {
+        if (!auto || !auto.gemeente) return '';
+        return this.escapeHtml(auto.gemeente) + (auto.postcode ? ' (' + this.escapeHtml(auto.postcode) + ')' : '') + ' · ';
     },
 
     onderhoudSearchGemeente(query) {
@@ -4666,7 +4677,7 @@ const app = {
             <div class="card card-clickable" style="padding:8px 12px;margin-bottom:3px"
                  onclick="app.onderhoudSelectZone(${r.zone})">
                 <div style="display:flex;justify-content:space-between;align-items:center">
-                    <span style="font-size:14px;text-transform:capitalize">${this.escapeHtml(r.gemeente)}</span>
+                    <span style="font-size:14px">${this.escapeHtml(r.gemeente)}</span>
                     <span style="font-size:12px;color:var(--qe-purple);font-weight:500">Zone ${r.zone} — €${r.verplaatsing}</span>
                 </div>
             </div>
@@ -4787,18 +4798,21 @@ const app = {
     // ========================================
     initVerplaatsingPicker() {
         if (!window.ONDERHOUD_DATA) return;
-        // Auto-detectie: probeer zone af te leiden van adres (dagplanning → klant)
+        // Auto-detectie: zone uit de GEMEENTE van het werfadres (dagplanning → klant).
+        // v393: nooit meer uit de straatnaam (Leuvensevest, Lier gaf zone 9).
         const address = this.currentWO?.address || this.currentWO?.client?.address || '';
-        const autoZone = ONDERHOUD_DATA.detectZoneFromAddress(address);
+        const auto = ONDERHOUD_DATA.zoneVoorAdres(address);
+        const autoZone = auto ? auto.zone : null;
         const autoDiv = document.getElementById('verplAutoZone');
         if (autoZone) {
             const price = ONDERHOUD_DATA.ZONE_VERPLAATSING[autoZone] || 0;
             document.getElementById('verplAutoZoneText').innerHTML =
-                `Zone ${autoZone} — €${price}`;
+                `${this._zoneGemeenteLabel(auto)}Zone ${autoZone} — €${price}`;
             autoDiv.style.display = '';
             autoDiv.dataset.zone = autoZone;
         } else {
             autoDiv.style.display = 'none';
+            delete autoDiv.dataset.zone;
         }
         // Reset zoekresultaten
         document.getElementById('verplGemeente').value = '';
@@ -4823,7 +4837,7 @@ const app = {
             <div class="card card-clickable" style="padding:8px 12px;margin-bottom:3px"
                  onclick="app.verplSelectZone(${r.zone})">
                 <div style="display:flex;justify-content:space-between;align-items:center">
-                    <span style="font-size:14px;text-transform:capitalize">${this.escapeHtml(r.gemeente)}</span>
+                    <span style="font-size:14px">${this.escapeHtml(r.gemeente)}</span>
                     <span style="font-size:12px;color:var(--qe-purple);font-weight:500">Zone ${r.zone} — €${r.verplaatsing}</span>
                 </div>
             </div>
@@ -4840,6 +4854,22 @@ const app = {
         if (this._verplBusy) return;  // dubbeltik-guard
         this._verplBusy = true;
         try {
+            // v393: staat er al verplaatsing met een ANDERE zone op deze werkbon?
+            // Dan eerst vragen of die vervangen moet worden (F20260485 kreeg zo
+            // zone 9 én zone 5). De oude lijn gaat pas weg als de nieuwe erop staat.
+            const woId = this.currentWO.id;
+            const zoneVanArtikel = {};
+            for (const [z, a] of Object.entries(ONDERHOUD_DATA.VERPLAATSING_ARTICLES || {})) zoneVanArtikel[String(a.id)] = Number(z);
+            const andereZone = ((this.woData[woId] && this.woData[woId].materials) || [])
+                .filter(m => zoneVanArtikel[String(m.id)] != null && zoneVanArtikel[String(m.id)] !== Number(zone));
+            if (andereZone.length) {
+                const oud = andereZone.map(m => 'zone ' + zoneVanArtikel[String(m.id)]).join(' en ');
+                const confirmFn = (window.QEClock && QEClock._showConfirmModal) ? QEClock._showConfirmModal.bind(QEClock) : (t, m) => Promise.resolve(window.confirm(m));
+                const vervangen = await confirmFn('Andere verplaatsingszone',
+                    'Op deze werkbon staat al verplaatsing ' + oud + '. Vervangen door zone ' + Number(zone) + '?',
+                    'Vervangen', 'Annuleren');
+                if (!vervangen || !this.currentWO || this.currentWO.id !== woId) return;
+            }
             const articleData = (ONDERHOUD_DATA.VERPLAATSING_ARTICLES && ONDERHOUD_DATA.VERPLAATSING_ARTICLES[zone]) || null;
             const fallbackPrice = ONDERHOUD_DATA.ZONE_VERPLAATSING[zone];
             if (!articleData || !articleData.id || fallbackPrice == null) {
@@ -4871,7 +4901,15 @@ const app = {
                 };
                 this.toast('Let op: prijslijst-prijs voor verplaatsing gebruikt — kon Robaws niet bereiken', true);
             }
+            if (!this.currentWO || this.currentWO.id !== woId) return;   // intussen andere werkbon geopend
             this.addMaterial(article);
+            if (andereZone.length) {
+                const weg = andereZone.map(m => String(m.id));
+                const data = this.woData[woId];
+                data.materials = data.materials.filter(m => weg.indexOf(String(m.id)) < 0);
+                this.renderMaterials();
+                this.toast('Verplaatsing vervangen door zone ' + Number(zone));
+            }
             // Reset picker
             this.initVerplaatsingPicker();
         } finally {
@@ -8765,20 +8803,163 @@ const app = {
         return { key: 'groen', kleur: 'var(--green2,#3E7A54)', label: 'nog ' + dagen + ' d', dagen };
     },
 
+    /** v395: onderbalk + open Logistiek-scherm volgens de toegangsrechten. */
+    _pasNavRechtenToe() {
+        try {
+            const delen = RobawsAPI.mijnLogistiekDelen();
+            const nl = document.getElementById('navLogistiek');
+            if (nl) nl.style.display = delen.length ? '' : 'none';
+            const LOG = { screenVoertuigen: ['voertuigen', 'mijnvoertuig'], screenGereedschap: ['gereedschap'], screenGasflessen: ['gasflessen'], screenBudget: ['budget'] };
+            if (this.currentScreen === 'screenLogistiek') {
+                if (!delen.length) this.navigate('screenPlanning', false);
+                else this._logHubRender();
+            } else if (LOG[this.currentScreen] && !LOG[this.currentScreen].some(k => delen.indexOf(k) >= 0)) {
+                this.navigate('screenPlanning', false);
+            }
+        } catch (_e) {}
+    },
+
+    /** v395: wie geen bureel is, ziet Logistiek alleen-lezen (beleid: bureel
+     *  verplaatst en beheert — keuringen zijn bureel-werk). */
+    _logBeheer() { return this._adminIsBureel(); },
+
     openLogistiek() {
-        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        if (!RobawsAPI.mijnLogistiekDelen().length) { this.toast('Geen toegang tot Logistiek', true); return; }
         this.navigate('screenLogistiek');
     },
 
+    /** v395: de kaarten van de Logistiek-hub volgens wat deze persoon mag zien. */
+    _logHubRender() {
+        const delen = RobawsAPI.mijnLogistiekDelen();
+        const beheer = this._logBeheer();
+        const toon = (id, aan) => { const el = document.getElementById(id); if (el) el.style.display = aan ? 'flex' : 'none'; };
+        toon('logKaartMijnVoertuig', delen.indexOf('mijnvoertuig') >= 0);
+        toon('logKaartVoertuigen', delen.indexOf('voertuigen') >= 0);
+        toon('logKaartGereedschap', delen.indexOf('gereedschap') >= 0);
+        toon('logKaartBudget', delen.indexOf('budget') >= 0);
+        toon('logKaartGas', delen.indexOf('gasflessen') >= 0);
+        const meer = document.getElementById('logMeerLater');
+        if (meer) meer.style.display = beheer ? '' : 'none';
+        const gasSub = document.getElementById('logGasSub');
+        if (gasSub && !beheer && !this._logGasSubGezet) gasSub.textContent = 'Waar staat welke fles — en welke staan bij jou';
+        if (delen.indexOf('mijnvoertuig') < 0 && (beheer || delen.indexOf('gasflessen') < 0)) return;
+        // Kleine samenvatting onder de kaarten (1 gecachte materieel-lezing)
+        Promise.all([RobawsAPI.getMaterials(), RobawsAPI.getStockLocations().catch(() => [])]).then(([mats, locs]) => {
+            const mijn = this._mijnVoertuigen(mats);
+            const vSub = document.getElementById('logMijnVoertuigSub');
+            if (vSub) vSub.textContent = mijn.length
+                ? mijn.map(v => v.name + (v.brand ? ' · ' + v.brand : '')).join(' — ')
+                : 'Nog geen voertuig op jouw naam';
+            if (!beheer && gasSub && delen.indexOf('gasflessen') >= 0) {
+                const bijMij = this._gasBijMij(mats.filter(m => RobawsAPI.isGasfles(m) && !RobawsAPI.gasIsIngeleverd(m)), mijn, locs);
+                const n = bijMij.opNaam.length + bijMij.inCamionet.length;
+                gasSub.textContent = n ? (n + (n === 1 ? ' fles' : ' flessen') + ' bij jou · tik om alle flessen te zien') : 'Waar staat welke fles';
+                this._logGasSubGezet = true;
+            }
+        }).catch(() => {});
+    },
+
+    /** v395: voertuigen waarvoor de ingelogde persoon verantwoordelijk is
+     *  (Materieel → assignedEmployeeId = eigen fiche). */
+    _mijnVoertuigen(mats) {
+        const mijn = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+        if (!mijn) return [];
+        return (mats || []).filter(m => this._isVoertuig(m) && String(m.assignedEmployeeId || '') === mijn)
+            .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    },
+    /** v395: stocklocatie van een voertuig — de camionet-locaties dragen de
+     *  nummerplaat in hun naam ("1-XVX-814 (JENS)"). */
+    _voertuigLocatieIds(v, locs) {
+        const m = String((v && v.name) || '').toUpperCase().match(/\d-[A-Z]{2,3}-\d{2,3}/);
+        if (!m) return [];
+        const plaat = m[0].replace(/[^A-Z0-9]/g, '');
+        return (locs || []).filter(l => String(l.name || '').toUpperCase().replace(/[^A-Z0-9]/g, '').indexOf(plaat) >= 0).map(l => String(l.id));
+    },
+    /** v395: gasflessen "bij mij": op mijn naam, of in (de locatie van) mijn camionet. */
+    _gasBijMij(flessen, mijnVoertuigen, locs) {
+        const mijn = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+        const locIds = [];
+        (mijnVoertuigen || []).forEach(v => this._voertuigLocatieIds(v, locs).forEach(id => { if (locIds.indexOf(id) < 0) locIds.push(id); }));
+        const opNaam = (flessen || []).filter(m => mijn && String(m.assignedEmployeeId || '') === mijn);
+        const inCamionet = (flessen || []).filter(m => opNaam.indexOf(m) < 0 && m.stockLocationId && locIds.indexOf(String(m.stockLocationId)) >= 0);
+        return { opNaam, inCamionet, locIds };
+    },
+
     openVoertuigen() {
+        if (!RobawsAPI.magLogistiekDeel('voertuigen')) { this.toast('Geen toegang tot de voertuigen', true); return; }
+        this._voertuigModus = 'alle';
+        const t = document.getElementById('voertuigenTitel'); if (t) t.textContent = 'Voertuigen';
         this.navigate('screenVoertuigen', true);
         this.loadVoertuigen();
     },
+
+    /** v395: alleen het eigen voertuig — alleen-lezen, zonder keuring-info
+     *  (beleid: keuringen zijn bureel-werk, geen meldingen naar monteurs). */
+    openMijnVoertuig() {
+        if (!RobawsAPI.magLogistiekDeel('mijnvoertuig')) { this.toast('Geen toegang', true); return; }
+        this._voertuigModus = 'mijn';
+        const t = document.getElementById('voertuigenTitel'); if (t) t.textContent = 'Mijn voertuig';
+        this.navigate('screenVoertuigen', true);
+        this.loadVoertuigen();
+    },
+
+    /** v395: "Mijn voertuig" — de eigen voertuigen als leeskaart + de gasflessen erin. */
+    async _laadMijnVoertuig(el) {
+        const [mats, locs, emps] = await Promise.all([
+            RobawsAPI.getMaterials({ bypassCache: true }),
+            RobawsAPI.getStockLocations().catch(() => []),
+            RobawsAPI.getActiveEmployees().catch(() => []),
+        ]);
+        this._voertuigEmps = emps;
+        const esc = (t) => this.escapeHtml(t);
+        const mijn = this._mijnVoertuigen(mats);
+        if (!mijn.length) {
+            el.innerHTML = '<div class="card" style="padding:16px 18px;font-size:14px;color:var(--g2,#5F5E56);line-height:1.5">' +
+                '<div style="font-size:15px;font-weight:600;color:var(--ink,#26334B);margin-bottom:4px">Nog geen voertuig op jouw naam</div>' +
+                'Rij je met een camionet van QE? Vraag het bureel om ze in Robaws op jouw naam te zetten — dan verschijnt ze hier.</div>';
+            return;
+        }
+        const magGas = RobawsAPI.magLogistiekDeel('gasflessen');
+        const flessen = mats.filter(m => RobawsAPI.isGasfles(m) && !RobawsAPI.gasIsIngeleverd(m));
+        const rij = (l, w) => '<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px"><span style="color:var(--g2,#5F5E56)">' + l + '</span><span style="font-weight:600;text-align:right">' + w + '</span></div>';
+        el.innerHTML = mijn.map(v => {
+            const soort = this._gsSoort(v);
+            const chauffeur = this._voertuigChauffeur(v);
+            let gasHtml = '';
+            if (magGas) {
+                const locIds = this._voertuigLocatieIds(v, locs);
+                const erin = flessen.filter(m => m.stockLocationId && locIds.indexOf(String(m.stockLocationId)) >= 0);
+                gasHtml = '<div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">Gasflessen in deze camionet</div>' +
+                    (erin.length
+                        ? erin.map(m => '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px">' +
+                            '<span style="flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.name || '') + '</span>' +
+                            '<span style="flex-shrink:0;font-size:12px;color:var(--g1,#85847C)">' + esc(this._gfEmpNaamUit(emps, m.assignedEmployeeId) || '') + '</span></div>').join('')
+                        : '<div style="padding:9px 0;font-size:13px;color:var(--g2,#5F5E56)">' + (locIds.length ? 'Geen gasflessen in deze camionet.' : 'Deze camionet heeft (nog) geen eigen plaats in de voorraad van Robaws.') + '</div>');
+            }
+            return '<div class="card" style="margin-bottom:12px;padding:16px 18px">' +
+                '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g1,#85847C)">Jouw voertuig</div>' +
+                '<div style="font-size:22px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B);margin:2px 0 8px">' + esc(v.name || '') + '</div>' +
+                rij('Merk', esc(v.brand || '—')) +
+                (soort ? rij('Soort', esc(String(soort).replace(/^\d+\.\s*/, ''))) : '') +
+                (v.serialNumber ? rij('Serienummer', esc(v.serialNumber)) : '') +
+                rij('Verantwoordelijke', esc(chauffeur ? chauffeur.name : ((this.currentUser && this.currentUser.name) || '—'))) +
+                gasHtml +
+                '</div>';
+        }).join('') + '<div style="font-size:12px;color:var(--g3,#A3A29A);text-align:center;margin-top:6px">Klopt er iets niet? Laat het het bureel weten.</div>';
+    },
+    _gfEmpNaamUit(emps, id) { const e = (emps || []).find(x => String(x.employeeId) === String(id)); return e ? e.name : null; },
 
     async loadVoertuigen() {
         const el = document.getElementById('voertuigenList');
         if (!el) return;
         el.innerHTML = '<div class="spinner"></div>';
+        // v395: eigen voertuig (alleen-lezen) — ook wie wél bureel is maar via
+        // "Mijn voertuig" binnenkomt, ziet hier de leesweergave
+        if (this._voertuigModus === 'mijn' || !this._logBeheer()) {
+            try { await this._laadMijnVoertuig(el); }
+            catch (e) { el.innerHTML = '<div class="card" style="font-size:13px;color:var(--red2,#B4372F)">Laden mislukt: ' + this.escapeHtml((e && e.message) || '?') + '</div>'; }
+            return;
+        }
         try {
             // v351: "gepland" komt uit de velden op het voertuig zelf
             // (Keuring/Onderhoud ingepland op) — de planning-items-scan is
@@ -8849,6 +9030,7 @@ const app = {
     },
 
     openVoertuig(materialId) {
+        if (!this._logBeheer()) return;   // v395: beheerscherm = bureel
         const v = (this._voertuigen || {})[materialId];
         if (!v) return;
         const oud = document.getElementById('voertuigSheet');
@@ -9012,6 +9194,7 @@ const app = {
     },
 
     async planKeuring(materialId) {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan dit aanpassen', true); return; }
         const v = (this._voertuigen || {})[materialId];
         const datum = (document.getElementById('vkDatum') || {}).value;
         const wieId = (document.getElementById('vkWie') || {}).value;
@@ -9041,6 +9224,7 @@ const app = {
 
     /** v351: onderhoud uitgevoerd — laatste onderhoud zetten, ingepland-datum wissen. */
     async onderhoudUitgevoerd(materialId) {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan dit aanpassen', true); return; }
         const v = (this._voertuigen || {})[materialId];
         const datum = (document.getElementById('vkOndGedaan') || {}).value;
         if (!v || !datum) { this.toast('Kies de onderhoudsdatum', true); return; }
@@ -9057,6 +9241,7 @@ const app = {
     },
 
     async keuringUitgevoerd(materialId) {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan dit aanpassen', true); return; }
         const v = (this._voertuigen || {})[materialId];
         const datum = (document.getElementById('vkGedaan') || {}).value;
         if (!v || !datum) { this.toast('Kies de keuringsdatum', true); return; }
@@ -9147,6 +9332,7 @@ const app = {
 
     openGereedschap() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        if (!RobawsAPI.magLogistiekDeel('gereedschap')) { this.toast('Geen toegang tot gereedschap', true); return; }   // v395
         this._gsState = this._gsState || { zoek: '', weergave: 'soort', filter: '' };
         this.navigate('screenGereedschap', true);
         this.loadGereedschap();
@@ -9682,6 +9868,7 @@ const app = {
      *  Werkt voor gereedschap ÉN voertuigen (v359). Weigert klok-tags en
      *  tags die al aan ander materieel hangen. */
     gereedschapTagToewijzen(materialId) {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan dit aanpassen', true); return; }   // v395
         const m = (this._gsAlles || {})[materialId] || (this._voertuigen || {})[materialId];
         if (!m || typeof QEClock === 'undefined') return;
         const zelf = this;
@@ -9705,6 +9892,7 @@ const app = {
     },
 
     async gereedschapTagWissen(materialId) {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan dit aanpassen', true); return; }   // v395
         if (this._gsBusy) return;
         this._gsBusy = true;
         try {
@@ -9819,8 +10007,16 @@ const app = {
     // in twee tikken. Zie ook logistiek.html (hub) — zelfde regels.
     // =============================================
     openGasflessen() {
-        if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
-        this._gfState = this._gfState || { zoek: '', weergave: 'project', soort: '' };
+        // v395: ook voor monteurs (toegangsrecht "Gasflessen") — alleen-lezen
+        if (!RobawsAPI.magLogistiekDeel('gasflessen')) { this.toast('Geen toegang tot de gasflessen', true); return; }
+        const beheer = this._logBeheer();
+        if (!this._gfState || this._gfState.voorBeheer !== beheer) {
+            // wie niet beheert, begint bij de eigen flessen
+            this._gfState = { zoek: '', weergave: beheer ? 'project' : 'mijn', soort: '', voorBeheer: beheer };
+        }
+        const w = document.getElementById('gfWeergave'); if (w) w.value = this._gfState.weergave;
+        const z = document.getElementById('gfZoek'); if (z) z.value = this._gfState.zoek || '';
+        const nieuw = document.getElementById('gfNieuwKnop'); if (nieuw) nieuw.style.display = beheer ? '' : 'none';
         this.navigate('screenGasflessen', true);
         this.loadGasflessen();
     },
@@ -9835,18 +10031,20 @@ const app = {
         const el = document.getElementById('gasflesList');
         if (!el) return;
         if (!stil) el.innerHTML = '<div class="spinner"></div>';
+        const beheer = this._logBeheer();   // v395: alleen bureel beheert
         try {
             const [mats, locs, projs, emps, veldHuur] = await Promise.all([
                 RobawsAPI.getMaterials({ bypassCache: true }),
                 RobawsAPI.getStockLocations().catch(() => []),
                 RobawsAPI.getProjectsVoorPicker().catch(() => []),
                 RobawsAPI.getActiveEmployees().catch(() => []),
-                RobawsAPI.materialVeldBestaat('Huur sinds').catch(() => true),
+                beheer ? RobawsAPI.materialVeldBestaat('Huur sinds').catch(() => true) : Promise.resolve(true),
             ]);
             this._gfItems = mats.filter(m => RobawsAPI.isGasfles(m));
             this._gfAlle = {};
             this._gfItems.forEach(m => { this._gfAlle[m.id] = m; });
             this._gfLocs = locs; this._gfProjs = projs; this._gfEmps = emps; this._gfVeldHuur = veldHuur;
+            this._gfMijnVoertuigen = this._mijnVoertuigen(mats);   // v395: weergave "Bij mij"
             const soorten = [...new Set(this._gfItems.map(m => RobawsAPI.gasSoort(m)))].sort();
             const sel = document.getElementById('gfSoort');
             if (sel) {
@@ -9857,9 +10055,10 @@ const app = {
             if (hint) hint.innerHTML = veldHuur ? '' : '<div class="card" style="margin-bottom:10px;padding:10px 14px;background:var(--awash2,#F7EFE2);border-color:var(--aborder2,#E0C79B);font-size:12.5px;color:var(--amber2,#A5651A)">Het extraveld <strong>"Huur sinds"</strong> (Datum, op Materieel) bestaat nog niet in Robaws \u2014 de huurduur telt voorlopig vanaf de aanmaakdatum.</div>';
             this._gfRender();
             // v388b: huurcontrole tegen de Messer-factuur — apart geladen, blokkeert de lijst niet
-            if (!this._gfHuur) RobawsAPI.gasHuurcontrole().then(h => { this._gfHuur = h; this._gfRender(); }).catch(() => {});
+            // v395: kostprijzen = bureel
+            if (beheer && !this._gfHuur) RobawsAPI.gasHuurcontrole().then(h => { this._gfHuur = h; this._gfRender(); }).catch(() => {});
             const sub = document.getElementById('logGasSub');
-            if (sub) {
+            if (sub && beheer) {
                 const inHuur = this._gfItems.filter(m => !RobawsAPI.gasIsIngeleverd(m));
                 const lang = inHuur.filter(m => (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;
                 sub.textContent = inHuur.length ? (inHuur.length + ' in huur' + (lang ? ' \u00B7 ' + lang + ' langer dan ' + RobawsAPI.GAS_LANG_DAGEN + ' d' : '')) : 'Nog geen flessen geregistreerd';
@@ -9920,7 +10119,13 @@ const app = {
             for (const m of inHuur) { const k = sleutel(m); if (!map.has(k)) map.set(k, []); map.get(k).push(m); }
             for (const [kop, arr] of map) groepen.push({ kop, items: oudEerst(arr), sub });
         };
-        if (s.weergave === 'wie') { per(m => this._gfEmpNaam(m.assignedEmployeeId) || 'Geen verantwoordelijke', 'waar'); groepen.sort((a, b) => a.kop.localeCompare(b.kop)); }
+        if (s.weergave === 'mijn') {
+            // v395: "Bij mij" — op mijn naam, of in (de voorraadplaats van) mijn camionet
+            const bij = this._gasBijMij(inHuur, this._gfMijnVoertuigen || [], this._gfLocs || []);
+            if (bij.opNaam.length) groepen.push({ kop: 'Op jouw naam', items: oudEerst(bij.opNaam), sub: 'waar' });
+            if (bij.inCamionet.length) groepen.push({ kop: 'In jouw camionet', items: oudEerst(bij.inCamionet), sub: 'wie' });
+        }
+        else if (s.weergave === 'wie') { per(m => this._gfEmpNaam(m.assignedEmployeeId) || 'Geen verantwoordelijke', 'waar'); groepen.sort((a, b) => a.kop.localeCompare(b.kop)); }
         else if (s.weergave === 'soort') { per(m => RobawsAPI.gasSoort(m), 'beide'); groepen.sort((a, b) => a.kop.localeCompare(b.kop)); }
         else if (s.weergave === 'oud') { if (inHuur.length) groepen.push({ kop: 'Langst in huur eerst', items: oudEerst(inHuur.slice()), sub: 'beide' }); }
         else {
@@ -9942,7 +10147,8 @@ const app = {
             const perSoort = {};
             alle.forEach(m => { const s2 = RobawsAPI.gasSoort(m); perSoort[s2] = (perSoort[s2] || 0) + 1; });
             const lang = alle.filter(m => (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;
-            const h = this._gfHuur && this._gfHuur.facturen && this._gfHuur.facturen[0];
+            // v395: de huurkost volgens de factuur = bureel
+            const h = this._logBeheer() && this._gfHuur && this._gfHuur.facturen && this._gfHuur.facturen[0];
             const tekort = h ? Math.round(h.flessen) - alle.length : 0;
             const huurHtml = h ? '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--wash,#F0EDE6);color:var(--ink,#26334B)">' +
                 '<strong>Volgens de Messer-factuur</strong> van ' + this.escapeHtml(this._gfDat(h.datum)) + ': \u00B1<strong>' + h.flessen + ' flessen</strong> in huur' +
@@ -9956,8 +10162,16 @@ const app = {
         let html = g.groepen.map(gr => '<div class="card" style="margin-bottom:10px;padding:12px 16px 4px">' +
             '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px"><div style="font-size:14px;font-weight:700;color:var(--ink,#26334B)">' + this.escapeHtml(gr.kop) + '</div><div style="font-size:12px;color:var(--g1,#85847C)">' + gr.items.length + ' fles' + (gr.items.length === 1 ? '' : 'sen') + '</div></div>' +
             gr.items.map(m => this._gfRij(m, gr.sub)).join('') + '</div>').join('');
-        if (!g.groepen.length) html += '<div class="card" style="font-size:13px;color:var(--g2,#5F5E56);margin-bottom:10px">' + ((this._gfItems || []).length ? 'Niets gevonden in deze weergave.' : 'Nog geen gasflessen. Tik op "+ Nieuwe fles" om de eerste te registreren.') + '</div>';
-        if (g.ingeleverd.length) {
+        if (!g.groepen.length) {
+            const sW = (this._gfState && this._gfState.weergave) || '';
+            const leeg = !(this._gfItems || []).length
+                ? (this._logBeheer() ? 'Nog geen gasflessen. Tik op "+ Nieuwe fles" om de eerste te registreren.' : 'Er zijn nog geen gasflessen geregistreerd.')
+                : (sW === 'mijn'
+                    ? 'Er staan geen gasflessen op jouw naam of in jouw camionet. Kies bovenaan een andere weergave om alle flessen te zien.'
+                    : 'Niets gevonden in deze weergave.');
+            html += '<div class="card" style="font-size:13px;color:var(--g2,#5F5E56);margin-bottom:10px;line-height:1.5">' + leeg + '</div>';
+        }
+        if (g.ingeleverd.length && ((this._gfState && this._gfState.weergave) || '') !== 'mijn') {
             const open = !!this._gfToonIng;
             html += '<div class="card" style="margin-bottom:10px;padding:12px 16px ' + (open ? '4px' : '12px') + ';cursor:pointer" onclick="app._gfToonIng=!app._gfToonIng;app._gfRender()">' +
                 '<div style="display:flex;justify-content:space-between;align-items:baseline"><div style="font-size:14px;font-weight:700;color:var(--g2,#5F5E56)">Ingeleverd</div><div style="font-size:12px;color:var(--g1,#85847C)">' + g.ingeleverd.length + ' ' + (open ? '\u25B4' : '\u25BE') + '</div></div>' +
@@ -9977,6 +10191,7 @@ const app = {
         const wie = this._gfEmpNaam(m.assignedEmployeeId);
         const vandaag = new Date().toISOString().slice(0, 10);
         const mijn = this.currentUser && this.currentUser.robawsEmployeeId;
+        const beheer = this._logBeheer();   // v395
         const esc = (t) => this.escapeHtml(t);
         const rij = (l, w, kleur) => '<div style="display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--l2,#EBE8E0);font-size:14px"><span style="color:var(--g2,#5F5E56)">' + l + '</span><span style="font-weight:600;text-align:right;' + (kleur ? 'color:' + kleur : '') + '">' + w + '</span></div>';
         const kop = (t) => '<div style="margin-top:16px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">' + t + '</div>';
@@ -9999,7 +10214,10 @@ const app = {
             rij('Huur sinds', esc(this._gfDat(RobawsAPI.gasHuurSinds(m))) + (this._gfVeldHuur === false ? ' <span style="font-weight:400;color:var(--g1,#85847C)">(aanmaakdatum)</span>' : '')) +
             (ing ? rij('Ingeleverd op', esc(this._gfDat(RobawsAPI.gasIngeleverdOp(m)))) : rij('Waar', esc(waar.tekst), waar.soort === 'geen' ? 'var(--amber,#D97E24)' : null)) +
             rij('Verantwoordelijke', esc(wie || '\u2014'), wie ? null : 'var(--amber,#D97E24)') +
-            (ing
+            // v395: wie geen bureel is, ziet de fles alleen-lezen (bureel verplaatst)
+            (!beheer
+                ? '<div style="margin-top:16px;font-size:13px;color:var(--g2,#5F5E56);line-height:1.5">Staat de fles ergens anders, of heb jij ze nu mee? Laat het het bureel weten, dan zetten zij ze juist.</div>'
+                : ((ing
                 ? '<button class="btn btn-outline btn-full" style="margin-top:16px" onclick="app.gfHeractiveer(\'' + m.id + '\')">\u21A9 Toch nog in huur</button>'
                 : (kop('Waar staat de fles?') +
                    '  <button class="btn btn-primary btn-full" style="margin-top:8px" onclick="app.gfKiesProject(\'' + m.id + '\')">\uD83C\uDFD7\uFE0F Op een project\u2026</button>' +
@@ -10024,14 +10242,16 @@ const app = {
                    '    <button class="btn btn-outline" style="flex:1" onclick="app.gfHuurstart(\'' + m.id + '\')">Bewaar</button>' +
                    '  </div>' +
                    (this._gfVeldHuur === false ? '  <div style="font-size:12px;color:var(--amber2,#A5651A);margin-top:6px">Werkt pas zodra het veld "Huur sinds" in Robaws bestaat.</div>' : ''))) +
-            kop('QR-code') +
-            '  <div style="font-size:12.5px;color:var(--g2,#5F5E56);margin-top:6px;line-height:1.5">Op de fles hoort een etiket met deze code: <span style="font-family:monospace">' + esc(RobawsAPI.GAS_QR_BASE + m.id) + '</span><br>Etiketten print je in de Software-hub (Logistiek \u2192 Gasflessen \u2192 Etiketten).</div>' +
+                kop('QR-code') +
+                '  <div style="font-size:12.5px;color:var(--g2,#5F5E56);margin-top:6px;line-height:1.5">Op de fles hoort een etiket met deze code: <span style="font-family:monospace">' + esc(RobawsAPI.GAS_QR_BASE + m.id) + '</span><br>Etiketten print je in de Software-hub (Logistiek \u2192 Gasflessen \u2192 Etiketten).</div>')) +
             '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
     },
 
     async _gfActie(fn, okTekst) {
+        // v395: dubbele beveiliging — knoppen staan er niet voor wie geen bureel is
+        if (!this._logBeheer()) { this.toast('Alleen het bureel kan flessen aanpassen', true); return; }
         if (this._gfBusy) return;
         this._gfBusy = true;
         try {
@@ -10067,6 +10287,7 @@ const app = {
 
     // ---- projectkiezer: zoeken over naam / nummer / gemeente ----
     gfKiesProject(matId) {
+        if (!this._logBeheer()) return;   // v395
         const oud = document.getElementById('gfProjectSheet');
         if (oud) oud.remove();
         const ov = document.createElement('div');
@@ -10104,6 +10325,7 @@ const app = {
 
     // ---- nieuwe fles ----
     openGasflesNieuw(voorNr) {
+        if (!this._logBeheer()) { this.toast('Nieuwe flessen registreert het bureel', true); return; }   // v395
         const oud = document.getElementById('gasflesSheet');
         if (oud) oud.remove();
         const esc = (t) => this.escapeHtml(t);
@@ -10447,6 +10669,11 @@ const app = {
         if (m) { this.openGasflesItem(m.id); return; }
         if (p.id && !p.serie && this._gsAlles && this._gsAlles[p.id]) { this.toast('Dit is geen gasfles maar gereedschap: ' + (this._gsAlles[p.id].name || '#' + p.id), true); return; }
         const nr = p.serie || p.id;
+        // v395: wie niet beheert, registreert geen nieuwe flessen
+        if (!this._logBeheer()) {
+            this.toast(nr ? ('Fles ' + String(nr).slice(0, 20) + ' staat niet in de lijst — geef het nummer door aan het bureel') : ('Code niet herkend: ' + String(tekst).slice(0, 40)), true);
+            return;
+        }
         if (/^[A-Za-z0-9-]{4,}$/.test(String(nr || ''))) {
             this.toast('Onbekende fles ' + nr + ' \u2014 registreer ze hier');
             this.openGasflesNieuw(nr);
@@ -10577,6 +10804,7 @@ const app = {
 
     openBudget() {
         if (!this._adminIsBureel()) { this.toast('Alleen voor bureel', true); return; }
+        if (!RobawsAPI.magLogistiekDeel('budget')) { this.toast('Geen toegang tot het werknemersbudget', true); return; }   // v395
         this._budState = this._budState || { jaar: RobawsAPI.budgetJaarNu(), zoek: '', laste: '' };
         this.navigate('screenBudget', true);
         this.loadBudget();
@@ -11271,48 +11499,109 @@ const app = {
             if (!res.ok) throw new Error(res.status === 404 ? 'De QE-server is nog niet bijgewerkt.' : ('Worker ' + res.status));
             const j = await res.json();
             const emps = await RobawsAPI.getActiveEmployees();
-            // v385 (vraag Levi): alleen BUREEL in de lijst, net als de
-            // rechten-matrix in de software-hub. Techniekers en monteurs
-            // klokken sowieso en zien Logistiek toch niet.
-            const mensen = (emps || []).filter(e => e && e.email && e.role === 'bureel')
+            // v395 (vraag Levi): IEDEREEN in de lijst, gegroepeerd per rol —
+            // bureel: extra's + delen van Logistiek; monteurs en techniekers:
+            // Logistiek alleen-lezen (gasflessen, eigen voertuig).
+            const mensen = (emps || []).filter(e => e && e.email)
                 .sort((x, y) => String(x.name).localeCompare(String(y.name)));
             this._appRechten = j.rechten || {};
             this._appTools = j.tools || [];
+            const logServer = !!(j.logistiek && j.logistiek.personen);   // Worker v436+
+            const logPers = logServer ? j.logistiek.personen : {};
+            const logBekend = logServer ? j.logistiek.bekend : null;
             const kanOpslaan = RobawsAPI.hasPersonalKey();
             if (!mensen.length) {
-                box.innerHTML = '<p class="text-grey text-sm text-center">Geen bureel-medewerkers gevonden.</p>';
+                box.innerHTML = '<p class="text-grey text-sm text-center">Geen werknemers gevonden.</p>';
                 return;
             }
-            box.innerHTML = mensen.map(e => {
-                const em = String(e.email).toLowerCase();
-                const eigen = this._appRechten[em];
-                const vinkjes = this._appTools.map(t => {
-                    const aan = !Array.isArray(eigen) || eigen.indexOf(t.key) >= 0;
-                    return '<label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--g2)">'
-                        + '<input type="checkbox" data-em="' + this.escapeHtml(em) + '" data-tool="' + this.escapeHtml(t.key) + '"'
-                        + (aan ? ' checked' : '') + (kanOpslaan ? '' : ' disabled')
-                        + ' style="width:17px;height:17px">' + this.escapeHtml(t.naam) + '</label>';
+            const esc = (t) => this.escapeHtml(t);
+            const naamDeel = (k) => (RobawsAPI.LOG_DELEN.find(d => d.key === k) || {}).naam || k;
+            const vinkje = (attrs, aan, label, uit, extra) => '<label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--g2)">'
+                + '<input type="checkbox" ' + attrs + (aan ? ' checked' : '') + ((kanOpslaan && !uit) ? '' : ' disabled')
+                + ' style="width:17px;height:17px">' + esc(label) + (extra || '') + '</label>';
+            const groepen = [
+                { rol: 'bureel', kop: 'Bureel' },
+                { rol: 'monteur', kop: 'Monteurs' },
+                { rol: 'technieker', kop: 'Techniekers' },
+            ];
+            let html = logServer ? '' : '<div class="card" style="margin-bottom:10px;padding:10px 14px;font-size:12.5px;color:var(--amber2);background:var(--awash2)">De QE-server is nog niet bijgewerkt (Worker v436): de keuzes voor Logistiek worden nog niet bewaard — iedereen krijgt voorlopig de standaard van zijn rol.</div>';
+            let idx = 0;
+            for (const g of groepen) {
+                const lijst = mensen.filter(e => RobawsAPI._logRol(e.role) === g.rol);
+                if (!lijst.length) continue;
+                html += '<div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1);margin:14px 2px 6px">' + g.kop + ' <span style="font-weight:500;letter-spacing:0">· ' + lijst.length + '</span></div>';
+                html += lijst.map(e => {
+                    const em = String(e.email).toLowerCase();
+                    const eigen = this._appRechten[em];
+                    const opgeslagen = Array.isArray(logPers[em]) ? { delen: logPers[em], bekend: logBekend } : null;
+                    let delen;
+                    if (g.rol === 'bureel' && Array.isArray(eigen) && eigen.indexOf('logistiek') < 0) delen = [];
+                    else delen = RobawsAPI.logistiekDelenVoor(g.rol, opgeslagen);
+                    const std = !opgeslagen && !(g.rol === 'bureel' && Array.isArray(eigen) && eigen.indexOf('logistiek') < 0);
+                    const a = 'data-em="' + esc(em) + '" data-rol="' + g.rol + '"';
+                    let extraRij = '';
+                    if (g.rol === 'bureel') {
+                        extraRij = '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px">'
+                            + this._appTools.filter(t => t.key !== 'logistiek').map(t =>
+                                vinkje(a + ' data-tool="' + esc(t.key) + '"', !Array.isArray(eigen) || eigen.indexOf(t.key) >= 0, t.naam)).join('')
+                            + '</div>';
+                    }
+                    const logVinkjes = RobawsAPI.logistiekDelenMogelijk(g.rol).map(k => vinkje(a + ' data-deel="' + k + '"', delen.indexOf(k) >= 0, naamDeel(k), !logServer)).join('');
+                    const voertuigRegel = g.rol === 'bureel' ? ''
+                        : '<div id="arVoert' + idx + '" data-fiche="' + esc(e.employeeId) + '" style="font-size:11.5px;color:var(--g3);margin-top:5px"></div>';
+                    idx++;
+                    return '<div class="card" style="padding:11px 14px;margin-bottom:8px">'
+                        + '<div style="font-size:13.5px;font-weight:600;color:var(--ink)">' + esc(e.name || em) + '</div>'
+                        + '<div style="font-size:11.5px;color:var(--g3);margin-bottom:7px">' + esc(em) + '</div>'
+                        + extraRij
+                        + '<div style="font-size:11.5px;font-weight:600;color:var(--g1);margin:2px 0 4px">Logistiek' + (g.rol === 'bureel' ? '' : ' <span style="font-weight:400">(alleen bekijken)</span>') + (std ? ' <span style="font-weight:400;color:var(--g3)">· standaard</span>' : '') + '</div>'
+                        + '<div style="display:flex;gap:16px;flex-wrap:wrap">' + logVinkjes + '</div>' + voertuigRegel + '</div>';
                 }).join('');
-                return '<div class="card" style="padding:11px 14px;margin-bottom:8px">'
-                    + '<div style="font-size:13.5px;font-weight:600;color:var(--ink)">' + this.escapeHtml(e.name || em) + '</div>'
-                    + '<div style="font-size:11.5px;color:var(--g3);margin-bottom:7px">' + this.escapeHtml(em) + '</div>'
-                    + '<div style="display:flex;gap:16px;flex-wrap:wrap">' + vinkjes + '</div></div>';
-            }).join('') + (kanOpslaan
+            }
+            box.innerHTML = html + (kanOpslaan
                 ? '<button class="btn btn-primary" style="width:100%;margin-top:6px" onclick="app.saveAppRechten()">Opslaan</button>'
                 : '<div style="font-size:12.5px;color:var(--qe-grey);margin-top:6px">Aanpassen kan alleen met een persoonlijke sleutel (bureel).</div>');
+            // Welk voertuig staat op wiens naam? (helpt bij "Eigen voertuig")
+            RobawsAPI.getMaterials().then(mats => {
+                box.querySelectorAll('div[data-fiche]').forEach(sp => {
+                    const pl = (mats || []).filter(m => this._isVoertuig(m) && String(m.assignedEmployeeId || '') === String(sp.dataset.fiche)).map(m => m.name);
+                    sp.textContent = pl.length ? ('Voertuig op naam: ' + pl.join(', ')) : 'Nog geen voertuig op naam in Robaws';
+                });
+            }).catch(() => {});
         } catch (e) {
             box.innerHTML = '<p class="text-grey text-sm text-center">' + this.escapeHtml((e && e.message) || 'Laden mislukt') + '</p>';
         }
     },
+    /** v395: de keuzes op het scherm → { rechten (bureel-extra's), logistiek (per persoon) }.
+     *  Gelijk aan de standaard van de rol = niets bewaren (volgt dan mee als de
+     *  rol of de standaard later verandert). */
+    _appRechtenUitScherm(box) {
+        const perPersoon = {};
+        box.querySelectorAll('input[data-em]').forEach(i => {
+            const em = i.dataset.em;
+            const p = perPersoon[em] || (perPersoon[em] = { rol: i.dataset.rol || 'technieker', tools: [], delen: [] });
+            if (i.dataset.tool && i.checked) p.tools.push(i.dataset.tool);
+            if (i.dataset.deel && i.checked) p.delen.push(i.dataset.deel);
+        });
+        const rechten = {}, logistiek = {};
+        for (const em of Object.keys(perPersoon)) {
+            const p = perPersoon[em];
+            const rol = RobawsAPI._logRol(p.rol);
+            if (rol === 'bureel') {
+                // "logistiek" blijft de hoofdschakelaar voor oudere app-versies
+                rechten[em] = p.tools.concat(p.delen.length ? ['logistiek'] : []);
+            }
+            const std = RobawsAPI.logistiekDelenVoor(rol, null);
+            const gelijk = std.length === p.delen.length && std.every(k => p.delen.indexOf(k) >= 0);
+            if (!gelijk) logistiek[em] = p.delen;
+        }
+        return { rechten, logistiek };
+    },
     async saveAppRechten() {
         const box = document.getElementById('appRechtenList');
         if (!box) return;
-        const map = {};
-        box.querySelectorAll('input[data-em]').forEach(i => {
-            const em = i.dataset.em;
-            if (!map[em]) map[em] = [];
-            if (i.checked) map[em].push(i.dataset.tool);
-        });
+        const keuze = this._appRechtenUitScherm(box);
+        const map = keuze.rechten;
         try {
             let cred = null;
             try { cred = JSON.parse(localStorage.getItem('qe_api_cred') || 'null'); } catch (_) {}
@@ -11320,12 +11609,14 @@ const app = {
             const res = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-rechten', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-App-Key': cred.key + ':' + cred.secret },
-                body: JSON.stringify({ rechten: map }),
+                body: JSON.stringify({ rechten: map, logistiek: keuze.logistiek }),   // v395
             }, 10000);
             let j = {};
             try { j = await res.json(); } catch (_) {}
             if (!res.ok) throw new Error(j.error || ('Worker ' + res.status));
-            this.toast('Toegang bewaard — werkt bij de volgende login van die persoon');
+            // eigen rechten meteen toepassen (wie zichzelf aanpast, ziet het direct)
+            try { if (await RobawsAPI.verversAppRechten()) this._pasNavRechtenToe(); } catch (_) {}
+            this.toast('Toegang bewaard — werkt bij de volgende start van de app van die persoon');
         } catch (e) {
             this.toast('Opslaan mislukt: ' + ((e && e.message) || '?'), true);
         }
@@ -15770,6 +16061,21 @@ const app = {
                         </div>`;
                     }
 
+                    // v394: de opmerking die je zelf bij het uitklokken meegaf
+                    // (regel "opmerking werknemer (HH:MM): …" in de klok-werkbon).
+                    const eigenOpm = [];
+                    for (const w of wos) {
+                        for (const o of RobawsAPI.leesUitklokOpmerkingen(w.remark)) eigenOpm.push(o);
+                    }
+                    if (eigenOpm.length) {
+                        html += `<div style="display:flex;gap:9px;align-items:flex-start;margin:2px 0 8px;padding:9px 11px;background:var(--awash);border-radius:10px">
+                            <span style="font-size:14px;line-height:1.2;flex-shrink:0">&#128172;</span>
+                            <div style="flex:1;min-width:0;font-size:12.5px;color:var(--g2);line-height:1.45">
+                                <span style="font-weight:700;color:var(--ink)">Jouw opmerking</span>${eigenOpm.map(o => `<br>${o.uur ? `<span style="color:var(--g3)">${this.escapeHtml(o.uur)}</span> ` : ''}${this.escapeHtml(o.tekst)}`).join('')}
+                            </div>
+                        </div>`;
+                    }
+
                     // v83: per werkbon — render individuele tijdsblokken (1 kaart per time-entry)
                     //   Werkuren (hourTypeId=1, article 185)  → ✅ groen, klant-werk
                     //   L&L (article 19786)                   → 📦 oranje box
@@ -15937,7 +16243,7 @@ const app = {
                             <div style="font-size:13px;color:var(--qe-grey)">${tijd} · ${totalHours.toFixed(2)} uur</div>
                         </div>
                     </div>
-                    ${(() => { const pub = this._publicRemark(wo.remark); return pub ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px">${this.escapeHtml(pub)}</div>` : ''; })()}
+                    ${(() => { const pub = this._publicRemark(wo.remark); return pub ? `<div style="font-size:12px;color:var(--qe-grey);padding:8px;background:#f5f5f5;border-radius:8px;white-space:pre-line">${this.escapeHtml(pub)}</div>` : ''; })()}
                     <div style="font-size:11px;color:var(--qe-grey);margin-top:8px">Werkbon #${wo.id}</div>
                 </div>
 
@@ -16997,13 +17303,30 @@ const app = {
         };
     },
 
+    /** v394: klad van de uitklok-opmerking (overleeft een mislukte afsluiting;
+     *  QEClock wist het zodra de uitklok gelukt is). */
+    _uitklokOpmSleutel(workOrderId, employeeId) {
+        return 'qe_uitklok_opm_' + workOrderId + '_' + employeeId;
+    },
+    _uitklokOpmWis(workOrderId, employeeId) {
+        try { localStorage.removeItem(this._uitklokOpmSleutel(workOrderId, employeeId)); } catch (_) {}
+    },
+
     /**
      * v83: Vraag de monteur om kilometers heen/terug in te geven na uitklokken,
      * en post die als commute-entry op de werkbon. Modal — kan niet weggeklikt
      * worden zonder iets in te vullen (0 is een geldige waarde).
      * v119: bij open auto-fill via Google Maps Distance Matrix.
+     * v394: + OPMERKING VOOR HET BUREEL (vraag Levi). Resolvet nu
+     * { bevestigd: true, opmerking } i.p.v. true; annuleren blijft false.
+     * opts.hint (uit QEClock._uitklokHint) = geheugensteun bij een duidelijke
+     * afwijking (vroeger begonnen): leeg vak → één keer extra vragen, nog eens
+     * tikken = uitklokken zonder opmerking. Het klad blijft bewaard tot de
+     * uitklok gelukt is (localStorage qe_uitklok_opm_<wo>_<emp>, 12 u).
      */
-    async promptKilometers(workOrderId, employeeId) {
+    async promptKilometers(workOrderId, employeeId, opts) {
+        const kmOpts = opts || {};
+        const hint = (kmOpts.hint && kmOpts.hint.tekst) ? kmOpts.hint : null;
         return new Promise((resolve) => {
             // Bouw modal — v95: mobility-keuze + woonwerk-fiets checkbox
             let m = document.getElementById('kmPromptModal');
@@ -17113,6 +17436,18 @@ const app = {
                         </div>
                     </div>
 
+                    <!-- v394: opmerking voor het bureel — komt bij de tijdsregistratie -->
+                    <div id="kmOpmBlok" style="margin-bottom:14px">
+                        <div id="kmOpmHint" style="display:none;margin-bottom:8px;padding:10px 12px;border-radius:10px;background:var(--awash2);border:1px solid var(--aborder2,var(--aborder));color:var(--amber2);font-size:12.5px;line-height:1.45">
+                            <div id="kmOpmHintTekst" style="font-weight:700"></div>
+                            <div id="kmOpmHintVraag" style="margin-top:3px"></div>
+                        </div>
+                        <label for="kmOpmInput" style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Opmerking voor het bureel <span style="font-weight:400">(niet verplicht)</span></label>
+                        <textarea id="kmOpmInput" rows="3" maxlength="500" placeholder="Bv. vroeger begonnen om de file voor te zijn, afgesproken met de projectleider"
+                            style="width:100%;box-sizing:border-box;padding:11px 12px;min-height:74px;resize:vertical;border:1px solid var(--b1);border-radius:10px;background:var(--card);color:var(--ink);font:400 14px var(--font,inherit);line-height:1.4"></textarea>
+                        <div style="font-size:11.5px;color:var(--g2);margin-top:4px;line-height:1.4">Komt bij je tijdsregistratie. Het bureel ziet het meteen bij het nakijken van je uren.</div>
+                    </div>
+
                     <button id="kmPromptSubmit" style="width:100%;padding:16px;background:var(--btn);color:var(--btnfg);border:none;border-radius:2px;font:600 14px var(--font);cursor:pointer">
                         Uitklokken bevestigen
                     </button>
@@ -17129,6 +17464,36 @@ const app = {
             const directWTEl = document.getElementById('kmDirectWerfThuisInput');
             const errEl = document.getElementById('kmPromptError');
             const btn = document.getElementById('kmPromptSubmit');
+            // v394: opmerking voor het bureel + geheugensteun
+            const opmEl = document.getElementById('kmOpmInput');
+            const opmBlokEl = document.getElementById('kmOpmBlok');
+            const opmHintEl = document.getElementById('kmOpmHint');
+            const opmHintVraagEl = document.getElementById('kmOpmHintVraag');
+            const opmSleutel = this._uitklokOpmSleutel(workOrderId, employeeId);
+            let opmGevraagd = false;
+            const knopTekst = () => (opmGevraagd && opmEl && !opmEl.value.trim())
+                ? 'Uitklokken zonder opmerking' : 'Uitklokken bevestigen';
+            try {
+                const klad = JSON.parse(localStorage.getItem(opmSleutel) || 'null');
+                if (klad && klad.t && opmEl && (Date.now() - (Number(klad.ts) || 0)) < 12 * 3600 * 1000) {
+                    opmEl.value = String(klad.t).slice(0, 500);
+                }
+            } catch (_) {}
+            if (hint && opmHintEl) {
+                document.getElementById('kmOpmHintTekst').textContent = hint.tekst;
+                opmHintVraagEl.textContent = hint.vraag || 'Afgesproken? Zet het hieronder.';
+                opmHintEl.style.display = 'block';
+            }
+            if (opmEl) {
+                opmEl.addEventListener('input', () => {
+                    try {
+                        const t = opmEl.value;
+                        if (t.trim()) localStorage.setItem(opmSleutel, JSON.stringify({ t: t, ts: Date.now() }));
+                        else localStorage.removeItem(opmSleutel);
+                    } catch (_) {}
+                    if (!btn.disabled) btn.textContent = knopTekst();
+                });
+            }
             // v131: split-rit elementen
             const splitToggleEl = document.getElementById('kmSplitToggle');
             const splitSectionEl = document.getElementById('kmSplitSection');
@@ -17252,6 +17617,20 @@ const app = {
                 // twee keer Enter op traag 4G gaf dubbele commute-entries
                 // (dubbele km-vergoeding).
                 if (this._kmSubmitBusy) return;
+                // v394: vroeger begonnen en niets ingevuld? Eén keer vragen —
+                // vóór er iets geschreven wordt. Nog eens tikken = zonder opmerking.
+                const opmerking = opmEl ? opmEl.value.trim() : '';
+                if (hint && !opmerking && !opmGevraagd) {
+                    opmGevraagd = true;
+                    if (opmHintVraagEl) {
+                        opmHintVraagEl.textContent = 'Schrijf kort waarom (bv. afgesproken met de projectleider). '
+                            + 'Geen opmerking nodig? Tik dan op "Uitklokken zonder opmerking".';
+                    }
+                    btn.textContent = knopTekst();
+                    try { opmBlokEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+                    try { opmEl.focus({ preventScroll: true }); } catch (_) {}
+                    return;
+                }
                 this._kmSubmitBusy = true;
                 const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
                 const terug = Math.max(0, Math.round(parseFloat(terugEl.value) || 0));
@@ -17272,6 +17651,7 @@ const app = {
                 btn.disabled = true;
                 btn.textContent = 'Bevestigen…';
                 errEl.style.display = 'none';
+                if (opmEl) opmEl.readOnly = true;
 
                 try {
                     if (kmAlGepost) {
@@ -17362,13 +17742,15 @@ const app = {
                     this.toast(kmAlGepost
                         ? 'Uitklokken bevestigd — kilometers stonden al opgeslagen'
                         : 'Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);
-                    resolve(true);
+                    // v394: de opmerking gaat mee in de afsluiting (clock.js)
+                    resolve({ bevestigd: true, opmerking: opmerking });
                 } catch (e) {
                     console.warn('[App] km POST faalde:', e && e.message);
                     errEl.textContent = 'Opslaan mislukt: ' + (e && e.message || '?');
                     errEl.style.display = 'block';
                     btn.disabled = false;
-                    btn.textContent = 'Uitklokken bevestigen';
+                    if (opmEl) opmEl.readOnly = false;
+                    btn.textContent = knopTekst();
                 } finally {
                     this._kmSubmitBusy = false;  // v251
                 }
@@ -18089,6 +18471,10 @@ const app = {
     _publicRemark(remark) {
         if (!remark) return '';
         const cleanLine = (line) => {
+            // v394: de eigen opmerking bij het uitklokken volledig tonen (niet
+            // afknippen op een " - " in de tekst)
+            const opm = RobawsAPI.leesUitklokOpmerking(line);
+            if (opm) return 'Jouw opmerking' + (opm.uur ? ' (' + opm.uur + ')' : '') + ': ' + opm.tekst;
             let s = String(line || '').replace(/^\s*klok-(in|uit):\s*/i, '');
             const m = s.match(/^(.*?)\s+[—-]\s+/);
             if (m) return m[1].trim();

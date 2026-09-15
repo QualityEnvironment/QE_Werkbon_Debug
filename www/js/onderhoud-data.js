@@ -6,16 +6,47 @@
 window.ONDERHOUD_DATA = {
 
     // ---- ZONE → GEMEENTEN ----
+    // v393: bron = "Prijzen QE.xlsx" (Levi, 7 aug 2026), dezelfde indeling als
+    // de Worker-KV 'onderhoudsprijzen' (prijzen-config.json). Wijzigt er een
+    // zone, pas dan BEIDE aan. Eén tekst per gemeente:
+    //   'Naam | andere schrijfwijze | …'   (de eerste naam wordt getoond)
+    //   'Naam#2980'      = de naam bestaat ook elders in België: staat er een
+    //                      postcode in het adres, dan telt hij alleen bij deze
+    //   'Antwerpen@2100' = geldt ALLEEN met die postcode (districten)
+    // De zone wordt ENKEL uit de gemeente (+ postcode) gehaald, nooit uit de
+    // straat: "Leuvensevest, 2500 Lier" gaf vroeger zone 9 (Leuven).
     ZONE_GEMEENTEN: {
-        1: ['schoten'],
-        2: ['merksem','deurne','brasschaat','schilde','s gravenwezel','\'s gravenwezel','sint-job','sint job','wijnegem','ekeren','borgerhout','wommelgem'],
-        3: ['berchem','antwerpen','antwerpen l.o','antwerpen lo','borsbeek','brecht','boechout','edegem','hoevenen','kapellen','putte','hove','oelegem','mortsel','vremde','broechem','ranst'],
-        4: ['burcht','emblem','zoersel','halle','wilrijk','aartselaar','hemiksem','hoboken','massenhoven','zandhoven','viersel','pulderbos','kontich','westmalle','oostmalle','stabroek','sint-lenaarts','sint lenaarts','zwijnrecht','zwijndrecht'],
-        5: ['achterbroek','berendrecht','bouwel','duffel','grobbendonk','kalmthout','lint','melsele','nijlen','reet','schelle','waarloos','wuustwezel','loenhout','kessel','koningshooikt','lier','lillo','niel'],
-        6: ['bazel','beveren','doel','kallo','pulle','berlaar','boom','haasdonk','ruisbroek','rumst','steendorp','sint-katelijne-waver','sint katelijne waver','st katelijne waver','vorselaar','walem','herenthout','hoogstraten','itegem','rijkevorsel'],
-        7: ['keerbergen','beerse','blaasveld','bonheiden','essen','heffen','heindonk','kieldrecht','lille','mechelen','merksplas','nieuwerkerken','olen','o.l.v. waver','olv waver','onze-lieve-vrouw-waver','ruppelmonde','sint-gillis-waas','sint gillis waas','st gillis waas','temse','verrebroek','vlimmeren','vrasene','wechelderzande','willebroek','turnhout','poederlee','puurs','heist-op-den-berg','heist op den berg','herentals'],
-        8: ['bavel','brussel','grimbergen','meise','arendonk','stekene','weelde','geel'],
-        9: ['gent','evergem','leuven','hasselt']
+        1: ['Schoten | Shoten'],
+        2: ['Merksem | Merksem (Antwerpen) | Antwerpen@2170', 'Deurne | Deurne (Antwerpen) | Antwerpen@2100',
+            'Brasschaat | Mariaburg | Brasschaat-Mariaburg', 'Schilde', "'s-Gravenwezel",
+            "Sint-Job-in-'t-Goor | Sint-Job | Sint Job in Goor | Sint-Job (Brecht) | Brecht (Sint-Job) | Sint-Job-in-'t-Goor (Brecht)",
+            'Wijnegem', 'Ekeren | Ekeren (Antwerpen) | Antwerpen@2180', 'Borgerhout | Borgerhout (Antwerpen) | Antwerpen@2140', 'Wommelgem'],
+        3: ['Antwerpen | Antwerpen 1 | Antwerpen 2 | Antwerpen 3 | Antwerpen 4 | Antwerpen 5 | Antwerpen 6',
+            'Berchem#2600 | Antwerpen-Berchem | Berchem (Antwerpen) | Antwerpen@2600',
+            'Antwerpen Linkeroever | Antwerpen L.O. | Linkeroever | Antwerpen@2050',
+            'Borsbeek | Antwerpen@2150', 'Brecht', 'Boechout | Boechout-Vremde', 'Edegem', 'Hoevenen | Hoevenen (Stabroek)',
+            'Kapellen', 'Putte (Kapellen) | Putte-Kapellen | Putte#2950', 'Hove', 'Oelegem | Oelegem (Broechem)', 'Mortsel',
+            'Vremde', 'Broechem', 'Ranst'],
+        4: ['Burcht | Zwijndrecht (Burcht)', 'Emblem | Emblem (Ranst)', 'Zoersel', 'Halle (Zoersel) | Halle-Zoersel | Halle#2980',
+            'Wilrijk | Antwerpen-Wilrijk | Wilrijk (Antwerpen) | Antwerpen@2610', 'Aartselaar', 'Hemiksem',
+            'Hoboken | Hoboken (Antwerpen) | Antwerpen@2660', 'Massenhoven', 'Zandhoven', 'Viersel', 'Pulderbos', 'Kontich',
+            'Malle', 'Westmalle', 'Oostmalle', 'Stabroek', 'Sint-Lenaarts | Sint-Lenaerts',
+            'Zwijndrecht | Zwijnrecht | Beveren-Kruibeke-Zwijndrecht@2070', 'Sint-Antonius | Sint-Anthonius'],
+        5: ['Achterbroek', 'Berendrecht | Antwerpen@2040', 'Bouwel | Bouwel (Grobbendonk)', 'Duffel', 'Grobbendonk', 'Kalmthout',
+            'Lint', 'Melsele', 'Nijlen', 'Reet', 'Schelle', 'Waarloos | Waarloos (Kontich)', 'Wuustwezel',
+            'Gooreind | Gooreind (Wuustwezel)', 'Loenhout', 'Kessel', 'Koningshooikt', 'Kruibeke | Kruibeke (Bazel)', 'Lier',
+            'Lillo', 'Niel', 'Zandvliet'],
+        6: ['Bazel', 'Beveren | Beveren-Waas | Beveren-Kruibeke-Zwijndrecht', 'Doel', 'Kallo', 'Pulle', 'Berlaar', 'Boom',
+            'Haasdonk', 'Ruisbroek#2870', 'Rumst', 'Steendorp', 'Sint-Katelijne-Waver', 'Vorselaar', 'Walem', 'Herenthout',
+            'Hoogstraten', 'Itegem', 'Rijkevorsel'],
+        7: ['Keerbergen', 'Beerse', 'Blaasveld', 'Bonheiden', 'Rijmenam | Bonheiden-Rijmenam | Bonheiden (Rijmenam)', 'Essen',
+            'Wildert | Wildert (Essen)', 'Heffen', 'Heindonk', 'Kieldrecht', 'Lille | Lille (Wechelderzande)', 'Gierle',
+            'Mechelen', 'Merksplas', 'Nieuwkerken-Waas', 'Olen', 'Onze-Lieve-Vrouw-Waver | O.L.V.-Waver',
+            'Rupelmonde | Ruppelmonde', 'Sint-Gillis-Waas', 'Temse', 'Verrebroek', 'Vlimmeren', 'Vrasene', 'Wechelderzande',
+            'Willebroek', 'Turnhout', 'Poederlee', 'Putte#2580', 'Puurs', 'Heist-op-den-Berg', 'Herentals', 'Noorderwijk',
+            'Hingene'],
+        8: ['Bavel', 'Brussel', 'Grimbergen', 'Meise', 'Arendonk', 'Stekene', 'Weelde', 'Geel'],
+        9: ['Gent', 'Evergem', 'Leuven', 'Heverlee', 'Hasselt']
     },
 
     ZONE_VERPLAATSING: {
@@ -225,45 +256,132 @@ window.ONDERHOUD_DATA = {
 
     // ---- HELPERS ----
 
-    // Zoek zone op basis van adres-string (probeert gemeente te extraheren)
-    detectZoneFromAddress(address) {
-        if (!address) return null;
-        const addr = address.toLowerCase().replace(/[,.\-\/]/g, ' ');
-        // Probeer elk woord en elke combinatie van 2-3 woorden
-        const words = addr.split(/\s+/).filter(w => w.length > 1);
-        // Eerst: probeer langere strings (bv "sint katelijne waver", "heist op den berg")
-        for (let len = 4; len >= 1; len--) {
-            for (let i = 0; i <= words.length - len; i++) {
-                const candidate = words.slice(i, i + len).join(' ');
-                if (candidate.length < 3) continue;
-                for (const [zone, gemeenten] of Object.entries(this.ZONE_GEMEENTEN)) {
-                    if (gemeenten.some(g => g === candidate || g.includes(candidate) || candidate.includes(g))) {
-                        return parseInt(zone);
-                    }
-                }
-            }
-        }
-        return null;
+    // v393: plaatsnaam → vergelijkbare sleutel. Kleine letters, geen accenten
+    // of leestekens, "St." = "Sint", "O.L.V." = "Onze-Lieve-Vrouw".
+    // "'s-Gravenwezel" → "s gravenwezel", "Antwerpen L.O." → "antwerpen lo".
+    _plaatsSleutel(s) {
+        let t = String(s == null ? '' : s).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+        t = t.replace(/['‘’`´]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+        t = t.replace(/\b([a-z]) (?=[a-z]\b)/g, '$1');   // losse letters: "o l v" → "olv"
+        return t.replace(/\bst\b/g, 'sint').replace(/\bonze lieve vrouw\b/g, 'olv');
     },
 
-    // Zoek gemeenten die matchen met query
-    searchGemeenten(query) {
-        const q = (query || '').toLowerCase().trim();
-        if (q.length < 2) return [];
-        const results = [];
+    // Index (één keer opgebouwd): sleutel → [{ zone, naam, primair, alleenPc, pcs }]
+    _zoneIndex() {
+        if (this._zoneIdx) return this._zoneIdx;
+        const idx = {}, lijst = [];
         for (const [zone, gemeenten] of Object.entries(this.ZONE_GEMEENTEN)) {
-            for (const g of gemeenten) {
-                if (g.includes(q)) {
-                    results.push({ gemeente: g, zone: parseInt(zone), verplaatsing: this.ZONE_VERPLAATSING[zone] });
-                }
+            for (const regel of gemeenten) {
+                const namen = regel.split('|').map(n => n.trim()).filter(Boolean);
+                const entry = { zone: parseInt(zone, 10), naam: namen[0].replace(/[#@][\d,]+$/, ''), zoekNamen: [] };
+                namen.forEach((n, i) => {
+                    const m = n.match(/^(.*?)([#@])([\d,]+)$/);
+                    const naam = m ? m[1].trim() : n;
+                    const c = { zone: entry.zone, naam: entry.naam, primair: i === 0,
+                        alleenPc: !!(m && m[2] === '@'), pcs: m ? m[3].split(',') : null };
+                    const k = this._plaatsSleutel(naam);
+                    if (!k) return;
+                    (idx[k] = idx[k] || []).push(c);
+                    // Zoeken: de getoonde naam + gewone schrijfwijzen (geen districten of "X (Y)")
+                    if (!c.alleenPc && (i === 0 || naam.indexOf('(') < 0) && entry.zoekNamen.indexOf(k) < 0) entry.zoekNamen.push(k);
+                });
+                lijst.push(entry);
             }
         }
-        results.sort((a, b) => {
-            const aExact = a.gemeente === q ? 0 : 1;
-            const bExact = b.gemeente === q ? 0 : 1;
-            if (aExact !== bExact) return aExact - bExact;
-            return a.zone - b.zone;
-        });
-        return results;
+        this._zoneIdx = idx;
+        this._zoneLijst = lijst;
+        return idx;
+    },
+
+    // Eén plaatsnaam (+ eventuele postcode) → { zone, naam } of null
+    _zoneVoorPlaats(plaats, postcode) {
+        let kand = this._zoneIndex()[this._plaatsSleutel(plaats)] || [];
+        if (postcode) {
+            const exact = kand.filter(c => c.pcs && c.pcs.indexOf(postcode) >= 0);
+            kand = exact.length ? exact : kand.filter(c => !c.pcs);
+        } else {
+            kand = kand.filter(c => !c.alleenPc);
+        }
+        if (!kand.length) return null;
+        const zones = new Set(kand.map(c => c.zone));
+        if (zones.size === 1) return { zone: kand[0].zone, naam: kand[0].naam };
+        const prim = kand.filter(c => c.primair);
+        if (new Set(prim.map(c => c.zone)).size === 1) return { zone: prim[0].zone, naam: prim[0].naam };
+        return null;   // dubbelzinnig → geen voorstel
+    },
+
+    // Adres (tekst zoals formatAddress "Straat 1, 2500 Lier" of Robaws-adresobject)
+    // → { plaats, postcode }. Kijkt ENKEL naar het laatste stuk van het adres.
+    _adresPlaats(adres) {
+        if (!adres) return null;
+        const PC = /^(?:be?-?)?(\d{4})$/i;   // "2500", "B-2500", "BE-2500"
+        if (typeof adres === 'object') {
+            const pcRuw = String(adres.postalCode || '').trim(), stad = String(adres.city || '').trim();
+            const pc = pcRuw.match(PC);
+            if (stad && !/^\d{4}\s/.test(stad)) return { plaats: stad, postcode: pc ? pc[1] : '' };
+            adres = [adres.addressLine1, adres.addressLine2, [pcRuw, stad].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+        }
+        const delen = String(adres).split(',').map(d => d.trim()).filter(Boolean);
+        if (delen.length > 1 && /^(belgie|belgium|belgique|be)$/.test(this._plaatsSleutel(delen[delen.length - 1]))) delen.pop();
+        if (!delen.length) return null;
+        const laatste = delen[delen.length - 1];
+        const woorden = laatste.split(/\s+/);
+        for (let i = woorden.length - 2; i >= 0; i--) {
+            const pc = woorden[i].match(PC);
+            const rest = woorden.slice(i + 1).join(' ');
+            if (pc && /[a-z]/i.test(rest)) return { plaats: rest, postcode: pc[1] };
+        }
+        // Geen (geldige) postcode: het hele laatste stuk, anders wat na het laatste
+        // getal staat ("21710 MERKSEM", "Kerkstraat 5 Lier"). Beide exact vergeleken.
+        let n = woorden.length;
+        while (n > 0 && !/\d/.test(woorden[n - 1])) n--;
+        return { plaats: laatste, postcode: '', achterGetal: n > 0 ? woorden.slice(n).join(' ') : '' };
+    },
+
+    // v393: zone op basis van het werfadres → { zone, gemeente, postcode } of null.
+    // Vroeger werd in het HELE adres naar stukjes gemeentenaam gezocht, dus ook
+    // in straatnamen (Leuvensevest → Leuven, Molenlei → Olen, Turnhoutsebaan →
+    // Turnhout). Nu telt enkel de gemeente, exact, eventueel met de postcode.
+    zoneVoorAdres(adres) {
+        const p = this._adresPlaats(adres);
+        if (!p || !p.plaats) return null;
+        let hit = this._zoneVoorPlaats(p.plaats, p.postcode);
+        if (!hit && p.achterGetal) {
+            hit = this._zoneVoorPlaats(p.achterGetal, '');
+            if (hit) p.plaats = p.achterGetal;
+        }
+        if (!hit) {
+            // Samengestelde schrijfwijze, bv. "Wilrijk (Antwerpen)" of "Antwerpen - Wilrijk":
+            // de delen moeten dezelfde zone geven ("Antwerpen" wijkt voor het district).
+            const delen = p.plaats.split(/[()]|\s-\s?|\s?-\s/).map(d => d.trim()).filter(Boolean);
+            if (delen.length > 1) {
+                let hits = delen.map(d => ({ sleutel: this._plaatsSleutel(d), hit: this._zoneVoorPlaats(d, p.postcode) })).filter(x => x.hit);
+                if (new Set(hits.map(x => x.hit.zone)).size > 1) hits = hits.filter(x => x.sleutel !== 'antwerpen');
+                if (hits.length && new Set(hits.map(x => x.hit.zone)).size === 1) hit = hits[0].hit;
+            }
+        }
+        return hit ? { zone: hit.zone, gemeente: hit.naam, postcode: p.postcode || '' } : null;
+    },
+
+    // Compatibel met de oude aanroep: enkel het zonenummer
+    detectZoneFromAddress(address) {
+        const r = this.zoneVoorAdres(address);
+        return r ? r.zone : null;
+    },
+
+    // Zoek gemeenten die matchen met wat de technieker typt
+    searchGemeenten(query) {
+        const q = this._plaatsSleutel(query);
+        if (q.length < 2) return [];
+        this._zoneIndex();
+        const results = [];
+        for (const e of this._zoneLijst) {
+            const namen = e.zoekNamen;
+            if (!namen.some(n => n.indexOf(q) >= 0)) continue;
+            const rang = namen.indexOf(q) >= 0 ? 0 : (namen.some(n => n.indexOf(q) === 0) ? 1 : 2);
+            results.push({ gemeente: e.naam, zone: e.zone, verplaatsing: this.ZONE_VERPLAATSING[e.zone], _rang: rang });
+        }
+        results.sort((a, b) => (a._rang - b._rang) || (a.zone - b.zone) || a.gemeente.localeCompare(b.gemeente, 'nl'));
+        return results.map(({ _rang, ...r }) => r);
     }
 };

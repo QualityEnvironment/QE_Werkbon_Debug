@@ -809,9 +809,16 @@ window.QEClock = {
                     hideLoad();   // km-formulier komt hierna — loader mag weg
 
                     let kmConfirmed = true;
+                    // v394: het formulier geeft ook de OPMERKING voor het bureel
+                    // terug ({ bevestigd, opmerking }); annuleren blijft false.
+                    let uitklokOpmerking = '';
                     if (window.app && typeof app.promptKilometers === 'function') {
                         try {
-                            kmConfirmed = await app.promptKilometers(session.workOrderId, session.employeeId);
+                            let hint = null;
+                            try { hint = this._uitklokHint(session); } catch (_) {}
+                            const kmRes = await app.promptKilometers(session.workOrderId, session.employeeId, { hint: hint });
+                            kmConfirmed = !!kmRes;
+                            if (kmRes && typeof kmRes === 'object') uitklokOpmerking = String(kmRes.opmerking || '');
                         } catch (e) {
                             console.warn('[Clock] km-formulier faalde:', e && e.message);
                             kmConfirmed = false;
@@ -824,7 +831,13 @@ window.QEClock = {
                     }
 
                     showLoad();
-                    scanResult = await this._clockOut(session, tag, { gps: gpsUit });
+                    scanResult = await this._clockOut(session, tag, { gps: gpsUit, opmerking: uitklokOpmerking });
+                    // v394: uitklok gelukt = de opmerking staat in Robaws → klad weg.
+                    // Mislukt? Dan blijft het klad staan en is het bij de volgende
+                    // scan meteen weer ingevuld.
+                    if (scanResult && scanResult.ok && window.app && typeof app._uitklokOpmWis === 'function') {
+                        try { app._uitklokOpmWis(session.workOrderId, session.employeeId); } catch (_) {}
+                    }
                     return;
                 }
 
@@ -867,6 +880,7 @@ window.QEClock = {
                             const _h = Number(_c.hours) || 0;
                             _ht = Math.floor(_h) + 'u ' + Math.round((_h - Math.floor(_h)) * 60) + 'm vandaag';
                         }
+                        if (_c.opmerking) _ht += (_ht ? ' · ' : '') + 'opmerking doorgegeven';   // v394
                         QECeleb.clockOut({ weekend: !!_c.weekend, name: _nm, timeText: _c.time || '', hoursText: _ht, onDone: afterScan });
                     } else if (typeof app.showScanResult === 'function') {
                         app.showScanResult(scanResult.ok, scanResult.message, afterScan);
@@ -1100,6 +1114,47 @@ window.QEClock = {
         return m;
     },
 
+    /** v394: geheugensteun in het uitklokformulier. Alleen bij een duidelijke
+     *  afwijking waar het bureel bij het nakijken anders naar de reden moet
+     *  vragen: VROEGER BEGONNEN dan het eigen startuur (vraag Levi: "vroeger
+     *  begonnen om de file voor te zijn, afgesproken met de projectleider").
+     *  Nooit blokkerend — het formulier vraagt het één keer extra.
+     *  Geen hint: bureel (klokt altijd vrij uit, zelfs geen herinnering —
+     *  v259), weekend (altijd overuren), 2e sessie van de dag, L&L, of geen
+     *  eigen startuur gekend (dan zou het een gok zijn). */
+    _uitklokHint(session) {
+        if (!session || session.tagType === 'laden_lossen') return null;
+        try { if (window.app && typeof app._activeRole === 'function' && app._activeRole() === 'bureel') return null; } catch (_) {}
+        if ((session.completedSessions || []).length > 0) return null;
+        const dag = new Date(String(session.date || this._localDate()) + 'T12:00:00').getDay();
+        if (dag === 0 || dag === 6) return null;
+        const user = RobawsAPI.getLoggedInUser();
+        const uid = user ? String(user.robawsEmployeeId) : null;
+        let eigenStart = null;
+        if (this._personalStartuur && this._startuurLoadedForUser === uid) eigenStart = this._personalStartuur;
+        else if (uid) { try { eigenStart = localStorage.getItem('qe_startuur_' + uid); } catch (_) {} }
+        const naarMin = (t) => {
+            const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+            return m ? (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) : null;
+        };
+        const start = naarMin(eigenStart);
+        const inMin = naarMin(session.startTime);
+        if (start == null || inMin == null) return null;
+        if (inMin > start - 15) return null;
+        const inTxt = String(session.startTime).slice(0, 5);
+        const startTxt = String(eigenStart).slice(0, 5);
+        const bureau = session.tagType === 'bureau';
+        return {
+            soort: 'vroeg',
+            tekst: bureau
+                ? 'Je hebt vandaag om ' + inTxt + ' ingeklokt aan het bureau. Je uren tellen vanaf je startuur (' + startTxt + ').'
+                : 'Je bent vandaag om ' + inTxt + ' begonnen, vroeger dan je gewone start (' + startTxt + ').',
+            vraag: bureau
+                ? 'Was vroeger beginnen afgesproken? Zet het hieronder, dan kan het bureel het rechtzetten.'
+                : 'Afgesproken? Zet het hieronder, dan ziet het bureel het meteen bij het nakijken.',
+        };
+    },
+
     /** v381: de tijdsblok-grenzen van een uitklok — ÉÉN berekening voor de
      *  klok (_clockOut) én de werkbon-overname (app._fillKlokurenForMonteur),
      *  zodat werkbon en tijdsregistratie altijd dezelfde uren dragen.
@@ -1330,6 +1385,9 @@ window.QEClock = {
             }
         }
         const klokUitLine = `klok-uit: ${tag.name} \u2014 ${outGpsText} \u2014 ${endTimeRaw}`;
+        // v394: opmerking van de werknemer uit het uitklokformulier \u2014 eigen
+        // regel onder de klok-uit-regel, in DEZELFDE afsluit-PUT.
+        const opmRegel = opts2.opmerking ? RobawsAPI.uitklokOpmerkingRegel(opts2.opmerking, endTimeRaw) : '';
 
         // v77: Uitgeklokt-veld krijgt EXACTE klok-tijd (endTimeRaw), niet de
         // afgeronde tijd. De afgeronde tijd zit in de werknemer-uren rij.
@@ -1556,7 +1614,8 @@ window.QEClock = {
         // alleen het afsluiten opnieuw (de idempotency-check hierboven slaat
         // het dubbel posten van de uren dan over).
         try {
-            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw, klokUitLine);
+            await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw, klokUitLine,
+                opmRegel ? [opmRegel] : null);
         } catch(e) {
             console.warn('[Clock] Uitgeklokt update faalde:', e.message);
             return {
@@ -1621,10 +1680,11 @@ window.QEClock = {
         return {
             ok: true,
             // Data voor de uitklok-celebratie (Claude Design "Uitklokken")
-            celeb: { weekend: isFridayParty, time: entryEnd, hours: payableHours },
+            celeb: { weekend: isFridayParty, time: entryEnd, hours: payableHours, opmerking: !!opmRegel },
             message: 'Uitgeklokt om ' + entryEnd + '\n' +
                 'Uren: ' + entryStart + ' - ' + entryEnd +
                 ' (' + pauseMinutes + 'min pauze)' + uitklokNote + openLLNote +
+                (opmRegel ? '\nOpmerking doorgegeven aan het bureel' : '') +
                 (isFridayParty ? '\n\u{1F389} Fijn weekend!' : ''),
             refresh: true,
             // v83: vraag de monteur om kilometers in te geven na clock-out.

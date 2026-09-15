@@ -233,7 +233,7 @@
             ['NFC in- en uitklokken', 'Houd je telefoon tegen een NFC-tag: bureau, camionet of laden & lossen. De kaart toont je status en kleurt mee.', '#clockHeroCard'],
             ['Afronding', 'Kwartieren met 4 min tolerantie: 06:48 → 06:45, maar 06:50 → 07:00. De uitleg staat onder "Hoe wordt mijn tijd afgerond?" — tik om open te klappen.'],
             ['Op tijd = vóór je startuur', 'Vroeger inklokken telt pas vanaf je startuur. Elke minuut ná je startuur ben je "te laat" — ook al word je tot 4 min nog vanaf het startuur betaald.'],
-            ['Kilometers bij uitklokken', 'Bij het uitklokken vraagt de app eerst je kilometers. Pas na "Uitklokken bevestigen" ben je echt uitgeklokt — sluit je het formulier, dan blijf je ingeklokt.'],
+            ['Kilometers bij uitklokken', 'Bij het uitklokken vraagt de app eerst je kilometers. Iets bijzonders (bv. vroeger begonnen, afgesproken met de projectleider)? Zet het in "Opmerking voor het bureel". Pas na "Uitklokken bevestigen" ben je echt uitgeklokt — sluit je het formulier, dan blijf je ingeklokt.'],
             ['Mijn uren & Maandrecap', 'Via "Mijn uren bekijken" open je je maandoverzicht. De Maandrecap-knop toont jouw maand als stories — die verschijnt ook vanzelf na je laatste uitklok van de maand.'],
             ['Weeklog', 'Onderaan zie je je afgeronde registraties. Weekend telt altijd als overuren.', '#clockCompletedSection']
         ] },
@@ -275,6 +275,17 @@
             ['Wanneer', 'Tik dagen aan in de kalender (meerdere mag) of gebruik de snelknoppen. Elke dag wordt een eigen dagplanning.'],
             ['Uren, kleur en titel', 'Standaard 06:45–15:30, de kleur van de gekozen monteur en het projectnummer als titel — alles aanpasbaar.'],
             ['Inplannen', 'De app slaat dagen over die al precies zo op dit project staan en controleert na het bewaren of elke planning echt in Robaws staat.']
+        ] },
+        /* v395: Logistiek ook voor monteurs (per persoon ingesteld) */
+        screenLogistiek: { name: 'LOGISTIEK', steps: [
+            ['Wat je hier ziet', 'Welke kaarten je ziet, stelt het bureel per persoon in. Monteurs zien standaard hun eigen voertuig en de gasflessen.'],
+            ['Mijn voertuig', 'Het voertuig dat in Robaws op jouw naam staat, met de gasflessen die erin staan.'],
+            ['Gasflessen', 'Waar staat welke fles en wie is er verantwoordelijk voor. De weergave "Bij mij" toont de flessen op jouw naam en in jouw camionet.']
+        ] },
+        screenGasflessen: { name: 'GASFLESSEN', steps: [
+            ['Weergave', 'Kies hoe je de flessen ziet: bij mij, per project of plaats, per verantwoordelijke, per gassoort of langst in huur.', '#gfWeergave'],
+            ['Een fles', 'Tik een fles voor het detail: gassoort, flesnummer, waar ze staat en wie verantwoordelijk is. Het bureel zet een fles op een project of camionet en registreert het inleveren.'],
+            ['Scannen', 'Met "Scan QR" lees je het etiket op de fles en open je meteen haar fiche.']
         ] },
         screenToestel: { name: 'TOESTEL', steps: [
             ['Toestemmingen', 'Hier zie je welke toestemmingen de app heeft. "Alles in één keer toestaan" vraagt ze meteen allemaal.', '#toestelInhoud'],
@@ -348,6 +359,12 @@
                 list.push('screenProjecten');
             }
         } catch (e) { /* rondleiding mag nooit crashen op een rol-check */ }
+        /* v395: Logistiek zit in de rondleiding voor wie de tab heeft */
+        var navLog = document.getElementById('navLogistiek');
+        if (navLog && navLog.style.display !== 'none') {
+            var ui = list.indexOf('screenUitgevoerd');
+            list.splice(ui >= 0 ? ui + 1 : list.length, 0, 'screenLogistiek');
+        }
         var admin = document.getElementById('adminCard');
         var ana = document.getElementById('urenAnalyseCard');
         if (admin && admin.style.display !== 'none') list.push('screenAdmin');

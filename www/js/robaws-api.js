@@ -316,6 +316,100 @@ const RobawsAPI = {
             return bekend.indexOf(String(key)) < 0;
         } catch (_e) { return true; }
     },
+
+    /** v395: LOGISTIEK PER PERSOON (vraag Levi 15 sep: monteurs zien de
+     *  gasflessen en het voertuig waarvoor ze verantwoordelijk zijn; in de
+     *  instellingen per persoon aan te duiden). `rollen` = voor wie het
+     *  onderdeel aan te vinken valt. Beheren (verplaatsen, keuringen, boeken)
+     *  blijft ALTIJD bureel — voor anderen is alles alleen-lezen. De Worker
+     *  (v436) bewaart enkel de keuze per e-mail (KV app:logistiek). */
+    LOG_DELEN: [
+        { key: 'voertuigen',   naam: 'Voertuigen',       rollen: ['bureel'] },
+        { key: 'gereedschap',  naam: 'Gereedschap',      rollen: ['bureel'] },
+        { key: 'budget',       naam: 'Werknemersbudget', rollen: ['bureel'] },
+        { key: 'gasflessen',   naam: 'Gasflessen',       rollen: ['bureel', 'monteur', 'technieker'] },
+        { key: 'mijnvoertuig', naam: 'Eigen voertuig',   rollen: ['monteur', 'technieker'] },
+    ],
+    /** Zonder bewaarde keuze: de standaard van de rol. */
+    LOG_STANDAARD: {
+        bureel: ['voertuigen', 'gereedschap', 'budget', 'gasflessen'],
+        monteur: ['gasflessen', 'mijnvoertuig'],
+        technieker: [],
+    },
+    _logRol(rol) { return (rol === 'bureel' || rol === 'monteur') ? rol : 'technieker'; },
+    /** Onderdelen die voor deze rol aan te vinken zijn (vaste volgorde). */
+    logistiekDelenMogelijk(rol) {
+        const r = this._logRol(rol);
+        return this.LOG_DELEN.filter(d => d.rollen.indexOf(r) >= 0).map(d => d.key);
+    },
+    /** Effectieve onderdelen voor een rol + bewaarde keuze ({delen, bekend} of null).
+     *  Een onderdeel dat nog niet bestond toen de keuze bewaard werd, volgt de
+     *  standaard van de rol (zelfde belofte als bij de andere toegangsrechten). */
+    logistiekDelenVoor(rol, keuze) {
+        const r = this._logRol(rol);
+        const mag = this.logistiekDelenMogelijk(r);
+        const std = (this.LOG_STANDAARD[r] || []).filter(k => mag.indexOf(k) >= 0);
+        if (!keuze || !Array.isArray(keuze.delen)) return std;
+        const bekend = Array.isArray(keuze.bekend) ? keuze.bekend : this.LOG_DELEN.map(d => d.key);
+        const gekozen = keuze.delen.map(String).filter(k => mag.indexOf(k) >= 0);
+        for (const k of std) if (bekend.indexOf(k) < 0 && gekozen.indexOf(k) < 0) gekozen.push(k);
+        return mag.filter(k => gekozen.indexOf(k) >= 0);
+    },
+    /** Wat mag de ingelogde persoon in Logistiek zien? [] = geen Logistiek-tab. */
+    mijnLogistiekDelen() {
+        try {
+            const u = this.getLoggedInUser();
+            if (!u) return [];
+            // bureel: de bestaande schakelaar "Logistiek" blijft de hoofdschakelaar
+            if (u.role === 'bureel' && !this.magAppTool('logistiek')) return [];
+            let keuze = null;
+            try { keuze = JSON.parse(localStorage.getItem('qe_app_logistiek') || 'null'); } catch (_e) {}
+            // een keuze van iemand anders op hetzelfde toestel telt niet
+            if (keuze && keuze.email && String(keuze.email) !== String(u.email || '').toLowerCase().trim()) keuze = null;
+            return this.logistiekDelenVoor(u.role, keuze);
+        } catch (_e) { return []; }
+    },
+    magLogistiekDeel(key) { return this.mijnLogistiekDelen().indexOf(String(key)) >= 0; },
+    _zetMijnLogistiek(keuze, email) {
+        try {
+            if (keuze && Array.isArray(keuze.delen)) {
+                const u = this.getLoggedInUser();
+                localStorage.setItem('qe_app_logistiek', JSON.stringify({
+                    email: String(email || (u && u.email) || '').toLowerCase().trim() || null,
+                    delen: keuze.delen.map(String),
+                    bekend: Array.isArray(keuze.bekend) ? keuze.bekend.map(String) : null,
+                }));
+            } else {
+                localStorage.removeItem('qe_app_logistiek');
+            }
+        } catch (_e) {}
+    },
+    /** v395: eigen toegangsrechten opnieuw ophalen (bij het opstarten van de
+     *  app) — een wijziging in de instellingen werkt zo zonder opnieuw in te
+     *  loggen. Oude Worker of geen verbinding = de bewaarde stand blijft.
+     *  Geeft true als er iets veranderde. */
+    async verversAppRechten() {
+        const u = this.getLoggedInUser();
+        let alg = null;
+        try { alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null'); } catch (_e) {}
+        if (!u || !u.email || !alg || !alg.key || !alg.secret) return false;
+        const voor = JSON.stringify([localStorage.getItem('qe_app_tools'), localStorage.getItem('qe_app_logistiek')]);
+        const res = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/bel-api/app-rechten',
+            { headers: { 'X-App-Key': alg.key + ':' + alg.secret } }, 8000);
+        if (!res.ok) return false;
+        const j = await res.json();
+        const em = String(u.email).toLowerCase().trim();
+        const r = (j && j.rechten) || {};
+        if (Array.isArray(r[em])) localStorage.setItem('qe_app_tools', JSON.stringify(r[em]));
+        else localStorage.removeItem('qe_app_tools');
+        if (j && Array.isArray(j.tools)) localStorage.setItem('qe_app_tools_bekend', JSON.stringify(j.tools.map(t => t.key)));
+        // alleen een Worker die de logistiek-keuze kent (v436) mag die bijwerken
+        if (j && j.logistiek && j.logistiek.personen) {
+            const l = j.logistiek.personen[em];
+            this._zetMijnLogistiek(Array.isArray(l) ? { delen: l, bekend: j.logistiek.bekend } : null, em);
+        }
+        return JSON.stringify([localStorage.getItem('qe_app_tools'), localStorage.getItem('qe_app_logistiek')]) !== voor;
+    },
     TASK_KEYS: { FACTUREN: 'facturen', OPVOLGING: 'opvolging', ARTIKELS: 'artikels', URENAANPASSING: 'urenAanpassing', OFFERTES: 'offertes', KEURINGEN: 'keuringen', URENBEWAKING: 'urenBewaking' },
     _taakGebruikers: {},
     _taakOntvangersToepassen(map) {
@@ -2493,6 +2587,8 @@ const RobawsAPI = {
                         // v391: lijst van onderdelen die de server kent (nieuwe blijven anders zichtbaar)
                         if (Array.isArray(wj.appToolsBekend)) localStorage.setItem('qe_app_tools_bekend', JSON.stringify(wj.appToolsBekend));
                         else localStorage.removeItem('qe_app_tools_bekend');
+                        // v395: logistiek per persoon (null/afwezig = standaard van de rol)
+                        this._zetMijnLogistiek(wj.mijnLogistiek || null, emailLower);
                     } catch (_e) {}
                 }
                 if (wres.ok && wj.taakOntvangers) {
@@ -6704,12 +6800,54 @@ const RobawsAPI = {
     },
 
     /**
+     * v394: OPMERKING VAN DE WERKNEMER BIJ HET UITKLOKKEN (vraag Levi: "nu
+     * wordt er tegen mij persoonlijk iets vermeld — vroeger begonnen om de
+     * file voor te zijn, afgesproken met de projectleider"). Staat als EIGEN
+     * regel in de opmerking van de klok-werkbon, net als de klok-in/klok-uit-
+     * regels. Bewust geen extraveld: een onbekend veld in de uitklok-PUT zou
+     * de uitklok zelf kunnen breken. Vorm (één regel, max 500 tekens):
+     *   "opmerking werknemer (16:32): vroeger begonnen, afgesproken met Bart"
+     * Dezelfde vorm lezen: de Worker (urenOpmerkingen → uren-scherm hub) en
+     * het Uren-scherm van de app. Wijzig je de vorm, dan ALLE DRIE.
+     */
+    UITKLOK_OPM_MAX: 500,
+    uitklokOpmerkingSchoon(tekst) {
+        const regels = String(tekst == null ? '' : tekst).split(/\r\n|\r|\n/)
+            .map(r => r.replace(/\t/g, ' ').replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+        let t = regels.join(' / ');
+        // geen stuurtekens, en "klok-in:"/"klok-uit:" onschadelijk maken zodat
+        // geen enkele klok-parser de opmerking voor een scan kan aanzien
+        t = Array.from(t).filter(ch => { const c = ch.charCodeAt(0); return c >= 32 && c !== 127; }).join('');
+        t = t.replace(/klok-(in|uit)\s*:/gi, (m, soort) => 'klok-' + soort);
+        return t.slice(0, this.UITKLOK_OPM_MAX).trim();
+    },
+    uitklokOpmerkingRegel(tekst, hhmm) {
+        const t = this.uitklokOpmerkingSchoon(tekst);
+        if (!t) return '';
+        const uur = /^\d{1,2}:\d{2}$/.test(String(hhmm || '')) ? ' (' + hhmm + ')' : '';
+        return 'opmerking werknemer' + uur + ': ' + t;
+    },
+    /** Eén regel → { tekst, uur } of null. */
+    leesUitklokOpmerking(regel) {
+        const m = String(regel || '').match(/^\s*opmerking\s+werknemer\s*(?:\((\d{1,2}:\d{2})\))?\s*:\s*(.+?)\s*$/i);
+        return m ? { uur: m[1] || null, tekst: m[2] } : null;
+    },
+    /** Alle opmerkingen uit een werkbon-opmerking (volgorde van schrijven). */
+    leesUitklokOpmerkingen(remark) {
+        return String(remark || '').split(/\r?\n/)
+            .map(r => this.leesUitklokOpmerking(r)).filter(Boolean);
+    },
+
+    /**
      * Update Uitgeklokt-tijd op een tijdsregistratie-werkbon.
      * v59: GET-then-PUT (partial PUT zou andere velden wissen).
      * v70: optioneel een extra regel aan de werkbon-remark appenden
      *      (gebruikt voor "klok-uit: ..." regel).
      */
-    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark) {
+    // v394: extraRegels = extra regels (bv. uitklokOpmerkingRegel) die in
+    // dezelfde PUT meegaan; een opmerking die er al staat komt er niet dubbel op.
+    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark, extraRegels) {
         const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (getRes.code !== 200 || !getRes.data) {
             throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
@@ -6720,6 +6858,31 @@ const RobawsAPI = {
         if (appendRemark) {
             const existing = String(wo.remark || '').trim();
             wo.remark = existing ? (existing + '\n' + appendRemark) : appendRemark;
+        }
+        // v394: extra regels (de opmerking van de werknemer) in DEZELFDE PUT —
+        // geen aparte schrijfactie die los kan mislukken. Bij een herkansing
+        // (scan opnieuw na een mislukte afsluiting) komt dezelfde opmerking
+        // er niet twee keer op: vergeleken op de tekst, niet op het uur.
+        const extra = (Array.isArray(extraRegels) ? extraRegels : [extraRegels])
+            .map(r => String(r || '').trim()).filter(Boolean);
+        if (extra.length) {
+            const bestaand = String(wo.remark || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const opmSleutel = (l) => {
+                const o = this.leesUitklokOpmerking(l);
+                return o ? o.tekst.toLowerCase().replace(/\s+/g, ' ') : null;
+            };
+            const bekendeOpm = new Set(bestaand.map(opmSleutel).filter(Boolean));
+            const erbij = [];
+            for (const r of extra) {
+                const s = opmSleutel(r);
+                if (s ? bekendeOpm.has(s) : bestaand.indexOf(r) >= 0) continue;
+                if (s) bekendeOpm.add(s);
+                erbij.push(r);
+            }
+            if (erbij.length) {
+                const existing = String(wo.remark || '').trim();
+                wo.remark = existing ? (existing + '\n' + erbij.join('\n')) : erbij.join('\n');
+            }
         }
         try { localStorage.setItem('qe_last_uitg_put_req', JSON.stringify(wo)); } catch(_) {}
         let putRes = await this.put(`work-orders/${workOrderId}`, wo);

@@ -1149,7 +1149,7 @@
             <div class="mb-prow" style="border-bottom:none" onclick="app.openAppRechten()">
                 <div style="flex:1;min-width:0">
                     <div class="mb-prow-t">Toegang tot onderdelen</div>
-                    <div class="mb-prow-s">Wie ziet Klokken en Logistiek in de app</div>
+                    <div class="mb-prow-s">Per persoon: klok-beheer, projecten en wat iemand in Logistiek ziet</div>
                 </div>
                 <span class="mb-prow-arrow">→</span>
             </div>
@@ -1362,13 +1362,17 @@
     <div class="section-header"><h2>Toegang tot onderdelen</h2></div>
     <div class="card" style="margin-bottom:12px">
         <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
-            Wat mag een <b>bureel</b>-medewerker extra in de app? <b>Klok-beheer</b> =
+            Wie ziet wat in de app? <b>Bureel</b>: <b>Klok-beheer</b> =
             team-aanwezigheid zien, anderen handmatig in- en uitklokken en de NFC-tags
-            beheren; staat dat uit, dan werkt de klok bij die persoon net als bij een
-            monteur of technieker (zelf klokken kan altijd). <b>Logistiek</b> = de
-            Logistiek-tab. <b>Projecten</b> = het compartiment Projecten onder Organisatie
-            (projecten zoeken en dagplanningen maken). Techniekers en monteurs staan niet in deze lijst — voor hen
-            verandert er niets. Een wijziging geldt vanaf de volgende login.
+            beheren (staat dat uit, dan werkt de klok zoals bij een monteur — zelf klokken
+            kan altijd); <b>Projecten</b> = het compartiment Projecten onder Organisatie;
+            en welke delen van de <b>Logistiek</b>-tab. Beheren (verplaatsen, keuringen,
+            boeken) doet alleen het bureel.<br>
+            <b>Monteurs en techniekers</b> zien Logistiek alleen om te bekijken:
+            <b>Gasflessen</b> (waar staat welke fles, welke bij hen) en <b>Eigen voertuig</b>
+            (het voertuig dat in Robaws op hun naam staat). Standaard hebben monteurs
+            allebei en techniekers niets. Een wijziging werkt bij de volgende start van de
+            app van die persoon.
         </div>
     </div>
     <div id="appRechtenList"><div class="spinner"></div></div>
@@ -1387,10 +1391,21 @@
     <div id="taakOntvList"><div class="spinner"></div></div>
 </div>
 
-<!-- ========== SCREEN: LOGISTIEK (v346 — hub, alleen bureel) ========== -->
+<!-- ========== SCREEN: LOGISTIEK (v346 — hub; v395: kaarten per toegangsrecht, ook monteurs) ========== -->
 <div class="screen" id="screenLogistiek">
     <div class="section-header"><h2>Logistiek</h2></div>
-    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openVoertuigen()">
+    <!-- v395: eigen voertuig (monteurs/techniekers, alleen-lezen) -->
+    <div class="card card-clickable" id="logKaartMijnVoertuig" style="margin-bottom:12px;padding:16px 18px;display:none;align-items:center;gap:14px;cursor:pointer" onclick="app.openMijnVoertuig()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:600;color:var(--ink)">Mijn voertuig</div>
+            <div id="logMijnVoertuigSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Het voertuig waarvoor jij verantwoordelijk bent</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
+    <div class="card card-clickable" id="logKaartVoertuigen" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openVoertuigen()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
             <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
         </svg>
@@ -1401,7 +1416,7 @@
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
     <!-- v353: Gereedschap — wie heeft wat + keuringen -->
-    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openGereedschap()">
+    <div class="card card-clickable" id="logKaartGereedschap" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openGereedschap()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
         </svg>
@@ -1412,7 +1427,7 @@
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
     <!-- v363: Werknemersbudget -->
-    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openBudget()">
+    <div class="card card-clickable" id="logKaartBudget" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openBudget()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
             <path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
         </svg>
@@ -1422,7 +1437,7 @@
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
-    <div class="card card-clickable" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openGasflessen()">
+    <div class="card card-clickable" id="logKaartGas" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openGasflessen()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
             <path d="M9 2h6M10 2v3M14 2v3M8 5h8a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM6 11h12"/>
         </svg>
@@ -1432,7 +1447,7 @@
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
-    <div style="font-size:12px;color:var(--g3);text-align:center;margin-top:18px">Meer logistiek volgt hier later.</div>
+    <div id="logMeerLater" style="font-size:12px;color:var(--g3);text-align:center;margin-top:18px">Meer logistiek volgt hier later.</div>
 </div>
 
 <!-- ========== SCREEN: WERKNEMERSBUDGET (v363) ========== -->
@@ -1453,7 +1468,7 @@
 
 <!-- ========== SCREEN: VOERTUIGEN (v346) ========== -->
 <div class="screen" id="screenVoertuigen">
-    <div class="section-header"><h2>Voertuigen</h2></div>
+    <div class="section-header"><h2 id="voertuigenTitel">Voertuigen</h2></div>
     <div id="voertuigenList"><div class="spinner"></div></div>
 </div>
 
@@ -1484,6 +1499,7 @@
     <input type="text" id="gfZoek" class="form-input" placeholder="Zoek op flesnummer, project of naam…" style="width:100%;margin-bottom:10px" oninput="app.gfZet('zoek', this.value)">
     <div style="display:flex;gap:8px;margin-bottom:10px">
         <select id="gfWeergave" class="form-input" style="flex:1" onchange="app.gfZet('weergave', this.value)">
+            <option value="mijn">Bij mij</option>
             <option value="project">Per project / plaats</option>
             <option value="wie">Per verantwoordelijke</option>
             <option value="soort">Per gassoort</option>
@@ -1495,7 +1511,7 @@
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px">
         <button class="btn btn-primary" style="flex:1" onclick="app.openGasScan()">📷 Scan QR</button>
-        <button class="btn btn-outline" style="flex:1" onclick="app.openGasflesNieuw()">+ Nieuwe fles</button>
+        <button class="btn btn-outline" id="gfNieuwKnop" style="flex:1" onclick="app.openGasflesNieuw()">+ Nieuwe fles</button>
     </div>
     <div id="gfVeldHint"></div>
     <div id="gasflesList"><div class="spinner"></div></div>
@@ -1638,7 +1654,9 @@
         </svg>
         Klaar
     </button>
-    <button class="nav-item" data-screen="screenLogistiek" id="navLogistiek" style="display:none" onclick="app.openLogistiek()">
+    <button class="nav-item" data-screen="screenLogistiek" id="navLogistiek" style="display:none"
+        data-screens="screenVoertuigen,screenGereedschap,screenGasflessen,screenBudget"
+        onclick="app.openLogistiek()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
         </svg>
