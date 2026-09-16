@@ -1496,8 +1496,11 @@
 <div class="screen" id="screenGasflessen">
     <div class="section-header"><h2>Gasflessen</h2></div>
     <div id="gfKop" style="font-size:12.5px;color:var(--qe-grey);margin:-4px 4px 10px;line-height:1.45"></div>
-    <input type="text" id="gfZoek" class="form-input" placeholder="Zoek op flesnummer, project of naam…" style="width:100%;margin-bottom:10px" oninput="app.gfZet('zoek', this.value)">
-    <div style="display:flex;gap:8px;margin-bottom:10px">
+    <button class="btn btn-primary btn-full" style="padding:16px;font-size:16px;margin-bottom:12px" onclick="app.openGasScan()">📷 Scan een fles</button>
+    <!-- v397: wie niet beheert krijgt twee grote knoppen i.p.v. de keuzelijsten -->
+    <div id="gfTabs" style="display:none;gap:8px;margin-bottom:10px"></div>
+    <input type="text" id="gfZoek" class="form-input" placeholder="Zoek op flesnummer, werf of naam…" style="width:100%;margin-bottom:10px;font-size:16px;padding:13px" oninput="app.gfZet('zoek', this.value)">
+    <div id="gfFilters" style="display:flex;gap:8px;margin-bottom:10px">
         <select id="gfWeergave" class="form-input" style="flex:1" onchange="app.gfZet('weergave', this.value)">
             <option value="mijn">Bij mij</option>
             <option value="project">Per project / plaats</option>
@@ -1509,10 +1512,7 @@
             <option value="">Alle gassen</option>
         </select>
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-        <button class="btn btn-primary" style="flex:1" onclick="app.openGasScan()">📷 Scan QR</button>
-        <button class="btn btn-outline" id="gfNieuwKnop" style="flex:1" onclick="app.openGasflesNieuw()">+ Nieuwe fles</button>
-    </div>
+    <button class="btn btn-outline btn-full" id="gfNieuwKnop" style="margin-bottom:12px" onclick="app.openGasflesNieuw()">+ Nieuwe fles registreren</button>
     <div id="gfVeldHint"></div>
     <div id="gasflesList"><div class="spinner"></div></div>
 </div>

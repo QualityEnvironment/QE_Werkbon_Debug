@@ -284,7 +284,8 @@
         ] },
         screenGasflessen: { name: 'GASFLESSEN', steps: [
             ['Weergave', 'Kies hoe je de flessen ziet: bij mij, per project of plaats, per verantwoordelijke, per gassoort of langst in huur.', '#gfWeergave'],
-            ['Een fles', 'Tik een fles voor het detail: gassoort, flesnummer, waar ze staat en wie verantwoordelijk is. Het bureel zet een fles op een project of camionet en registreert het inleveren.'],
+            ['Een fles', 'Tik een fles voor het detail: gassoort, flesnummer, waar ze staat en wie verantwoordelijk is. Het bureel zet een fles op een project en registreert het inleveren.'],
+            ['Meenemen', 'Neem je een fles mee? Tik in de fiche op "Ik neem deze fles mee": ze komt op jouw naam en in jouw camionet te staan.'],
             ['Scannen', 'Met "Scan QR" lees je het etiket op de fles en open je meteen haar fiche.']
         ] },
         screenToestel: { name: 'TOESTEL', steps: [

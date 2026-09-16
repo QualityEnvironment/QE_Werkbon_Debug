@@ -1549,6 +1549,24 @@ const RobawsAPI = {
         { naam: 'Westfalen',        supplierId: '623',  match: /westfalen/i },
     ],
     GAS_LEVERANCIER_STANDAARD: 'Antwerp Gasdepot',
+    // ---- v397: vulstand + logboek (vraag Levi 16 sep) ----
+    /** Hoeveel zit er nog in? De sleutel staat in de code, het LABEL gaat naar
+     *  Robaws (leesbaar in het extraveld "Vulstand"). */
+    GAS_VULSTANDEN: [
+        { key: 'vol',     label: 'Vol',     kleur: '#3E7A54', wash: '#E3F0E7', emoji: '🟢' },
+        { key: 'halfvol', label: 'Halfvol', kleur: '#B37514', wash: '#FAEFD9', emoji: '🟡' },
+        { key: 'leeg',    label: 'Leeg',    kleur: '#B4372F', wash: '#FBE6E3', emoji: '🔴' },
+    ],
+    /** Twee extravelden op Materieel die LEVI nog moet aanmaken. Zonder die
+     *  velden blijft alles werken: de vulstand-knoppen melden het eerlijk en
+     *  het logboek wordt gewoon niet bewaard (nooit een actie blokkeren). */
+    GAS_VELD_VULSTAND: 'Vulstand',
+    GAS_VELD_LOG: 'Fles logboek',
+    /** "Ik zet ze terug" → hier gaat de fles naartoe (gemeten: stocklocatie #3
+     *  heet GROOT MAGAZIJN). Terugval: de eerste locatie met 'magazijn' in de
+     *  naam die geen camionet is. */
+    GAS_MAGAZIJN_MATCH: /groot\s*magazijn/i,
+    GAS_LOG_MAX: 60,
     /** Messer Belgium NV factureert de cilinderHUUR (gemeten 11 sep 2026):
      *  per huurtype een lijn met het aantal CILINDERDAGEN × dagprijs
      *  ('Huur Cilinder Industrieel 932 × € 0,4964'). Gedeeld door de
@@ -1627,6 +1645,72 @@ const RobawsAPI = {
     gasHuurSinds(m) { return this._gasVeld(m, 'Huur sinds') || (m && m.createdAt ? String(m.createdAt).slice(0, 10) : null); },
     gasIngeleverdOp(m) { return this._gasVeld(m, 'Ingeleverd op'); },
     gasIsIngeleverd(m) { return String((m && m.status) || '').toLowerCase() === 'ingeleverd'; },
+
+    // ---- v397: VULSTAND ----
+    /** Sleutel ('vol' | 'halfvol' | 'leeg') uit het extraveld, of null. */
+    gasVulstand(m) {
+        const rauw = String(this._gasVeldRuw(m, this.GAS_VELD_VULSTAND) || '').trim().toLowerCase();
+        if (!rauw) return null;
+        if (/^(half|halfvol|halfleeg|1\/2|50)/.test(rauw)) return 'halfvol';
+        if (/^(vol|full|100)/.test(rauw)) return 'vol';
+        if (/^(leeg|empty|0)/.test(rauw)) return 'leeg';
+        return null;
+    },
+    gasVulstandInfo(key) { return this.GAS_VULSTANDEN.find(v => v.key === key) || null; },
+    _gasVeldRuw(m, naam) {
+        const f = m && m.extraFields && m.extraFields[naam];
+        return f ? (f.stringValue ?? f.value ?? null) : null;
+    },
+    /** Waar gaat een fles naartoe als ze terugkomt: GROOT MAGAZIJN. */
+    gasMagazijnLocatie(locs) {
+        const lijst = locs || [];
+        const plaat = /\d-[A-Z]{2,3}-\d{2,3}/i;
+        const groot = lijst.find(l => this.GAS_MAGAZIJN_MATCH.test(String(l.name || '')));
+        const l2 = groot || lijst.find(l => /magazijn/i.test(String(l.name || '')) && !plaat.test(String(l.name || '')));
+        return l2 ? { id: String(l2.id), naam: String(l2.name || 'Magazijn') } : null;
+    },
+
+    // ---- v397: LOGBOEK (wie had welke fles wanneer) ----
+    /** Regels uit het extraveld, nieuwste eerst; onleesbaar = lege lijst. */
+    gasLog(m) {
+        const rauw = this._gasVeldRuw(m, this.GAS_VELD_LOG);
+        if (!rauw) return [];
+        try {
+            const o = JSON.parse(String(rauw));
+            const r = Array.isArray(o) ? o : (o && Array.isArray(o.r) ? o.r : []);
+            return r.filter(x => x && x.d);
+        } catch (_e) { return []; }
+    },
+    /** Tijdstempel in Brusselse tijd, tot op de minuut: '2026-09-16T08:12'. */
+    _gasNu() {
+        const d = new Date();
+        const s = d.toLocaleString('sv-SE', { timeZone: 'Europe/Brussels' });   // 'YYYY-MM-DD HH:MM:SS'
+        return s.slice(0, 10) + 'T' + s.slice(11, 16);
+    },
+    /** Eén leesbare zin per logregel (app én hub gebruiken deze woorden). */
+    gasLogZin(r) {
+        const wie = String((r && r.w) || 'Iemand');
+        const naar = String((r && r.n) || '');
+        switch (r && r.a) {
+            case 'mee':    return wie + ' nam ze mee' + (naar ? ' naar ' + naar : '');
+            case 'terug':  return wie + ' zette ze terug in ' + (naar || 'het magazijn');
+            case 'vul':    return wie + ' zette de fles op ' + (naar || '?');
+            case 'plaats': return 'Verplaatst naar ' + (naar || '?') + ' door ' + wie;
+            case 'wie':    return naar ? (naar + ' is nu verantwoordelijk (gezet door ' + wie + ')') : (wie + ' haalde de verantwoordelijke weg');
+            case 'in':     return wie + ' leverde ze in bij de leverancier';
+            case 'uit':    return wie + ' zette ze weer in huur';
+            case 'nieuw':  return 'Geregistreerd door ' + wie;
+            default:       return wie + (naar ? ' · ' + naar : '');
+        }
+    },
+    /** '2026-09-16T08:12' → '16 sep 08:12' */
+    gasLogDatum(d) {
+        const s = String(d || '');
+        if (s.length < 10) return s;
+        const dt = new Date(s.slice(0, 10) + 'T12:00:00');
+        const dag = dt.toLocaleDateString('nl-BE', { day: 'numeric', month: 'short' });
+        return dag + (s.length >= 16 ? ' ' + s.slice(11, 16) : '');
+    },
 
     /** Dagen in huur: van 'Huur sinds' tot vandaag (of tot de inleverdatum). */
     gasDagen(m, vandaagISO) {
@@ -1711,32 +1795,114 @@ const RobawsAPI = {
 
     /** Waar staat de fles: óf op een project, óf op een stocklocatie —
      *  nooit allebei (één waarheid). */
-    async setMaterialWaar(materialId, { projectId, locId }) {
+    async setMaterialWaar(materialId, { projectId, locId, naam, wie }) {
         const body = projectId
             ? { assignedProjectId: String(projectId), stockLocationId: null }
             : { assignedProjectId: null, stockLocationId: locId ? String(locId) : null };
+        if (wie) { await this._gasSchrijf(materialId, body, { a: 'plaats', n: naam || null, wie }); return true; }   // v397: mét logboek
         const res = await this.patchMerge('materials/' + materialId, body);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
     },
-    async setMaterialEmployee(materialId, empId) {
-        const res = await this.patchMerge('materials/' + materialId, { assignedEmployeeId: empId ? String(empId) : null });
+    async setMaterialEmployee(materialId, empId, opties) {
+        const body = { assignedEmployeeId: empId ? String(empId) : null };
+        if (opties && opties.wie) { await this._gasSchrijf(materialId, body, { a: 'wie', n: opties.naam || null, wie: opties.wie }); return true; }   // v397
+        const res = await this.patchMerge('materials/' + materialId, body);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
     },
-    async gasflesInleveren(materialId, datumISO) {
+    // =============================================================
+    // v397: ÉÉN schrijfweg voor gasflessen — muteren + logboek bijschrijven
+    // + teruglezen als bewijs. Het logboek ("Fles logboek", LONG_TEXT) is
+    // BEST EFFORT: bestaat het veld niet, dan gaat de actie gewoon door.
+    // =============================================================
+    async _gasLees(materialId) {
+        const g = await this.get('materials/' + materialId, { bypassCache: true });
+        if (!g || g.code !== 200 || !g.data) return null;
+        return g.data.id ? g.data : (g.data.data || null);
+    },
+    /** Nieuwe regel vooraan, oudste eruit boven GAS_LOG_MAX. */
+    _gasLogNieuw(oud, regel) {
+        const r = Object.assign({ d: this._gasNu() }, regel || {});
+        return [r].concat((oud || []).filter(x => x && x.d)).slice(0, this.GAS_LOG_MAX);
+    },
+    /**
+     * @param {object} body     merge-PATCH-velden op het materiaal
+     * @param {object} [log]    {a, n, wie:{naam,id}} → regel in het logboek
+     * @returns {object|null}   het verse materiaal ná de schrijfactie (null = niet kunnen lezen)
+     */
+    async _gasSchrijf(materialId, body, log) {
+        let voor = null;
+        if (log) { try { voor = await this._gasLees(materialId); } catch (_e) { voor = null; } }
+        const patch = Object.assign({}, body);
+        if (log) {
+            const w = log.wie || {};
+            const regels = this._gasLogNieuw(this.gasLog(voor), { w: String(w.naam || 'Onbekend'), wi: w.id ? String(w.id) : null, a: log.a, n: log.n || null });
+            patch.extraFields = Object.assign({}, patch.extraFields || {}, {
+                [this.GAS_VELD_LOG]: { type: 'LONG_TEXT', stringValue: JSON.stringify({ v: 1, r: regels }) },
+            });
+        }
+        const res = await this.patchMerge('materials/' + materialId, patch);
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
+        try { return await this._gasLees(materialId); } catch (_e) { return null; }
+    },
+
+    /** Vulstand zetten (vol | halfvol | leeg). Plakt het niet, dan bestaat het
+     *  extraveld nog niet — dat zeggen we met zoveel woorden. */
+    async setGasVulstand(materialId, key, wie) {
+        const info = this.gasVulstandInfo(key);
+        if (!info) throw new Error('Onbekende vulstand');
+        const na = await this._gasSchrijf(materialId,
+            { extraFields: { [this.GAS_VELD_VULSTAND]: { type: 'TEXT', stringValue: info.label } } },
+            { a: 'vul', n: info.label, wie });
+        if (na && this.gasVulstand(na) !== key) throw new Error('Het veld "' + this.GAS_VELD_VULSTAND + '" bestaat nog niet in Robaws — vraag het bureel om het aan te maken');
+        return true;
+    },
+
+    /** v396/v397: "Ik neem deze fles mee" — verantwoordelijke = ik, en de fles
+     *  gaat naar de gekozen plaats (camionet OF werf, nooit allebei).
+     *  `waar` = {locId} | {projectId} | locId (oude vorm). */
+    async gasflesMeenemen(materialId, empId, waar, wie) {
+        if (!empId) throw new Error('Geen werknemer');
+        const w = (waar && typeof waar === 'object') ? waar : { locId: waar };
+        const locId = w.locId ? String(w.locId) : null;
+        const projectId = w.projectId ? String(w.projectId) : null;
+        const body = { assignedEmployeeId: String(empId) };
+        if (projectId) { body.assignedProjectId = projectId; body.stockLocationId = null; }
+        else if (locId) { body.stockLocationId = locId; body.assignedProjectId = null; }
+        const na = await this._gasSchrijf(materialId, body, wie ? { a: 'mee', n: w.naam || null, wie } : null);
+        if (na && String(na.assignedEmployeeId || '') !== String(empId)) throw new Error('Robaws nam de verantwoordelijke niet over');
+        if (na && locId && String(na.stockLocationId || '') !== locId) throw new Error('Robaws nam de plaats niet over');
+        if (na && projectId && String(na.assignedProjectId || '') !== projectId) throw new Error('Robaws nam de werf niet over');
+        return true;
+    },
+
+    /** v397: "Ik zet ze terug" — verantwoordelijke weg, fles naar het magazijn. */
+    async gasflesTerug(materialId, locId, wie) {
+        if (!locId) throw new Error('Geen magazijn gevonden');
+        const na = await this._gasSchrijf(materialId,
+            { assignedEmployeeId: null, stockLocationId: String(locId), assignedProjectId: null },
+            wie ? { a: 'terug', n: wie.plaats || null, wie } : null);
+        if (na && String(na.assignedEmployeeId || '')) throw new Error('Robaws liet de verantwoordelijke staan');
+        if (na && String(na.stockLocationId || '') !== String(locId)) throw new Error('Robaws nam de plaats niet over');
+        return true;
+    },
+
+    async gasflesInleveren(materialId, datumISO, wie) {
         const d = String(datumISO || new Date().toISOString().slice(0, 10)).slice(0, 10);
-        const res = await this.patchMerge('materials/' + materialId, {
-            status: 'ingeleverd', assignedProjectId: null, stockLocationId: null,
+        const body = {
+            status: 'ingeleverd', assignedProjectId: null, stockLocationId: null, assignedEmployeeId: null,
             extraFields: { 'Ingeleverd op': { type: 'DATE', dateValue: d } },
-        });
+        };
+        if (wie) { await this._gasSchrijf(materialId, body, { a: 'in', wie }); return true; }   // v397
+        const res = await this.patchMerge('materials/' + materialId, body);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
     },
-    async gasflesHeractiveer(materialId) {
-        const res = await this.patchMerge('materials/' + materialId, {
-            status: 'actief', extraFields: { 'Ingeleverd op': { type: 'DATE', dateValue: null } },
-        });
+    async gasflesHeractiveer(materialId, wie) {
+        const body = { status: 'actief', extraFields: { 'Ingeleverd op': { type: 'DATE', dateValue: null } } };
+        if (wie) { await this._gasSchrijf(materialId, body, { a: 'uit', wie }); return true; }   // v397
+        const res = await this.patchMerge('materials/' + materialId, body);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
     },
