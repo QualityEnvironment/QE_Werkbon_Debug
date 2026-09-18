@@ -283,10 +283,10 @@
             ['Gasflessen', 'Waar staat welke fles en wie is er verantwoordelijk voor. De weergave "Bij mij" toont de flessen op jouw naam en in jouw camionet.']
         ] },
         screenGasflessen: { name: 'GASFLESSEN', steps: [
-            ['Weergave', 'Kies hoe je de flessen ziet: bij mij, per project of plaats, per verantwoordelijke, per gassoort of langst in huur.', '#gfWeergave'],
-            ['Een fles', 'Tik een fles voor het detail: gassoort, flesnummer, waar ze staat en wie verantwoordelijk is. Het bureel zet een fles op een project en registreert het inleveren.'],
-            ['Meenemen', 'Neem je een fles mee? Tik in de fiche op "Ik neem deze fles mee": ze komt op jouw naam en in jouw camionet te staan.'],
-            ['Scannen', 'Met "Scan QR" lees je het etiket op de fles en open je meteen haar fiche.']
+            ['De lijst', '"Bij mij" toont de flessen op jouw naam en in jouw camionet, "Alle flessen" alle flessen per plaats. De kleur zegt hoe vol een fles is.', '#gasflesList'],
+            ['Een fles aanpassen', 'Tik een fles open en duid aan hoeveel er nog in zit. Wat je aanpast krijgt een oranje stip; tik daarna één keer op "Opslaan" om alles te bewaren.'],
+            ['Meenemen of terugzetten', '"Ik neem deze fles mee" vraagt waar je ze zet: je camionet of een werf. "Ik zet ze terug" brengt ze naar het groot magazijn. Een aangeduide vulstand gaat meteen mee.'],
+            ['Scannen', 'Met "Scan een fles" lees je het etiket op de fles en open je meteen haar fiche.']
         ] },
         screenToestel: { name: 'TOESTEL', steps: [
             ['Toestemmingen', 'Hier zie je welke toestemmingen de app heeft. "Alles in één keer toestaan" vraagt ze meteen allemaal.', '#toestelInhoud'],

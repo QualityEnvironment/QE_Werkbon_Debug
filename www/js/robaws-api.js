@@ -1828,16 +1828,22 @@ const RobawsAPI = {
     },
     /**
      * @param {object} body     merge-PATCH-velden op het materiaal
-     * @param {object} [log]    {a, n, wie:{naam,id}} → regel in het logboek
+     * @param {object|object[]} [log]  {a, n, wie:{naam,id}} → regel in het logboek;
+     *                          v398: ook een lijst (één regel per wijziging, de eerste bovenaan)
      * @returns {object|null}   het verse materiaal ná de schrijfactie (null = niet kunnen lezen)
      */
     async _gasSchrijf(materialId, body, log) {
+        const logs = !log ? [] : (Array.isArray(log) ? log : [log]);
         let voor = null;
-        if (log) { try { voor = await this._gasLees(materialId); } catch (_e) { voor = null; } }
+        if (logs.length) { try { voor = await this._gasLees(materialId); } catch (_e) { voor = null; } }
         const patch = Object.assign({}, body);
-        if (log) {
-            const w = log.wie || {};
-            const regels = this._gasLogNieuw(this.gasLog(voor), { w: String(w.naam || 'Onbekend'), wi: w.id ? String(w.id) : null, a: log.a, n: log.n || null });
+        if (logs.length) {
+            let regels = this.gasLog(voor);
+            // achterstevoren vooraan zetten: de eerste regel van de lijst eindigt bovenaan
+            for (let i = logs.length - 1; i >= 0; i--) {
+                const l = logs[i] || {}, w = l.wie || {};
+                regels = this._gasLogNieuw(regels, { w: String(w.naam || 'Onbekend'), wi: w.id ? String(w.id) : null, a: l.a, n: l.n || null });
+            }
             patch.extraFields = Object.assign({}, patch.extraFields || {}, {
                 [this.GAS_VELD_LOG]: { type: 'LONG_TEXT', stringValue: JSON.stringify({ v: 1, r: regels }) },
             });
@@ -1847,44 +1853,104 @@ const RobawsAPI = {
         try { return await this._gasLees(materialId); } catch (_e) { return null; }
     },
 
+    // =============================================================
+    // v398: ÉÉN OPSLAG voor de fiche (vraag Levi 18 sep: "geen pas-toe-knop
+    // per veld maar één opslaan-knop die alle wijzigingen toepast"). Alles gaat
+    // in ÉÉN merge-PATCH met één logregel per wijziging; daarna teruglezen —
+    // wat Robaws niet overnam komt terug in `nietBewaard` ('emp' | 'waar' |
+    // 'vulstand' | 'huurSinds' | 'status'). Mislukt de PATCH zelf: throw.
+    //   wijz:  { vulstand?: 'vol'|'halfvol'|'leeg'|null,
+    //            waar?: {locId?, projectId?, naam?}   (leeg object = plaats onbekend),
+    //            emp?: {id, naam} | null,  huurSinds?: 'YYYY-MM-DD'|null,
+    //            inleverDatum?: 'YYYY-MM-DD'  (enkel bij soort 'in') }
+    //   soort: null (gewoon opslaan) | 'mee' | 'terug' | 'in' | 'uit'
+    //          → bepaalt de logregel; 'in'/'uit' zetten ook de status.
+    // Volgorde van de velden = die van de oude functies (zelfde PATCH-lichaam).
+    // =============================================================
+    async gasflesBewaar(materialId, wijz, wie, soort) {
+        const w = wijz || {};
+        const heeft = (k) => Object.prototype.hasOwnProperty.call(w, k);
+        const s = (x) => String(x == null ? '' : x);
+        const body = {};
+        const extra = {};
+        if (heeft('emp')) body.assignedEmployeeId = (w.emp && w.emp.id) ? String(w.emp.id) : null;
+        let plaatsNaam = null;
+        if (heeft('waar')) {
+            const p = w.waar || {};
+            plaatsNaam = p.naam || null;
+            if (p.projectId) { body.assignedProjectId = String(p.projectId); body.stockLocationId = null; }
+            else { body.stockLocationId = p.locId ? String(p.locId) : null; body.assignedProjectId = null; }
+        }
+        if (soort === 'in') {
+            body.status = 'ingeleverd'; body.assignedProjectId = null; body.stockLocationId = null; body.assignedEmployeeId = null;
+            extra['Ingeleverd op'] = { type: 'DATE', dateValue: s(w.inleverDatum || new Date().toISOString()).slice(0, 10) };
+        } else if (soort === 'uit') {
+            body.status = 'actief';
+            extra['Ingeleverd op'] = { type: 'DATE', dateValue: null };
+        }
+        let vulInfo = null;
+        if (heeft('vulstand')) {
+            vulInfo = w.vulstand ? this.gasVulstandInfo(w.vulstand) : null;
+            if (w.vulstand && !vulInfo) throw new Error('Onbekende vulstand');
+            extra[this.GAS_VELD_VULSTAND] = { type: 'TEXT', stringValue: vulInfo ? vulInfo.label : null };
+        }
+        if (heeft('huurSinds')) extra['Huur sinds'] = { type: 'DATE', dateValue: w.huurSinds ? s(w.huurSinds).slice(0, 10) : null };
+        if (Object.keys(extra).length) body.extraFields = extra;
+        if (!Object.keys(body).length) return { nietBewaard: [], na: null, niets: true };
+        // één logregel per wijziging (zelfde woorden als de hub/Worker)
+        const logs = [];
+        if (wie) {
+            if (soort === 'mee' || soort === 'terug') logs.push({ a: soort, n: plaatsNaam });
+            else if (soort === 'in' || soort === 'uit') logs.push({ a: soort, n: null });
+            else {
+                if (heeft('waar')) logs.push({ a: 'plaats', n: plaatsNaam || 'plaats onbekend' });
+                if (heeft('emp')) logs.push({ a: 'wie', n: body.assignedEmployeeId ? ((w.emp && w.emp.naam) || null) : null });
+            }
+            if (vulInfo) logs.push({ a: 'vul', n: vulInfo.label });
+            logs.forEach(l => { l.wie = wie; });
+        }
+        const na = await this._gasSchrijf(materialId, body, logs.length ? logs : null);
+        // bewijs: wat nam Robaws niet over? (niet kunnen teruglezen = de 2xx telt)
+        const niet = [];
+        if (na) {
+            if ('assignedEmployeeId' in body && s(na.assignedEmployeeId) !== s(body.assignedEmployeeId)) niet.push('emp');
+            if ('stockLocationId' in body && (s(na.stockLocationId) !== s(body.stockLocationId) || s(na.assignedProjectId) !== s(body.assignedProjectId))) niet.push('waar');
+            if (heeft('vulstand') && s(this.gasVulstand(na)) !== s(vulInfo ? vulInfo.key : null)) niet.push('vulstand');
+            if (heeft('huurSinds') && s(this._gasVeld(na, 'Huur sinds')) !== s(extra['Huur sinds'].dateValue)) niet.push('huurSinds');
+            if (body.status && s(na.status).toLowerCase() !== body.status) niet.push('status');
+        }
+        return { nietBewaard: niet, na };
+    },
+
     /** Vulstand zetten (vol | halfvol | leeg). Plakt het niet, dan bestaat het
-     *  extraveld nog niet — dat zeggen we met zoveel woorden. */
+     *  extraveld nog niet — dat zeggen we met zoveel woorden. (v398: via gasflesBewaar) */
     async setGasVulstand(materialId, key, wie) {
-        const info = this.gasVulstandInfo(key);
-        if (!info) throw new Error('Onbekende vulstand');
-        const na = await this._gasSchrijf(materialId,
-            { extraFields: { [this.GAS_VELD_VULSTAND]: { type: 'TEXT', stringValue: info.label } } },
-            { a: 'vul', n: info.label, wie });
-        if (na && this.gasVulstand(na) !== key) throw new Error('Het veld "' + this.GAS_VELD_VULSTAND + '" bestaat nog niet in Robaws — vraag het bureel om het aan te maken');
+        if (!this.gasVulstandInfo(key)) throw new Error('Onbekende vulstand');
+        const r = await this.gasflesBewaar(materialId, { vulstand: key }, wie || null, null);
+        if (r.nietBewaard.indexOf('vulstand') >= 0) throw new Error('Het veld "' + this.GAS_VELD_VULSTAND + '" bestaat nog niet in Robaws — vraag het bureel om het aan te maken');
         return true;
     },
 
     /** v396/v397: "Ik neem deze fles mee" — verantwoordelijke = ik, en de fles
      *  gaat naar de gekozen plaats (camionet OF werf, nooit allebei).
-     *  `waar` = {locId} | {projectId} | locId (oude vorm). */
+     *  `waar` = {locId} | {projectId} | locId (oude vorm). (v398: via gasflesBewaar) */
     async gasflesMeenemen(materialId, empId, waar, wie) {
         if (!empId) throw new Error('Geen werknemer');
         const w = (waar && typeof waar === 'object') ? waar : { locId: waar };
-        const locId = w.locId ? String(w.locId) : null;
-        const projectId = w.projectId ? String(w.projectId) : null;
-        const body = { assignedEmployeeId: String(empId) };
-        if (projectId) { body.assignedProjectId = projectId; body.stockLocationId = null; }
-        else if (locId) { body.stockLocationId = locId; body.assignedProjectId = null; }
-        const na = await this._gasSchrijf(materialId, body, wie ? { a: 'mee', n: w.naam || null, wie } : null);
-        if (na && String(na.assignedEmployeeId || '') !== String(empId)) throw new Error('Robaws nam de verantwoordelijke niet over');
-        if (na && locId && String(na.stockLocationId || '') !== locId) throw new Error('Robaws nam de plaats niet over');
-        if (na && projectId && String(na.assignedProjectId || '') !== projectId) throw new Error('Robaws nam de werf niet over');
+        const wijz = { emp: { id: String(empId) } };
+        if (w.projectId || w.locId) wijz.waar = { projectId: w.projectId || null, locId: w.locId || null, naam: w.naam || null };
+        const r = await this.gasflesBewaar(materialId, wijz, wie || null, 'mee');
+        if (r.nietBewaard.indexOf('emp') >= 0) throw new Error('Robaws nam de verantwoordelijke niet over');
+        if (r.nietBewaard.indexOf('waar') >= 0) throw new Error(w.projectId ? 'Robaws nam de werf niet over' : 'Robaws nam de plaats niet over');
         return true;
     },
 
-    /** v397: "Ik zet ze terug" — verantwoordelijke weg, fles naar het magazijn. */
+    /** v397: "Ik zet ze terug" — verantwoordelijke weg, fles naar het magazijn. (v398: via gasflesBewaar) */
     async gasflesTerug(materialId, locId, wie) {
         if (!locId) throw new Error('Geen magazijn gevonden');
-        const na = await this._gasSchrijf(materialId,
-            { assignedEmployeeId: null, stockLocationId: String(locId), assignedProjectId: null },
-            wie ? { a: 'terug', n: wie.plaats || null, wie } : null);
-        if (na && String(na.assignedEmployeeId || '')) throw new Error('Robaws liet de verantwoordelijke staan');
-        if (na && String(na.stockLocationId || '') !== String(locId)) throw new Error('Robaws nam de plaats niet over');
+        const r = await this.gasflesBewaar(materialId, { emp: null, waar: { locId: String(locId), naam: (wie && wie.plaats) || null } }, wie || null, 'terug');
+        if (r.nietBewaard.indexOf('emp') >= 0) throw new Error('Robaws liet de verantwoordelijke staan');
+        if (r.nietBewaard.indexOf('waar') >= 0) throw new Error('Robaws nam de plaats niet over');
         return true;
     },
 
