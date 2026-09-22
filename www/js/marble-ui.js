@@ -60,7 +60,8 @@
         screenFactuurDetail:{ sub: 'Aankoopfactuur goedkeuren', title: 'Factuur' },
         screenMaterieelDetail:{ sub: 'Reserveren & beschikbaarheid', title: 'Materieel' },
         screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' },
-        screenHandleiding: { sub: 'Alles over de app · typ om te zoeken', title: 'Handleiding' }
+        screenHandleiding: { sub: 'Alles over de app · typ om te zoeken', title: 'Handleiding' },
+        screenRegelboek:   { sub: 'Welke uren tellen en welke niet', title: 'Regelboek uren' }   // v399
         /* screenHandleidingH: hoofdstuk rendert zijn eigen Marble-kop */
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
@@ -239,8 +240,14 @@
         ] },
         screenDagoverzicht: { name: 'MIJN UREN', steps: [
             ['Maandoverzicht', 'De cijfers bovenaan tellen je maand op; met de pijltjes blader je naar vorige maanden. Je komt hier via de knop op het Klok-scherm.', '#mbUrenStats'],
+            ['Regelboek', 'Welke uren tellen en welke niet: de rit naar de werf, vroeger beginnen, vroeger klaar en laden en lossen. Tik de kaart om alle regels te lezen.', '#urenRegelboekKaart'],
             ['Dagdetail', 'Elke rij is een dag met het type uren. Ziekte of verlof staat er ook tussen.'],
             ['Aanpassing vragen', 'Klopt iets niet? Tik op de dag en kies een reden ("Vergeten in te klokken", "Verkeerd tijdstip", …) — je aanvraag gaat als taak naar Vince.']
+        ] },
+        /* v399: regelboek uren (alleen tekst) */
+        screenRegelboek: { name: 'REGELBOEK', steps: [
+            ['Welke uren tellen', 'Alle regels over je uren op één plek: hoe je dag begint, de ritten, vroeger beginnen of vroeger klaar, en laden en lossen.'],
+            ['Afspraken', 'Iets afgesproken met de projectleider? Zet het bij het uitklokken in "Opmerking voor het bureel". Dan ziet het bureel het meteen.']
         ] },
         screenUitgevoerd: { name: 'UITGEVOERD', steps: [
             ['Afgewerkte werkbonnen', 'De laatste 7 dagen, met uren, artikels en betaalstatus.', '#uitgevoerdList'],

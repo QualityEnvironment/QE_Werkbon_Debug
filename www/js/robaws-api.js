@@ -672,12 +672,16 @@ const RobawsAPI = {
         return result;
     },
 
-    async post(endpoint, body) {
+    async post(endpoint, body, opts) {
         this._invalidateCache(endpoint);   // v184: cache van het betrokken record wissen
         const url = this.BASE_URL + '/' + endpoint.replace(/^\//, '');
+        // v401: opts.idempotencyKey / opts.headers → extra headers. Factuurlijnen
+        // dragen een Idempotency-Key, zodat een herkansing (ook na een time-out)
+        // nooit een dubbele lijn geeft. Dezelfde headers op de 429-herkansing.
+        const headers = this._postHeaders(opts);
         let res = await this._fetchWithTimeout(url, {   // v207: timeout
             method: 'POST',
-            headers: this.getHeaders(),
+            headers,
             body: JSON.stringify(body),
         });
         this._captureRateHeaders(res, 'live');
@@ -690,20 +694,130 @@ const RobawsAPI = {
             await new Promise(r => setTimeout(r, 1200));
             res = await this._fetchWithTimeout(url, {
                 method: 'POST',
-                headers: this.getHeaders(),
+                headers,
                 body: JSON.stringify(body),
             });
             this._captureRateHeaders(res, 'live');
         }
+        // v401: Robaws markeert een herhaalde Idempotency-Key met deze header —
+        // de lijn bestond dan al en de respons is de originele.
+        const cached = !!(res.headers && typeof res.headers.get === 'function' && String(res.headers.get('x-robaws-idempotency-cached-response')).toLowerCase() === 'true');
         // 204 No Content of lege body veilig afhandelen
-        if (res.status === 204) return { code: 204, data: null };
+        if (res.status === 204) return { code: 204, data: null, cached };
         const txt = await res.text();
-        if (!txt) return { code: res.status, data: null };
+        if (!txt) return { code: res.status, data: null, cached };
         try {
-            return { code: res.status, data: JSON.parse(txt) };
+            return { code: res.status, data: JSON.parse(txt), cached };
         } catch (e) {
-            return { code: res.status, data: { raw: txt } };
+            return { code: res.status, data: { raw: txt }, cached };
         }
+    },
+
+    /** v401: headers voor een POST, met optionele Idempotency-Key en extra headers. */
+    _postHeaders(opts) {
+        const h = this.getHeaders();
+        if (opts && opts.idempotencyKey) h['Idempotency-Key'] = String(opts.idempotencyKey).slice(0, 128);
+        if (opts && opts.headers) Object.assign(h, opts.headers);
+        return h;
+    },
+
+    // ================================================================
+    // v401: FACTUURLIJNEN ROBUUST. Robaws weigerde in de praktijk af en toe
+    // één lijn (onmiddellijk antwoord, niet aan het artikel te wijten, de
+    // volgende lijn ging gewoon door — 11 facturen sinds 19 sep 2026). De app
+    // deed maar één poging (alleen 429 kreeg een herkansing), controleerde
+    // niets achteraf en gooide de Robaws-fouttekst weg. Nu: tot 3 pogingen
+    // per lijn met dezelfde Idempotency-Key (geen dubbele lijn mogelijk),
+    // daarna de factuur teruglezen en wat ontbreekt alsnog zetten. Pas wat
+    // dán nog ontbreekt blokkeert de betaling — mét de echte foutmelding.
+    // ================================================================
+    _FACTUURLIJN_WACHT: [0, 1200, 2500],   // ms vóór poging 1, 2, 3 (tests zetten dit op nul)
+
+    /** Leesbare tekst uit een Robaws-foutantwoord (object, string of leeg). */
+    _robawsFoutTekst(data, code) {
+        let t = '';
+        if (typeof data === 'string') t = data;
+        else if (data && typeof data === 'object') {
+            t = data.message || data.error || data.detail || data.title || data.raw || '';
+            if (!t && Array.isArray(data.errors)) t = data.errors.map(e => (e && (e.message || e.defaultMessage || e.field)) || JSON.stringify(e)).join('; ');
+            if (!t) { try { t = JSON.stringify(data); } catch (_e) { t = String(data); } }
+        } else if (data != null) t = String(data);
+        t = String(t).replace(/\s+/g, ' ').trim().slice(0, 220);
+        return (code ? 'code ' + code : 'geen antwoord') + (t ? ': ' + t : '');
+    },
+
+    /** Eén factuurlijn wegschrijven: tot 3 pogingen met dezelfde Idempotency-Key.
+     *  401/403/404 worden niet herhaald. Geeft {ok, code, data, pogingen, fout, cached}. */
+    async _postFactuurLijn(invoiceId, lineData, ctx) {
+        const key = ctx && ctx.key;
+        const label = (ctx && ctx.label) || (lineData && lineData.description) || 'lijn';
+        const wacht = this._FACTUURLIJN_WACHT;
+        let laatste = { code: 0, fout: 'geen antwoord' };
+        for (let p = 0; p < wacht.length; p++) {
+            if (wacht[p]) await new Promise(r => setTimeout(r, wacht[p]));
+            try {
+                const r = await this.post(`sales-invoices/${invoiceId}/line-items`, lineData, key ? { idempotencyKey: key } : undefined);
+                if (r.code === 200 || r.code === 201) {
+                    if (p > 0) console.warn('[Factuur] lijn "' + label + '" gelukt bij poging ' + (p + 1) + (r.cached ? ' (Robaws had ze al)' : ''));
+                    return { ok: true, code: r.code, data: r.data, pogingen: p + 1, cached: !!r.cached };
+                }
+                laatste = { code: r.code, fout: this._robawsFoutTekst(r.data, r.code), data: r.data };
+                console.warn('[Factuur] lijn "' + label + '" geweigerd bij poging ' + (p + 1) + ': ' + laatste.fout);
+                if (r.code === 401 || r.code === 403 || r.code === 404) return Object.assign({ ok: false, pogingen: p + 1 }, laatste);
+            } catch (e) {
+                laatste = { code: 0, fout: 'geen antwoord: ' + ((e && e.message) || 'netwerkfout') };
+                console.warn('[Factuur] lijn "' + label + '" poging ' + (p + 1) + ': ' + laatste.fout);
+            }
+        }
+        return Object.assign({ ok: false, pogingen: wacht.length }, laatste);
+    },
+
+    /** Voor lijnen die de app ná createInvoice zelf toevoegt (eenmalige artikels). */
+    async postFactuurLijn(invoiceId, lineData, label) {
+        const key = 'qe-fl-' + invoiceId + '-x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        return this._postFactuurLijn(invoiceId, lineData, { key, label });
+    },
+
+    /** Is de bestaande factuurlijn `b` dezelfde als de bedoelde lijn `a`? */
+    _factuurLijnGelijk(a, b) {
+        const norm = s => String(s == null ? '' : s).replace(/\r\n/g, '\n').trim();
+        const ta = String(a.type || 'LINE').toUpperCase(), tb = String(b.type || 'LINE').toUpperCase();
+        if (ta !== tb) return false;
+        if (norm(a.description) !== norm(b.description)) return false;
+        if (ta === 'TEXT') return true;
+        if (a.articleId != null && String(a.articleId) !== String(b.articleId == null ? '' : b.articleId)) return false;
+        const qa = Number(a.quantity) || 0, qb = Number(b.quantity) || 0;
+        const pa = Number(a.price) || 0, pb = Number(b.price) || 0;
+        return Math.abs(qa - qb) < 0.001 && Math.abs(pa - pb) < 0.005;
+    },
+
+    /** Factuur live teruglezen en vergelijken met de bedoelde lijnen; wat ontbreekt
+     *  alsnog zetten (nieuwe sleutel). Een lijn die "mislukt" leek maar er tóch
+     *  staat, telt als gelukt (geen dubbel). Geeft {gecontroleerd, ontbraken,
+     *  aangevuld, nogWeg} of {gecontroleerd:false, fout}. */
+    async _controleerFactuurLijnen(invoiceId, bedoeld) {
+        let lijst = null;
+        try {
+            const r = await this.get(`sales-invoices/${invoiceId}/line-items?limit=100`, { bypassCache: true });
+            const items = r && r.data && (Array.isArray(r.data.items) ? r.data.items : (Array.isArray(r.data) ? r.data : null));
+            if (r && r.code === 200 && items) lijst = items;
+            else return { gecontroleerd: false, fout: 'lijnen niet leesbaar (code ' + (r && r.code) + ')' };
+        } catch (e) { return { gecontroleerd: false, fout: 'lijnen niet leesbaar (' + ((e && e.message) || 'netwerkfout') + ')' }; }
+        const vrij = lijst.slice();
+        const weg = [];
+        for (const b of bedoeld) {
+            const i = vrij.findIndex(x => this._factuurLijnGelijk(b.lijn, x));
+            if (i >= 0) { vrij.splice(i, 1); b.ok = true; }
+            else weg.push(b);
+        }
+        let aangevuld = 0;
+        for (const b of weg) {
+            const r = await this._postFactuurLijn(invoiceId, b.lijn, { key: b.key + '-c', label: b.label });
+            b.pogingen = (b.pogingen || 0) + (r.pogingen || 0);
+            if (r.ok) { b.ok = true; aangevuld++; }
+            else { b.ok = false; b.code = r.code; b.fout = r.fout; }
+        }
+        return { gecontroleerd: true, ontbraken: weg.length, aangevuld, nogWeg: weg.filter(b => !b.ok).map(b => b.label) };
     },
 
     async put(endpoint, body) {
@@ -4509,6 +4623,7 @@ const RobawsAPI = {
                 planningTypeId: item.planningTypeId || null,
                 hourTypeId: item.hourTypeId || null,
                 hasWerkbon: hasWerkbon,
+                projectId: item.projectId != null ? String(item.projectId) : null,   // v400: werkpakket-keuze (nacalculatie)
                 timeAndMaterial: planRegie,   // v182: regie komt ENKEL van de dagplanning
                 client: null,
                 endClient: null,  // v102+: ook eindklant ophalen
@@ -6099,6 +6214,18 @@ const RobawsAPI = {
         // Het werfadres wordt als TEXT-lijn bovenaan de factuur gezet (zoals Wappy dat doet).
         let addedLines = 0;
         const errors = [];
+        // v401: elke lijn via _postFactuurLijn (3 pogingen, vaste Idempotency-Key
+        // per lijn) en onthouden wat we WILDEN zetten, voor de controle in stap 3e.
+        const lijnBasis = 'qe-fl-' + invoiceId + '-' + Date.now().toString(36);
+        const bedoeld = [];   // {lijn, label, key, ok, code, fout, pogingen}
+        const zetLijn = async (lineData, label) => {
+            const b = { lijn: lineData, label: label || lineData.description || 'lijn', key: lijnBasis + '-' + (bedoeld.length + 1), ok: false };
+            bedoeld.push(b);
+            const r = await this._postFactuurLijn(invoiceId, lineData, { key: b.key, label: b.label });
+            b.ok = r.ok; b.code = r.code; b.fout = r.fout; b.pogingen = r.pogingen;
+            if (r.ok) addedLines++;
+            return r;
+        };
 
         // 3a: Notities als tekstlijn
         if (notes && notes.trim()) {
@@ -6108,8 +6235,7 @@ const RobawsAPI = {
             };
             if (woSalesOrderId) textLineData.orderId = woSalesOrderId;
 
-            const textResult = await this.post(`sales-invoices/${invoiceId}/line-items`, textLineData);
-            if (textResult.code === 201 || textResult.code === 200) addedLines++;
+            await zetLijn(textLineData, 'opmerking (tekstlijn)');   // v401
         }
 
         // 3b: v112 — Postcode-tekstlijn (uit dagplanning werfadres) zodat de
@@ -6127,9 +6253,7 @@ const RobawsAPI = {
                 description: postcodeText,
             };
             if (woSalesOrderId) postcodeLine.orderId = woSalesOrderId;
-            const r = await this.post(`sales-invoices/${invoiceId}/line-items`, postcodeLine);
-            if (r.code === 201 || r.code === 200) addedLines++;
-            else console.warn('[Invoice] postcode-lijn POST faalde:', r.code, r.data);
+            await zetLijn(postcodeLine, 'werfadres ' + postcodeText + ' (tekstlijn)');   // v401
         }
 
         // 3c: Materialen van frontend (betrouwbaarder dan WO material-entries)
@@ -6148,12 +6272,7 @@ const RobawsAPI = {
                     lineData.articleId = toStr(articleId);
                 }
 
-                const addResult = await this.post(`sales-invoices/${invoiceId}/line-items`, lineData);
-                if (addResult.code === 201 || addResult.code === 200) {
-                    addedLines++;
-                } else {
-                    errors.push({ line: lineData.description, code: addResult.code, error: addResult.data });
-                }
+                await zetLijn(lineData, lineData.description);   // v401: 3 pogingen + controle achteraf
             }
         } else {
             // Fallback: lees material-entries van werkorder
@@ -6175,9 +6294,7 @@ const RobawsAPI = {
                         lineData.unitType = me.unitType || me.article.unitType;
                     }
 
-                    const addResult = await this.post(`sales-invoices/${invoiceId}/line-items`, lineData);
-                    if (addResult.code === 201 || addResult.code === 200) addedLines++;
-                    else errors.push({ line: lineData.description, code: addResult.code, error: addResult.data });
+                    await zetLijn(lineData, lineData.description);   // v401
                 }
             }
         }
@@ -6228,9 +6345,7 @@ const RobawsAPI = {
                     lineData.articleId = toStr(group.articleId);
                 }
                 console.log('[Factuur] Uren lijn:', rawHrs, 'u → afgerond:', billableHrs, 'u @', group.salePrice);
-                const addResult = await this.post(`sales-invoices/${invoiceId}/line-items`, lineData);
-                if (addResult.code === 201 || addResult.code === 200) addedLines++;
-                else errors.push({ line: desc, code: addResult.code, error: addResult.data });
+                await zetLijn(lineData, desc + ' ' + billableHrs + 'u');   // v401
             }
         } else if (!onderhoud) {
             // Fallback: time-entries van werkorder (NIET bij onderhoud — dan worden uren niet gefactureerd)
@@ -6268,9 +6383,7 @@ const RobawsAPI = {
                 if (woSalesOrderId) lineData.orderId = woSalesOrderId;
                 if (aId && aId !== '_default') lineData.articleId = toStr(aId);
                 console.log('[Factuur] Uren lijn (fallback):', group.totalHrs, 'u → afgerond:', billableHrs, 'u');
-                const addResult = await this.post(`sales-invoices/${invoiceId}/line-items`, lineData);
-                if (addResult.code === 201 || addResult.code === 200) addedLines++;
-                else errors.push({ line: group.desc, code: addResult.code, error: addResult.data });
+                await zetLijn(lineData, group.desc);   // v401
             }
         }
 
@@ -6289,13 +6402,24 @@ const RobawsAPI = {
                 vatTariffId: toStr(vatTariffId),
             };
             if (woSalesOrderId) kortingLine.orderId = woSalesOrderId;
-            const kortingRes = await this.post(`sales-invoices/${invoiceId}/line-items`, kortingLine);
-            if (kortingRes.code === 201 || kortingRes.code === 200) {
-                addedLines++;
-                console.log('[Factuur] Kortinglijn:', kortingLine.description, kortingLine.price);
-            } else {
-                errors.push({ line: kortingLine.description, code: kortingRes.code, error: kortingRes.data });
-            }
+            const kortingRes = await zetLijn(kortingLine, kortingLine.description);   // v401
+            if (kortingRes.ok) console.log('[Factuur] Kortinglijn:', kortingLine.description, kortingLine.price);
+        }
+
+        // Stap 3e (v401): factuur teruglezen en vergelijken met wat we wilden
+        // zetten; wat ontbreekt gaat er alsnog op. Pas wat dán nog ontbreekt is
+        // een geld-fout (errors → de app blokkeert de betaling en maakt de
+        // bureel-taak, nu mét de echte foutmelding van Robaws).
+        let lijnControle = { gecontroleerd: false };
+        try {
+            lijnControle = await this._controleerFactuurLijnen(invoiceId, bedoeld);
+        } catch (e) { lijnControle = { gecontroleerd: false, fout: (e && e.message) || 'controle mislukt' }; }
+        if (!lijnControle.gecontroleerd) statusErrors.push('factuurlijnen niet gecontroleerd (' + (lijnControle.fout || '?') + ')');
+        else if (lijnControle.aangevuld) console.warn('[Factuur] ' + lijnControle.aangevuld + ' lijn(en) alsnog gezet na teruglezen');
+        addedLines = bedoeld.filter(b => b.ok).length;
+        for (const b of bedoeld) {
+            if (b.ok) continue;
+            errors.push({ line: b.label, code: b.code || 0, error: b.fout || 'geweigerd', pogingen: b.pogingen || 0 });
         }
 
         // Stap 4: Factuur ophalen voor totalen + OGM
@@ -6467,6 +6591,7 @@ const RobawsAPI = {
             lineItemsAdded: addedLines,
             errors,
             statusErrors,  // v211: niet-blokkerende status-fouten (apart van geld-fouten)
+            lijnControle,  // v401: {gecontroleerd, ontbraken, aangevuld, nogWeg} — teruglezen na het schrijven
             paymentMethod,
             salesOrderId: woSalesOrderId,
             workOrder: {

@@ -1855,6 +1855,7 @@ const app = {
             screenCorrectie: 'Werkbon corrigeren',
             screenProfile: 'Mijn profiel',
             screenDagoverzicht: 'Mijn registraties',
+            screenRegelboek: 'Regelboek uren',  // v399
             screenRecap: 'Maandrecap',  // v288
             screenJaar: 'Jaaroverzicht',  // v290
             screenAanpassing: 'Aanpassing aanvragen',
@@ -2265,7 +2266,8 @@ const app = {
             'flame': '<path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 .5-3-1-5 1-7.5z"/>',
             'droplet': '<path d="M12 4c3 4 5 6.5 5 9a5 5 0 0 1-10 0c0-2.5 2-5 5-9z"/>',
             'bolt': '<path d="M13 3 5 13h6l-1 8 8-10h-6z"/>',
-            'wind': '<path d="M3 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 14h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 11.5h7"/>'
+            'wind': '<path d="M3 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 14h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 11.5h7"/>',
+            'book': '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H19v-5"/><path d="M9 7.5h6"/>'
         };
         return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
     },
@@ -2513,6 +2515,8 @@ const app = {
         // v181: regie (tijd & materiaal) heel zichtbaar bovenaan tonen
         const _regieBanner = document.getElementById('detailRegieBanner');
         if (_regieBanner) _regieBanner.style.display = this.currentWO.timeAndMaterial ? 'block' : 'none';
+        // v400: werkpakket-kaart voor projectwerkbonnen (fire-and-forget)
+        this._toonWerkpakket(this.currentWO).catch(() => {});
 
         // v185: detail-data (eindklant + line-items + documenten) lazy laden.
         // Stond vroeger in getPlanning (= bij elke lijst-load, per item); nu enkel
@@ -4248,6 +4252,78 @@ const app = {
      *  verantwoordelijke van de order (terugval: werfleider project).
      *  Best effort — een mailfout blokkeert de werkbon nooit, maar wordt
      *  wél eerlijk gemeld. */
+    // ========================================
+    // v400: WERKPAKKET PER PROJECTWERKBON (nacalculatie in het werfdossier).
+    // De pakketten komen uit de Worker (werf:nacalc van het project); de
+    // keuze staat lokaal in woData en gaat na een GESLAAGDE werkbon best
+    // effort naar de Worker — nooit blokkerend voor het versturen.
+    // ========================================
+    _wpCache: {},
+    _appKeyHeader() {
+        let alg = null;
+        try { alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null'); } catch (_e) {}
+        return (alg && alg.key && alg.secret) ? (alg.key + ':' + alg.secret) : null;
+    },
+    async _toonWerkpakket(wo) {
+        const kaart = document.getElementById('detailWerkpakket');
+        if (!kaart) return;
+        const pid = wo && wo.projectId ? String(wo.projectId) : null;
+        const sleutel = this._appKeyHeader();
+        if (!pid || !sleutel) { kaart.style.display = 'none'; return; }
+        let lijst = this._wpCache[pid];
+        if (!lijst) {
+            try {
+                const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-werf-pakketten?projectId=' + encodeURIComponent(pid),
+                    { headers: { 'X-App-Key': sleutel } }, 8000);
+                if (!r.ok) throw new Error('status ' + r.status);
+                const j = await r.json();
+                lijst = Array.isArray(j.pakketten) ? j.pakketten : [];
+                this._wpCache[pid] = lijst;
+            } catch (e) {
+                console.warn('[Werkpakket] laden mislukt (niet kritiek):', e && e.message);
+                kaart.style.display = 'none';
+                return;
+            }
+        }
+        if (!this.currentWO || String(this.currentWO.id) !== String(wo.id)) return;
+        if (!lijst.length) { kaart.style.display = 'none'; return; }
+        if (!this.woData[wo.id]) this.woData[wo.id] = { hours: [], materials: [], photos: [], notes: '' };
+        const data = this.woData[wo.id];
+        const sel = document.getElementById('wpSelect');
+        sel.innerHTML = '<option value="">\u2014 kies het werkpakket \u2014</option>' + lijst.map(p =>
+            '<option value="' + this.escapeHtml(String(p.id)) + '"' + (data.werkpakket && String(data.werkpakket.id) === String(p.id) ? ' selected' : '') + '>' + this.escapeHtml(String(p.naam || '')) + '</option>').join('');
+        kaart.style.display = 'block';
+    },
+    zetWerkpakket(v) {
+        const wo = this.currentWO;
+        if (!wo) return;
+        const data = this.woData[wo.id];
+        if (!data) return;
+        const lijst = this._wpCache[String(wo.projectId)] || [];
+        const p = lijst.find(x => String(x.id) === String(v)) || null;
+        data.werkpakket = p ? { id: String(p.id), naam: String(p.naam || '') } : null;
+    },
+    async _verstuurWerkpakket(wo, workOrderId, data) {
+        try {
+            const wp = data && data.werkpakket;
+            const pid = wo && wo.projectId ? String(wo.projectId) : null;
+            if (!wp || !wp.id || !pid || !workOrderId) return;
+            const sleutel = this._appKeyHeader();
+            if (!sleutel) return;
+            const user = RobawsAPI.getLoggedInUser();
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-werf-toewijs', {
+                method: 'POST',
+                headers: { 'X-App-Key': sleutel, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ projectId: pid, werkbonId: String(workOrderId), pakketId: String(wp.id), door: (user && (user.naam || user.name || user.email)) || 'app' }),
+            }, 8000);
+            if (!r.ok) throw new Error('status ' + r.status);
+            console.log('[Werkpakket] toegewezen:', wp.naam, '\u2192 werkbon', workOrderId);
+        } catch (e) {
+            console.warn('[Werkpakket] doorgeven mislukt (niet kritiek):', e && e.message);
+            this.toast('Werkpakket niet doorgegeven \u2014 het bureel kan het in het werfdossier zetten');
+        }
+    },
+
     async _verstuurMateriaalBestelling(wo, workOrderId, data) {
         const best = data && data.bestelling;
         if (!best || !best.regels || !best.regels.length) return;
@@ -6577,6 +6653,19 @@ const app = {
         }
     },
 
+    /** v401: leesbare fout per geweigerde factuurlijn (was "[object Object]" in de taak). */
+    _factuurFoutTekst(er) {
+        if (!er) return '?';
+        if (typeof er === 'string') return er;
+        const lijn = er.line || er.step || 'lijn';
+        let fout = er.error;
+        if (fout && typeof fout === 'object') fout = fout.message || fout.error || fout.detail || fout.raw || JSON.stringify(fout);
+        fout = String(fout == null ? '' : fout).replace(/\s+/g, ' ').trim().slice(0, 220);
+        const code = (er.code != null && er.code !== '' && !/^code /.test(fout)) ? ' (code ' + er.code + ')' : '';
+        const pog = er.pogingen ? ', ' + er.pogingen + ' pogingen' : '';
+        return lijn + ': ' + (fout || 'geweigerd') + code + pog;
+    },
+
     async _uploadPhotosAndSignature(data, workOrderId, signatureName, signatureData) {
         // Foto's
         if (data.photos.length > 0 && workOrderId) {
@@ -6787,6 +6876,8 @@ const app = {
             // v329: materiaal-bestelling mailen naar de order-verantwoordelijke
             // (vóór de geen-factuur-vertakking — geldt voor beide paden).
             await this._verstuurMateriaalBestelling(wo, workOrderId, data);
+            // v400: werkpakket (nacalculatie) doorgeven — best effort
+            await this._verstuurWerkpakket(wo, workOrderId, data);
 
             // v197: "Geen factuur maken" → werkbon is verstuurd, factuur-stap overslaan
             // (garantie / terugkomwerk door gebreken).
@@ -6880,7 +6971,8 @@ const app = {
             const invErrors = (invoiceResult.errors && invoiceResult.errors.length) ? invoiceResult.errors : [];
             if (invErrors.length > 0) {
                 console.warn('[Factuur] Errors bij toevoegen lijnen:', invErrors);
-                this.toast('Factuur aangemaakt maar ' + invErrors.length + ' lijn(en) NIET toegevoegd — betaling geblokkeerd, bureel-taak aangemaakt. Reken NIET af met de klant.', true);
+                this.toast('Factuur aangemaakt maar ' + invErrors.length + ' lijn(en) NIET toegevoegd — betaling geblokkeerd, bureel-taak aangemaakt. Reken NIET af met de klant.\n' +
+                    this._factuurFoutTekst(invErrors[0]).slice(0, 160), true);   // v401: toon wat Robaws zei
                 try {
                     await RobawsAPI.createTaskForWorkOrder(workOrderId, {
                         title: 'Factuur onvolledig - lijnen ontbreken',
@@ -6888,7 +6980,7 @@ const app = {
                             ((invoiceResult.invoice && (invoiceResult.invoice.logicId || invoiceResult.invoice.id)) || '?') +
                             ' weigerde Robaws ' + invErrors.length + ' lijn(en) — het factuurbedrag is dus te laag. ' +
                             'Gelieve de factuur aan te vullen en de betaling met de klant te regelen. Details: ' +
-                            invErrors.map(er => String((er && (er.error || er.step)) || JSON.stringify(er))).join(' | ').slice(0, 600),
+                            invErrors.map(er => this._factuurFoutTekst(er)).join(' | ').slice(0, 900),   // v401: echte Robaws-fout
                         assignedUserId: RobawsAPI.TASK_USERS.FACTUREN,  // v222b: Els
                     });
                 } catch (e) { console.warn('[App] bureel-taak mislukt:', e && e.message); }
@@ -6984,10 +7076,10 @@ const app = {
                             vatTariffId: String(vatTariffId),
                         };
                         if (wo.salesOrderId) li.orderId = String(wo.salesOrderId);
-                        const r = await RobawsAPI.post(`sales-invoices/${invoiceId}/line-items`, li);
-                        if (r.code !== 200 && r.code !== 201) {
-                            customLineErrors.push(m.name || 'eenmalig artikel');
-                            console.warn('[App] custom article factuur line-item POST faalde:', r.code, r.data);
+                        const r = await RobawsAPI.postFactuurLijn(invoiceId, li, m.name || 'eenmalig artikel');   // v401: 3 pogingen + Idempotency-Key
+                        if (!r.ok) {
+                            customLineErrors.push((m.name || 'eenmalig artikel') + ' (' + (r.fout || 'geweigerd') + ')');
+                            console.warn('[App] custom article factuur line-item POST faalde:', r.code, r.fout);
                         } else {
                             console.log('[App] custom article toegevoegd aan factuur:', m.name);
                         }
@@ -7267,6 +7359,8 @@ const app = {
 
             // v329: eventuele materiaal-bestelling mee mailen (ook monteurs).
             await this._verstuurMateriaalBestelling(wo, workOrderId, data);
+            // v400: werkpakket (nacalculatie) doorgeven — best effort
+            await this._verstuurWerkpakket(wo, workOrderId, data);
 
             // Data resetten en terug naar planning — v252: op de SNAPSHOT-id
             // (this.currentWO kon intussen een andere werkbon zijn; dan werd
@@ -16149,6 +16243,20 @@ const app = {
     // v179: monthOffset 0 = huidige maand, -1 = vorige maand, enz. Zonder
     // argument wordt de laatst bekeken maand behouden (refresh-knop +
     // pull-to-refresh verversen dus de bekeken maand i.p.v. terug te springen).
+    /** v399 (vraag Levi): ingang naar het Regelboek uren (screenRegelboek in
+     *  index.html). Alleen uitleg: de app rekent hier niets anders door. */
+    _regelboekKaartHtml() {
+        return `<button type="button" id="urenRegelboekKaart" onclick="app.navigate('screenRegelboek')"
+                style="width:100%;display:flex;align-items:center;gap:12px;text-align:left;border:1px solid var(--b1);border-radius:11px;padding:10px 12px;margin:10px 0 8px;background:var(--card);color:var(--ink);font:inherit;cursor:pointer;box-sizing:border-box">
+                <span style="width:34px;height:34px;border-radius:9px;background:var(--awash2);color:var(--amber2);display:flex;align-items:center;justify-content:center;flex-shrink:0">${this.icon('book', { size: 18 })}</span>
+                <span style="flex:1;min-width:0">
+                    <span style="display:block;font-size:14px;font-weight:700;color:var(--ink)">Regelboek uren</span>
+                    <span style="display:block;font-size:12px;color:var(--g1);margin-top:1px">Welke uren tellen en welke niet</span>
+                </span>
+                <span style="color:var(--g3);font-size:18px;flex-shrink:0">&rsaquo;</span>
+            </button>`;
+    },
+
     async loadDagoverzicht(monthOffset) {
         if (typeof monthOffset === 'number') this._dagoverzichtMonthOffset = monthOffset;
         const offset = this._dagoverzichtMonthOffset || 0;
@@ -16445,6 +16553,9 @@ const app = {
                 </div>`;
             }
 
+            // v399: regelboek (welke uren tellen) — vóór de daglijst
+            html += this._regelboekKaartHtml();
+
             // v324: hint BOVEN de daglijst (stond onder 31 blokken verstopt)
             html += `<div style="font-size:12px;color:var(--g1);margin:2px 0 6px">Klopt een dag niet? Tik erop om een aanpassing aan te vragen.</div>`;
 
@@ -16636,7 +16747,8 @@ const app = {
             container.innerHTML = html;
             this._animateCountUps(container);
         } catch (e) {
-            container.innerHTML = `<p class="text-grey text-sm text-center">Fout bij laden: ${e.message}</p>`;
+            // v399: het regelboek is vaste tekst — ook zonder Robaws bereikbaar
+            container.innerHTML = `<p class="text-grey text-sm text-center">Fout bij laden: ${e.message}</p>` + this._regelboekKaartHtml();
         }
     },
 
