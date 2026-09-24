@@ -213,7 +213,8 @@
             ['Klok-status', 'De kaart bovenaan toont of je in- of uitgeklokt bent. Tik erop om naar het klokscherm te gaan.', '#clockStatusBar'],
             ['Bellen & navigeren', 'De knoppen op elke kaart bellen de klant of openen Google Maps — zonder de werkorder te openen.', '#workorderList'],
             ['Badges', '"Regie" betekent tijd & materiaal aanrekenen. "In bewerking" wil zeggen dat je al uren of materiaal registreerde.', '#workorderList'],
-            ['Wacht', 'De balk met het schildje toont wie deze week de wacht heeft. Tik erop voor de komende weken. Heb jij de wacht, dan kleurt hij oranje.', '#wachtBanner']
+            ['Wacht', 'De balk met het schildje toont wie deze week de wacht heeft. Tik erop voor de komende weken. Heb jij de wacht, dan kleurt hij oranje.', '#wachtBanner'],
+            ['Check in @ work', 'Sta je vandaag op een werf met Check in @ work, dan verschijnt hier een kaart. Scan bij aankomst de QR-code op de werfaffiche: de app opent de RSZ-pagina waar je je aanmeldt. Terug in de app tik je op Gelukt.', '#ciawBanner']
         ] },
         screenDetail: { name: 'WERKORDER', steps: [
             ['Vier tabbladen', 'Info toont de klant en de taak, Uren registreert je tijd, Materiaal je artikels, en Foto’s je bewijsfoto’s.', '#detailTabs'],

@@ -1693,7 +1693,7 @@ const RobawsAPI = {
     //  De lijst staat in de Worker-KV en komt mee met app-rechten; dit is de
     //  standaard zolang er niets bewaard is.
     GAS_CONFIG_STD: {
-        bestelpunt: { zuurstof: 2, acetyleen: 2, menggas: 0 },
+        bestelpunt: { zuurstof: 2, acetyleen: 2, menggas: 0, propaan: 0 },
         amber: 1,
         legeDrempel: 4,
         gassen: [
@@ -1706,6 +1706,12 @@ const RobawsAPI = {
             { key: 'menggas', naam: 'Menggas', prefix: 'Menggas Ferroline C18', eenheid: 'F', vuldruk: 200, leegOnder: 20,
               maten: ['F10', 'F20', 'F40', 'F50'],
               sub: { F10: '10 L', F20: '20 L', F40: '40 L', F50: '50 L' } },
+            // v404: propaan voor de dakwerken = omruilfles. Je betaalt de VULLING, geen
+            // dagprijs (gemeten: Antwerp Gasdepot 'Totalgaz/Primagaz 10.5 Kg vulling'),
+            // dus geen huurwaarschuwing en niet in de Messer-controle. Een manometer zegt
+            // niets: de druk blijft gelijk tot de fles bijna leeg is.
+            { key: 'propaan', naam: 'Propaan', prefix: 'Propaan', eenheid: 'kg', vuldruk: null, leegOnder: null, huur: false,
+              maten: ['10,5 kg', '35 kg'], sub: {} },
         ],
     },
     GAS_CONFIG_SLEUTEL: 'qe_gas_config',
@@ -1762,6 +1768,10 @@ const RobawsAPI = {
         return { maat: treffer || null, ruw };
     },
     gasMaat(m) { return this.gasMaatInfo(m).maat; },
+    /** v404: loopt er huur op deze fles? Nee voor propaan (vulling, omruilfles). */
+    gasHuurTelt(m) { const g = this.gasGas(this.gasSoortKey(m)); return !(g && g.huur === false); },
+    /** v404: kan je dit gas met een manometer meten? */
+    gasMetBar(gasKey) { const g = this.gasGas(gasKey); return !g || !!g.vuldruk; },
     /** De naam zoals wij ze schrijven: "<gas> <maat> \u00b7 <nummer>". */
     gasNaam(gasKey, maat, nr) {
         const g = this.gasGas(gasKey);
@@ -2191,6 +2201,7 @@ const RobawsAPI = {
         const vuldruk = g ? g.vuldruk : 200, leegOnder = g ? g.leegOnder : 20;
         if (!rauw) return { bar: null, pct: null, key: null, label: null, vuldruk, leegOnder };
         const mb = rauw.replace(',', '.').match(/(\d{1,3}(?:\.\d)?)\s*bar/i);
+        if (mb && g && !g.vuldruk) return { bar: null, pct: null, key: null, label: null, vuldruk: null, leegOnder: null };   // v404: propaan
         if (mb) {
             const bar = Math.max(0, Math.min(999, Number(mb[1])));
             const pct = Math.max(0, Math.min(100, Math.round(bar / vuldruk * 100)));
@@ -8312,6 +8323,8 @@ const RobawsAPI = {
             type: this._efTekst(ef, 'Type projecten'),
             datum: x.date || '',
             siteManagerId: x.siteManagerId ? String(x.siteManagerId) : null,   // v392: native projectleider (Robaws-gebruiker)
+            ciaw: String(x.checkInAtWork || '').toUpperCase() === 'YES',   // v404: Check in @ work = Ja
+            werfnr: String(x.siteNssoIdNumber || '').trim(),              // v404: Werfnr. RSZ
         };
     },
 
@@ -8425,6 +8438,104 @@ const RobawsAPI = {
     },
 
     _planVensterWis() { this._planVensterCache = null; },
+
+    // ============================================================
+    // v404: CHECK IN @ WORK — werf-QR (vraag baas + Levi, 24 sep 2026)
+    // Tot 31 maart 2027 (Checkinatwork) meldt de man zich aan op de RSZ-
+    // pagina van de werf met zijn eigen RSZ-login. De app scant de werf-QR,
+    // opent die pagina en meldt de scan aan de Worker (logboek en overzicht
+    // voor het bureel). Vanaf 1 april 2027 (Check In and Out at Work,
+    // Programmawet 30 mei 2026) registreert iedereen zelf, in real time, bij
+    // aankomst én vertrek — dan registreert dezelfde knop rechtstreeks via de
+    // RSZ-webservice. NOOIT automatisch aanmelden vanuit de planning: dat is
+    // vanaf april 2027 verboden en ook nu riskant (planning ≠ aanwezigheid).
+    // ============================================================
+    CIAW_PORTAAL: 'https://checkinatwork.socialsecurity.be/checkinatwork/',
+
+    /** Werfnummer normaliseren naar 13 tekens (cijfers + letters zonder I en
+     *  O, het tekenbereik van de RSZ), zonder streepjes. Getypt: O wordt 0 en
+     *  I wordt 1, want die letters komen in een werfnummer niet voor. Een
+     *  EAN-13 (13 cijfers) telt niet: er moet minstens één letter in staan.
+     *  Geen geldig nummer = ''. */
+    ciawCodeNorm(s, getypt) {
+        let t = String(s == null ? '' : s).toUpperCase().replace(/[\s\-\/.]/g, '');
+        if (getypt) t = t.replace(/O/g, '0').replace(/I/g, '1');
+        return (/^[0-9A-HJ-NP-Z]{13}$/.test(t) && /[0-9]/.test(t) && /[A-Z]/.test(t)) ? t : '';
+    },
+
+    /** 1Y1028KC7MPRZ → 1Y1-028KC7M-PR-Z (zoals op de werfaffiche). */
+    ciawCodeToon(norm) {
+        const c = String(norm || '');
+        return c.length === 13 ? c.slice(0, 3) + '-' + c.slice(3, 10) + '-' + c.slice(10, 12) + '-' + c.slice(12) : c;
+    },
+
+    /** Gescande of getypte tekst → { soort, url, code, host, ruw }.
+     *  'url'      = een adres bij de sociale zekerheid (*.socialsecurity.be);
+     *               het werfnummer halen we eruit als het erin staat;
+     *  'code'     = alleen een werfnummer;
+     *  'onbekend' = al de rest (reclame-QR van een drukker, een fles-etiket…)
+     *               — die wordt nooit geopend. */
+    ciawParse(tekst, getypt) {
+        let ruw = String(tekst == null ? '' : tekst).trim();
+        const uit = { soort: 'onbekend', url: '', code: '', host: '', ruw: ruw.slice(0, 300) };
+        if (!ruw) return uit;
+        if (!/^https?:\/\//i.test(ruw) && /^([a-z0-9-]+\.)*socialsecurity\.be(\/|$)/i.test(ruw)) ruw = 'https://' + ruw;
+        if (/^https?:\/\//i.test(ruw)) {
+            let u = null;
+            try { u = new URL(ruw); } catch (_e) { u = null; }
+            if (!u) return uit;
+            uit.host = String(u.hostname || '').toLowerCase();
+            if (!/(^|\.)socialsecurity\.be$/.test(uit.host)) return uit;
+            uit.soort = 'url';
+            uit.url = 'https://' + ruw.replace(/^https?:\/\//i, '');
+            let heel = ruw;
+            try { heel = decodeURIComponent(ruw); } catch (_e) {}
+            const m = heel.toUpperCase().match(/[0-9A-Z]{3}[-\/.][0-9A-Z]{6,7}[-\/.][0-9A-Z]{2}[-\/.][0-9A-Z](?:[-\/.][0-9A-Z])?/);
+            if (m) uit.code = this.ciawCodeNorm(m[0]);
+            if (!uit.code) {
+                const stukken = heel.split(/[?&=#\/;:,]+/);
+                for (const s of stukken) { const c = this.ciawCodeNorm(s); if (c) { uit.code = c; break; } }
+            }
+            return uit;
+        }
+        const c = this.ciawCodeNorm(ruw, !!getypt);
+        if (c) { uit.soort = 'code'; uit.code = c; }
+        return uit;
+    },
+
+    /** Projecten met Check in @ work = Ja (uit het projectenoverzicht, 10 min cache). */
+    async getCiawProjecten() {
+        const alle = await this.getProjectenOverzicht();
+        return (alle || []).filter(p => p && p.ciaw);
+    },
+
+    /** Algemene app-sleutel (kluis) voor de Worker, of null. */
+    _ciawAppKey() {
+        let alg = null;
+        try { alg = JSON.parse(localStorage.getItem('qe_api_alg') || 'null'); } catch (_e) {}
+        return (alg && alg.key && alg.secret) ? (alg.key + ':' + alg.secret) : null;
+    },
+
+    /** Scan ('scan') of bevestiging ('bevestig') naar de Worker. Gooit bij een
+     *  fout, met e.status — de app houdt het bericht dan in de wachtrij. */
+    async ciawMeld(soort, body) {
+        const sleutel = this._ciawAppKey();
+        if (!sleutel) { const e0 = new Error('geen app-sleutel — log opnieuw in'); e0.status = 0; throw e0; }
+        const pad = soort === 'bevestig' ? 'app-ciaw-bevestig' : 'app-ciaw-scan';
+        const res = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/bel-api/' + pad, {
+            method: 'POST',
+            headers: { 'X-App-Key': sleutel, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body || {}),
+        }, 8000);
+        let j = null;
+        try { j = await res.json(); } catch (_e) {}
+        if (!res.ok || !j || !j.ok) {
+            const e = new Error((j && j.error) || ('Worker ' + res.status));
+            e.status = res.status;
+            throw e;
+        }
+        return j;
+    },
 
     /** Eén dagplanning op een project maken + teruglezen als bewijs.
      *  o = { project (uit getProjectenOverzicht), datum 'YYYY-MM-DD', startTijd 'HH:MM',

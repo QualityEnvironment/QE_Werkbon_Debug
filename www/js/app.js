@@ -2157,6 +2157,7 @@ const app = {
             // anders blijven planningen voor altijd verborgen na een test-werkbon.
             const allItems = data.items || [];
             this.workorders = allItems.filter(wo => !wo.hasWerkbon);
+            this._ciawBanner(allItems, dateStr);   // v404: Check in @ work-kaart (alleen vandaag)
             document.getElementById('woCount').textContent = this.workorders.length;
 
             if (this.workorders.length === 0) {
@@ -10164,7 +10165,7 @@ const app = {
             const sub = document.getElementById('logGasSub');
             if (sub && beheer) {
                 const inHuur = this._gfItems.filter(m => !RobawsAPI.gasIsIngeleverd(m));
-                const lang = inHuur.filter(m => (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;
+                const lang = inHuur.filter(m => RobawsAPI.gasHuurTelt(m) && (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;   // v404
                 sub.textContent = inHuur.length ? (inHuur.length + ' in huur' + (lang ? ' \u00B7 ' + lang + ' langer dan ' + RobawsAPI.GAS_LANG_DAGEN + ' d' : '')) : 'Nog geen flessen geregistreerd';
             }
         } catch (e) {
@@ -10181,7 +10182,8 @@ const app = {
         if (m.stockLocationId) return { soort: 'locatie', tekst: this._gfLocNaam(m.stockLocationId) || ('Locatie #' + m.stockLocationId) };
         return { soort: 'geen', tekst: 'Plaats onbekend' };
     },
-    _gfDagenKleur(d) {
+    _gfDagenKleur(d, m) {
+        if (m && !RobawsAPI.gasHuurTelt(m)) return 'var(--g1,#85847C)';   // v404: propaan kost geen huur
         if (d == null) return 'var(--g3,#A3A29A)';
         if (d > RobawsAPI.GAS_LANG_DAGEN) return 'var(--red2,#B4372F)';
         if (d > 90) return 'var(--amber,#D97E24)';
@@ -10258,13 +10260,13 @@ const app = {
         const rechts = ing
             ? '<span style="font-size:12px;color:var(--g2,#5F5E56)">ingeleverd ' + this.escapeHtml(this._gfDat(RobawsAPI.gasIngeleverdOp(m))) + '</span>'
             : (beheer
-                ? '<div style="text-align:right">' + this._gfVulChip(m, false) + '<div style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:' + this._gfDagenKleur(dagen) + ';margin-top:2px">' + (dagen == null ? '?' : dagen + ' d') + '</div></div>'
+                ? '<div style="text-align:right">' + this._gfVulChip(m, false) + '<div style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:' + this._gfDagenKleur(dagen, m) + ';margin-top:2px">' + (dagen == null ? '?' : dagen + ' d') + '</div></div>'
                 // wie nog niets invulde krijgt een zacht duwtje in plaats van een leeg vak
                 : (this._gfVulChip(m, false) || '<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:var(--l2,#EBE8E0);color:var(--g2,#5F5E56);font-size:11.5px;font-weight:600;white-space:nowrap">Nog invullen</span>'));
         // het bolletje mag de vulstand-chip nooit tegenspreken (rood bolletje naast
         // een groene "Vol" leest als een fout): bureel ziet de huurduur, de rest de vulstand
         const vul = RobawsAPI.gasVulstandInfo(RobawsAPI.gasVulstand(m));
-        const bol = ing ? 'var(--g3,#A3A29A)' : (beheer ? this._gfDagenKleur(dagen) : (vul ? vul.kleur : 'var(--g3,#A3A29A)'));
+        const bol = ing ? 'var(--g3,#A3A29A)' : (beheer && RobawsAPI.gasHuurTelt(m) ? this._gfDagenKleur(dagen) : (vul ? vul.kleur : 'var(--g3,#A3A29A)'));   // v404: propaan = vulstand
         return '<div style="display:flex;align-items:center;gap:11px;padding:13px 2px;border-top:1px solid var(--l2,#EBE8E0);cursor:pointer" onclick="event.stopPropagation();app.openGasflesItem(\'' + m.id + '\')">' +
             '  <span style="flex-shrink:0;width:10px;height:10px;border-radius:50%;background:' + bol + '"></span>' +
             '  <div style="flex:1;min-width:0">' +
@@ -10349,11 +10351,11 @@ const app = {
             } else {
                 const perSoort = {};
                 alle.forEach(m => { const s2 = RobawsAPI.gasSoort(m); perSoort[s2] = (perSoort[s2] || 0) + 1; });
-                const lang = alle.filter(m => (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;
+                const lang = alle.filter(m => RobawsAPI.gasHuurTelt(m) && (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;   // v404
                 const leeg = alle.filter(m => RobawsAPI.gasVulstand(m) === 'leeg').length;
                 const vrHtml = this._gfVoorraadHtml(alle);   // v402: bestelpunt
                 const h = this._gfHuur && this._gfHuur.facturen && this._gfHuur.facturen[0];
-                const tekort = h ? Math.round(h.flessen) - alle.length : 0;
+                const tekort = h ? Math.round(h.flessen) - alle.filter(m => RobawsAPI.gasHuurTelt(m)).length : 0;   // v404: Messer factureert geen propaan
                 const huurHtml = h ? '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--wash,#F0EDE6);color:var(--ink,#26334B)">' +
                     '<strong>Volgens de Messer-factuur</strong> van ' + this.escapeHtml(this._gfDat(h.datum)) + ': ±<strong>' + h.flessen + ' flessen</strong> in huur' +
                     ' (' + h.cilinderdagen + ' cilinderdagen over ' + h.dagen + ' d · ' + this._budEur(h.kost) + ' huur ≈ ' + this._budEur(h.perJaar) + '/jaar)' +
@@ -10514,12 +10516,13 @@ const app = {
                     (aan ? v.kleur : 'var(--l2,#EBE8E0)') + ';background:' + (aan ? v.wash : 'var(--card,#FFF)') + ';color:' + (aan ? v.kleur : 'var(--g2,#5F5E56)') + '">' +
                     '<div style="font-size:20px;line-height:1.1">' + v.emoji + '</div>' + v.label + '</button>';
             }).join('') + '</div>' +
-            // de manometer: nauwkeuriger dan de drie knoppen
+            // de manometer: nauwkeuriger dan de drie knoppen (niet bij propaan, v404)
+            (!RobawsAPI.gasMetBar(gInfo.key) ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:6px;line-height:1.4">Bij propaan zegt de manometer niets: de druk blijft gelijk tot de fles bijna leeg is. Til of weeg de fles.</div>' : (
             '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">' +
             '<span style="font-size:13px;color:var(--g2,#5F5E56);flex:none">Of de manometer:</span>' +
             '<input type="number" inputmode="numeric" min="0" max="' + gInfo.vuldruk + '" value="' + cBar + '" placeholder="—" onchange="app.gfVulBar(\'' + id + '\', this.value)" style="width:82px;font:inherit;font-size:15px;font-weight:700;text-align:right;color:var(--ink,#26334B);background:var(--card,#FFF);border:2px solid ' + (cBar ? 'var(--accent,#F99D3E)' : 'var(--l2,#EBE8E0)') + ';border-radius:10px;padding:8px 9px">' +
             '<span style="font-size:14px;font-weight:600;color:var(--g2,#5F5E56)">bar</span>' +
-            (cBar && cMeting.pct != null ? '<span style="font-size:13px;color:var(--g1,#85847C)">= ' + cMeting.pct + '%</span>' : '') + '</div>' +
+            (cBar && cMeting.pct != null ? '<span style="font-size:13px;color:var(--g1,#85847C)">= ' + cMeting.pct + '%</span>' : '') + '</div>')) +
             (gInfo.key === 'acetyleen' ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:4px;line-height:1.4">Bij acetyleen is de druk indicatief: het gas zit opgelost in aceton, dus de druk zakt niet evenredig mee.</div>' : '') +
             (this._gfVeldVul === false
                 ? '<div style="font-size:12.5px;color:var(--amber2,#A5651A);margin-top:6px;line-height:1.45">Het bureel moet het veld "' + esc(RobawsAPI.GAS_VELD_VULSTAND) + '" nog aanmaken in Robaws — tot dan wordt dit niet bewaard.</div>'
@@ -10536,8 +10539,8 @@ const app = {
             (bewerk ? rij('emp', 'Wie heeft ze?', '<select onchange="app.gfConcept(\'emp\', this.value)" style="' + veld + '">' + empOpties + '</select>')
                 : rij(null, 'Wie heeft ze?', esc(wieNaam || 'Niemand'), wieNaam ? null : 'var(--amber,#D97E24)')) +
             (beheer ? rij(null, 'Leverancier', esc(m.brand || '—')) +
-                (bewerk ? rij('huurSinds', 'Huur sinds', '<input type="date" value="' + esc(c.huurSinds || '') + '" max="' + vandaag + '" onchange="app.gfConcept(\'huurSinds\', this.value)" style="' + veld + '">')
-                    : rij(null, 'Huur sinds', esc(this._gfDat(RobawsAPI.gasHuurSinds(m))))) : '') +
+                (bewerk ? rij('huurSinds', RobawsAPI.gasHuurTelt(m) ? 'Huur sinds' : 'In huis sinds', '<input type="date" value="' + esc(c.huurSinds || '') + '" max="' + vandaag + '" onchange="app.gfConcept(\'huurSinds\', this.value)" style="' + veld + '">')
+                    : rij(null, RobawsAPI.gasHuurTelt(m) ? 'Huur sinds' : 'In huis sinds', esc(this._gfDat(RobawsAPI.gasHuurSinds(m))))) : '') +
             (bewerk && this._gfVeldHuur === false ? '<div style="font-size:12px;color:var(--amber2,#A5651A);margin-top:6px;line-height:1.45">Het veld "Huur sinds" bestaat nog niet in Robaws — tot dan telt de aanmaakdatum en wordt een andere datum niet bewaard.</div>' : '');
 
         // --- de twee hoofdacties, in gewone taal ---
@@ -10571,7 +10574,7 @@ const app = {
             '  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">' +
             '    <div style="min-width:0">' +
             // de huurdagen zijn een bureel-cijfer (huurkost) — monteurs zien enkel de fles
-            (beheer && !ing ? '      <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + this._gfDagenKleur(dagen) + '">' + (dagen == null ? 'In huur' : dagen + ' dagen in huur') + '</div>' : '') +
+            (beheer && !ing ? '      <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + this._gfDagenKleur(dagen, m) + '">' + (RobawsAPI.gasHuurTelt(m) ? (dagen == null ? 'In huur' : dagen + ' dagen in huur') : (dagen == null ? 'In huis' : dagen + ' dagen in huis')) + '</div>' : '') +
             '      <div style="font-size:20px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B);line-height:1.2">' + esc(m.name || '') + '</div>' +
             (ing ? '      <div style="margin-top:6px"><span style="font-size:12.5px;font-weight:700;color:var(--g2,#5F5E56)">Ingeleverd op ' + esc(this._gfDat(RobawsAPI.gasIngeleverdOp(m))) + '</span></div>' : '') +
             '    </div>' +
@@ -10644,6 +10647,7 @@ const app = {
         if (!f || String(f.id) !== String(id)) return;
         const n = parseInt(String(waarde || '').replace(/[^0-9]/g, ''), 10);
         const m = (this._gfAlle || {})[id];
+        if (!RobawsAPI.gasMetBar(RobawsAPI.gasSoortKey(m))) return;   // v404: propaan meet je niet met een manometer
         const g = RobawsAPI.gasGas(RobawsAPI.gasSoortKey(m)) || { naam: 'gas', vuldruk: 200 };
         if (!waarde || isNaN(n)) { this.gfConcept('vulstand', ''); return; }
         if (n > g.vuldruk) { this.toast('Een volle ' + g.naam.toLowerCase() + ' staat op ' + g.vuldruk + ' bar', true); }
@@ -11190,7 +11194,7 @@ const app = {
         try { return !!(window.QEBridge && typeof QEBridge.scanBarcode === 'function'); } catch (_) { return false; }
     },
     openGasScan(doel) {
-        this._gfScanDoel = ['nummer', 'verv-oud', 'verv-nieuw', 'beheer'].indexOf(doel) >= 0 ? doel : 'fiche';   // v403
+        this._gfScanDoel = ['nummer', 'verv-oud', 'verv-nieuw', 'beheer', 'werf'].indexOf(doel) >= 0 ? doel : 'fiche';   // v403 + v404 werf-QR
         if (this._gfScanNatiefKan() && !this._gfScanNatiefKapot) {
             this._gfScanNatiefBezig = true;
             try { QEBridge.scanBarcode(); return; } catch (e) { this._gfScanNatiefBezig = false; }
@@ -11214,8 +11218,9 @@ const app = {
         const ov = document.createElement('div');
         ov.id = 'gfScanSheet';
         ov.style.cssText = 'position:fixed;inset:0;z-index:99995;background:#0F1626;color:#fff;display:flex;flex-direction:column';
+        const werf = this._gfScanDoel === 'werf';   // v404: werf-QR i.p.v. een flesetiket
         ov.innerHTML =
-            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px"><div style="font-size:16px;font-weight:700">Scan het etiket op de fles</div>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px"><div style="font-size:16px;font-weight:700">' + (werf ? 'Scan de werf-QR (Check in @ work)' : 'Scan het etiket op de fles') + '</div>' +
             '<button onclick="app._gfScanStop(true)" style="border:none;background:none;font-size:26px;line-height:1;color:#fff;padding:4px 8px;cursor:pointer">&times;</button></div>' +
             '<div id="gfScanVak" style="flex:1;position:relative;overflow:hidden;background:#000">' +
             '<video id="gfScanVideo" playsinline autoplay muted style="width:100%;height:100%;object-fit:cover;visibility:hidden"></video>' +
@@ -11224,7 +11229,7 @@ const app = {
             '<div id="gfScanStatus" style="padding:10px 16px;font-size:13px;color:#C9CFDA;text-align:center;min-height:38px">Camera starten…</div>' +
             '<div style="display:flex;gap:8px;padding:0 16px calc(16px + env(safe-area-inset-bottom))">' +
             '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="document.getElementById(\'gfScanFoto\').click()">📸 Foto nemen</button>' +
-            '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="app._gfScanHandmatig()">Flesnummer typen</button></div>' +
+            '<button class="btn btn-outline" style="flex:1;color:#fff;border-color:rgba(255,255,255,.5)" onclick="app._gfScanHandmatig()">' + (werf ? 'Werfnummer typen' : 'Flesnummer typen') + '</button></div>' +
             '<input type="file" id="gfScanFoto" accept="image/*" capture="environment" style="display:none" onchange="app._gfScanFoto(this)">';
         document.body.appendChild(ov);
         this._gfScanStart();
@@ -11255,7 +11260,7 @@ const app = {
             if (!detector) { try { await this._gfLaadZxing(); zx = true; } catch (_) { zx = false; } }
             if (!detector && !zx) { try { await this._qrLaadJsqr(); } catch (_) {} }
             if (!detector && !zx && !window.jsQR) { zeg('Herkenning niet beschikbaar — neem een foto of typ het nummer.'); return; }
-            zeg(detector || zx ? 'Richt op de streepjescode of QR-code van het etiket…' : 'Richt op de QR-code… (streepjescode: neem een foto of typ het nummer)');
+            zeg(this._gfScanDoel === 'werf' ? 'Richt op de QR-code van de werfaffiche…' : detector || zx ? 'Richt op de streepjescode of QR-code van het etiket…' : 'Richt op de QR-code… (streepjescode: neem een foto of typ het nummer)');
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
             let bezig = false, n = 0, detFouten = 0;
@@ -11295,7 +11300,9 @@ const app = {
             if (video) video.style.visibility = 'hidden';
             if (paneel) paneel.style.display = 'flex';
             if (paneelTekst) paneelTekst.innerHTML = '<b style="color:#fff">Live camera niet beschikbaar in deze app-versie.</b><br>Neem een foto van het etiket — de streepjescode wordt uit de foto gelezen — of typ het nummer dat onder de streepjes staat.';
+            if (paneelTekst && this._gfScanDoel === 'werf') paneelTekst.innerHTML = '<b style="color:#fff">Live camera niet beschikbaar in deze app-versie.</b><br>Neem een foto van de QR-code op de werfaffiche, of typ het werfnummer dat eronder staat.';   // v404
             zeg('Camera niet beschikbaar — neem een foto van het etiket.');
+            if (this._gfScanDoel === 'werf') zeg('Camera niet beschikbaar — neem een foto van de werf-QR.');   // v404
             setTimeout(() => { const f = document.getElementById('gfScanFoto'); if (f) f.click(); }, 300);
         }
     },
@@ -11404,9 +11411,10 @@ const app = {
         finally { input.value = ''; }
     },
     _gfScanHandmatig() {
-        const nr = prompt('Flesnummer (zoals op de fles):');
+        const nr = prompt(this._gfScanDoel === 'werf' ? 'Werfnummer (13 tekens, zoals onder de QR-code op de werfaffiche):' : 'Flesnummer (zoals op de fles):');   // v404
         if (nr == null) return;
         this._gfScanStop();
+        this._gfScanGetypt = true;   // v404: getypt, niet gescand
         this._gfScanVerwerk(String(nr));
     },
     /** Gescande tekst → fiche of formulier. Onze QR-URL → materieel-id; een
@@ -11415,6 +11423,15 @@ const app = {
      *  nummer = nieuwe levering → meteen het registratieformulier met het
      *  nummer ingevuld ("een paar clicks"). */
     _gfScanVerwerk(tekst) {
+        const getypt = !!this._gfScanGetypt;   // v404
+        this._gfScanGetypt = false;
+        if (this._gfScanDoel === 'werf') {   // v404: Check in @ work (werf-QR)
+            this._gfScanDoel = 'fiche';
+            const sh = document.getElementById('gfScanSheet');
+            if (sh) sh.remove();
+            this._ciawVerwerk(tekst, getypt);
+            return;
+        }
         const p = RobawsAPI.qrParseMaterial(tekst);
         const sheet = document.getElementById('gfScanSheet');
         if (sheet) sheet.remove();
@@ -19710,6 +19727,338 @@ const app = {
             '</div></div>';
         ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
         document.body.appendChild(ov);
+    },
+
+    // ============================================================
+    // CHECK IN @ WORK (v404) — werf-QR scannen (vraag baas + Levi 24 sep).
+    // Staat je vandaag op een project met Check in @ work = Ja, dan toont de
+    // planning een kaart. Bij aankomst scan je de QR-code op de werfaffiche:
+    // de app opent de RSZ-pagina (daar meld je je aan met je eigen RSZ-login,
+    // tot 31 maart 2027) en noteert de scan in de Worker (logboek + overzicht
+    // voor het bureel). Terug in de app: "Aanmelding gelukt?" — ook via de
+    // kaart zelf, want niet elk toestel meldt de terugkeer naar de app.
+    // Vanaf 1 april 2027 registreert dezelfde knop rechtstreeks (Check In and
+    // Out at Work, ook bij vertrek). NOOIT automatisch aanmelden uit de
+    // planning — dat mag vanaf april 2027 niet meer.
+    // ============================================================
+    _ciawVandaag: [],
+
+    _ciawSleutel(datum) {
+        const mijn = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+        return 'qe_ciaw_' + mijn + '_' + (datum || this._localDateStr(new Date()));
+    },
+    _ciawStand(datum) {
+        let s = null;
+        try { s = JSON.parse(localStorage.getItem(this._ciawSleutel(datum)) || 'null'); } catch (_e) {}
+        if (!s || typeof s !== 'object') s = {};
+        if (!Array.isArray(s.scans)) s.scans = [];
+        return s;
+    },
+    _ciawStandZet(s, datum) {
+        try { localStorage.setItem(this._ciawSleutel(datum), JSON.stringify(s || { scans: [] })); } catch (_e) {}
+    },
+    /** Dagstanden ouder dan 7 dagen opruimen. */
+    _ciawOpruimen() {
+        try {
+            const grens = this._localDateStr(new Date(Date.now() - 7 * 86400e3));
+            const weg = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                const m = k && k.match(/^qe_ciaw_[0-9]*_(\d{4}-\d{2}-\d{2})$/);
+                if (m && m[1] < grens) weg.push(k);
+            }
+            weg.forEach(k => localStorage.removeItem(k));
+        } catch (_e) {}
+    },
+    _ciawUur(ms) {
+        const d = new Date(ms || Date.now());
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    },
+
+    /** Kaart op de planning, alleen voor vandaag. items = ALLE planningen van
+     *  de dag (ook die al een werkbon hebben). Faalt stil. */
+    async _ciawBanner(items, dateStr) {
+        const el = document.getElementById('ciawBanner');
+        if (!el) return;
+        const verberg = () => { el.style.display = 'none'; el.innerHTML = ''; };
+        if (dateStr !== this._localDateStr(new Date())) { verberg(); return; }
+        const pids = [];
+        (items || []).forEach(x => { if (x && x.projectId && pids.indexOf(String(x.projectId)) < 0) pids.push(String(x.projectId)); });
+        this._ciawLuister();
+        this._ciawFlush();
+        if (!pids.length) { this._ciawVandaag = []; verberg(); return; }
+        let projecten = [];
+        try { projecten = await RobawsAPI.getCiawProjecten(); } catch (_e) { verberg(); return; }
+        if (this._localDateStr(this.currentDate) !== dateStr) return;   // intussen van dag gewisseld
+        this._ciawVandaag = projecten.filter(p => pids.indexOf(String(p.id)) >= 0);
+        this._ciawOpruimen();
+        this._ciawTeken();
+        if (this._ciawVandaag.length) setTimeout(() => this._ciawCheckOpen(), 300);
+    },
+
+    /** Laatste scan voor een werf: van dat project, of zonder project als er
+     *  vandaag maar één werf is. Een bevestigde scan blijft staan. */
+    _ciawScanVoor(p, scans, eenWerf) {
+        const bij = (scans || []).filter(s => String(s.p || '') === String(p.id) || (!s.p && eenWerf));
+        const ok = bij.filter(s => s.g === true);
+        if (ok.length) return ok[ok.length - 1];
+        return bij.length ? bij[bij.length - 1] : null;
+    },
+
+    _ciawTeken() {
+        const el = document.getElementById('ciawBanner');
+        if (!el) return;
+        const werven = this._ciawVandaag || [];
+        if (!werven.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        const scans = this._ciawStand().scans;
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const chip = (kleur, bg, tekst) => '<span style="display:inline-block;font-size:12.5px;font-weight:700;padding:3px 10px;border-radius:999px;color:' + kleur + ';background:' + bg + '">' + tekst + '</span>';
+        const scanKnop = (pid, tekst) => '<button class="btn btn-primary" style="flex:1;min-width:0" onclick="app.ciawScan(\'' + esc(pid) + '\')">' + tekst + '</button>';
+        const rijen = werven.map(p => {
+            const s = this._ciawScanVoor(p, scans, werven.length === 1);
+            let st, knoppen = '';
+            if (s && s.g === true) {
+                st = chip('#2E7042', '#EDF7EF', '✓ Aangemeld om ' + this._ciawUur(s.t));   // tijdstip van de scan
+            } else if (s && s.g === false) {
+                st = chip('#B3261E', '#FDECEA', 'Niet gelukt (' + this._ciawUur(s.t) + ')');
+                knoppen = scanKnop(p.id, '📷 Opnieuw scannen');
+            } else if (s) {
+                st = chip('var(--amber2,#E88A2A)', 'var(--awash,#FBF3E4)', 'Gescand om ' + this._ciawUur(s.t) + ' — gelukt?');
+                knoppen = '<button class="btn btn-primary" style="flex:1;min-width:0" onclick="app.ciawBevestig(\'' + esc(s.id) + '\', true)">✓ Gelukt</button>'
+                    + '<button class="btn btn-outline" style="flex:1;min-width:0" onclick="app.ciawBevestig(\'' + esc(s.id) + '\', false)">Niet gelukt</button>';
+            } else {
+                st = chip('var(--qe-grey,#6b7280)', 'var(--bg,#F4F2ED)', 'Nog niet aangemeld');
+                knoppen = scanKnop(p.id, '📷 Werf-QR scannen');
+            }
+            const sub = [p.logicId, p.adresTekst].filter(Boolean).join(' · ');
+            return '<div style="padding:11px 0 12px;border-top:1px solid var(--cb,#e5e2da)">'
+                + '<div style="font-size:14.5px;font-weight:700;color:var(--ink,#26334B)">' + esc(p.naam) + '</div>'
+                + (sub ? '<div style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">' + esc(sub) + '</div>' : '')
+                + (p.werfnr ? '<div style="font-size:12.5px;color:var(--qe-grey)">Werfnummer ' + esc(p.werfnr) + '</div>' : '')
+                + '<div style="margin-top:8px">' + st + '</div>'
+                + (knoppen ? '<div style="display:flex;gap:8px;margin-top:10px">' + knoppen + '</div>' : '')
+                + '</div>';
+        }).join('');
+        el.innerHTML = '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Check in @ work</div>'
+            + '<div style="font-size:13px;color:var(--qe-grey);margin:3px 0 10px;line-height:1.45">Scan bij aankomst de QR-code op de werfaffiche. De app opent de RSZ-pagina: daar meld je je aan.</div>'
+            + rijen;
+        el.style.cssText = 'display:block;padding:12px 14px 2px;margin-bottom:14px;border-radius:12px;border:1px solid var(--aborder,#F99D3E);background:var(--card,#FDFCFA)';
+    },
+
+    /** Knop op de kaart: de werf-QR scannen (dezelfde scanner als de gasflessen). */
+    ciawScan(projectId) {
+        this._ciawProjKeuze = projectId ? String(projectId) : null;
+        this._ciawLuister();
+        this.openGasScan('werf');
+    },
+
+    /** Gescande (of getypte) werf-code verwerken. */
+    _ciawVerwerk(tekst, getypt) {
+        const p = RobawsAPI.ciawParse(tekst, getypt);
+        const werven = this._ciawVandaag || [];
+        let proj = this._ciawProjKeuze ? (werven.find(w => String(w.id) === this._ciawProjKeuze) || null) : null;
+        this._ciawProjKeuze = null;
+        // het werfnummer in de QR wint van de knop waarop getikt werd
+        if (p.code) {
+            const m = werven.find(w => RobawsAPI.ciawCodeNorm(w.werfnr) === p.code);
+            if (m) proj = m;
+        }
+        if (!proj && werven.length === 1) proj = werven[0];
+        const u = this.currentUser || {};
+        const datum = this._localDateStr(new Date());
+        const basis = {
+            id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+            datum, soort: p.soort, code: p.code, url: p.url,
+            ruw: p.soort === 'onbekend' ? p.ruw : '',
+            employeeId: String(u.robawsEmployeeId || ''), naam: String(u.name || ''),
+            projectId: proj ? String(proj.id) : '', projectNr: proj ? String(proj.logicId || '') : '',
+            projectNaam: proj ? String(proj.naam || '') : '', tc: Date.now(),
+        };
+        if (p.soort === 'onbekend') {
+            if (!getypt) this._ciawStuur('scan', basis);   // zo leren we welke codes er op de werven hangen
+            this._ciawMelding(getypt ? 'Geen geldig werfnummer' : 'Geen Check in @ work-code',
+                getypt
+                    ? 'Een werfnummer heeft 13 tekens, zoals 1Y1-028KC7M-PR-Z. Het staat onder de QR-code op de werfaffiche.'
+                    : 'Deze code is niet van de RSZ' + (p.host ? ' (ze verwijst naar ' + p.host + ')' : '') + '. Scan de QR-code op de officiële werfaffiche met het logo Checkin@Work, of typ het werfnummer dat eronder staat.');
+            return;
+        }
+        // meteen lokaal bijhouden: de kaart toont "Gescand om …"
+        const stand = this._ciawStand(datum);
+        stand.scans.push({ id: basis.id, t: Date.now(), p: basis.projectId, pn: basis.projectNaam, c: p.code, g: null, b: basis });
+        if (stand.scans.length > 20) stand.scans = stand.scans.slice(-20);
+        this._ciawStandZet(stand, datum);
+        this._ciawTeken();
+        // RSZ-pagina openen; met alleen een nummer: het portaal + het nummer op het klembord
+        let doel = p.url;
+        if (!doel) {
+            doel = RobawsAPI.CIAW_PORTAAL;
+            this._ciawKopieer(RobawsAPI.ciawCodeToon(p.code));
+            this.toast('Werfnummer ' + RobawsAPI.ciawCodeToon(p.code) + ' gekopieerd — plak het op de RSZ-pagina');
+        }
+        const eigenNr = proj ? RobawsAPI.ciawCodeNorm(proj.werfnr) : '';
+        if (eigenNr && p.code && eigenNr !== p.code) {
+            this.toast('Let op: deze QR hoort bij werfnummer ' + RobawsAPI.ciawCodeToon(p.code) + ', maar ' + proj.naam + ' heeft ' + proj.werfnr + ' in de planning.', true);
+        }
+        try { localStorage.setItem('qe_ciaw_open', JSON.stringify({ id: basis.id, t: Date.now(), d: datum, pn: basis.projectNaam, u: doel })); } catch (_e) {}
+        this._ciawOpen(doel);
+        // logboek voor het bureel — locatie als ze snel beschikbaar is, nooit blokkerend
+        (async () => {
+            try {
+                if (window.QEClock && typeof QEClock._getGPS === 'function') {
+                    const g = await QEClock._getGPS({ timeoutMs: 4000, maximumAge: 120000 });
+                    if (g && g.latitude != null) { basis.lat = g.latitude; basis.lon = g.longitude; }
+                }
+            } catch (_e) {}
+            this._ciawStuur('scan', basis);
+        })();
+    },
+
+    /** Een https-adres openen in de browser van het toestel. */
+    _ciawOpen(url) {
+        let via = false;
+        try {
+            if (window.QENative && typeof QENative.beschikbaar === 'function' && QENative.beschikbaar()) {
+                via = true;
+                QENative.openUrl(url).then(r => { if (!r || !r.ok) { try { window.open(url, '_blank'); } catch (_e) {} } });
+            }
+        } catch (_e) { via = false; }
+        if (!via) { try { window.open(url, '_blank'); } catch (_e) {} }
+    },
+    _ciawKopieer(tekst) {
+        try { if (window.QENative && QENative.kopieer(tekst)) return; } catch (_e) {}
+        try { if (navigator.clipboard) navigator.clipboard.writeText(tekst); } catch (_e) {}
+    },
+
+    /** Aanmelding bevestigen (of niet): lokaal + naar de Worker. */
+    ciawBevestig(id, gelukt, datum) {
+        const d = datum || this._localDateStr(new Date());
+        const stand = this._ciawStand(d);
+        const s = stand.scans.find(x => x.id === id);
+        if (s) { s.g = !!gelukt; s.gt = Date.now(); this._ciawStandZet(stand, d); }
+        try {
+            const o = JSON.parse(localStorage.getItem('qe_ciaw_open') || 'null');
+            if (o && o.id === id) localStorage.removeItem('qe_ciaw_open');
+        } catch (_e) {}
+        const v = document.getElementById('ciawVraag');
+        if (v) v.remove();
+        this._ciawTeken();
+        this._ciawStuur('bevestig', Object.assign({}, (s && s.b) || { id, datum: d }, { id, datum: d, gelukt: !!gelukt }));
+        this.toast(gelukt ? 'Genoteerd: je bent aangemeld' : 'Genoteerd — scan opnieuw of bel het bureel', !gelukt);
+    },
+
+    /** Terug in de app na het openen van de RSZ-pagina → even vragen of het lukte. */
+    _ciawLuister() {
+        if (this._ciawLuistert) return;
+        this._ciawLuistert = true;
+        try {
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') setTimeout(() => this._ciawCheckOpen(), 500);
+            });
+        } catch (_e) {}
+    },
+    _ciawCheckOpen() {
+        let o = null;
+        try { o = JSON.parse(localStorage.getItem('qe_ciaw_open') || 'null'); } catch (_e) {}
+        if (!o || !o.id) return;
+        const oud = Date.now() - (o.t || 0);
+        if (oud > 3 * 3600e3) { try { localStorage.removeItem('qe_ciaw_open'); } catch (_e) {} return; }
+        if (oud < 3000) return;   // net geopend: de RSZ-pagina komt nog
+        if (document.getElementById('ciawVraag')) return;
+        const s = this._ciawStand(o.d).scans.find(x => x.id === o.id);
+        if (s && s.g !== null && s.g !== undefined) { try { localStorage.removeItem('qe_ciaw_open'); } catch (_e) {} return; }
+        this._ciawVraag(o);
+    },
+    _ciawVraag(o) {
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const ov = document.createElement('div');
+        ov.id = 'ciawVraag';
+        // v337-les: geen geneste vh-hoogte — de overlay scrolt zelf
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">'
+            + '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">'
+            + '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Check in @ work</div>'
+            + '<div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;color:var(--ink,#26334B);margin:2px 0 6px">Is je aanmelding gelukt?</div>'
+            + '<div style="font-size:13.5px;color:var(--qe-grey);line-height:1.5;margin-bottom:14px">' + (o.pn ? esc(o.pn) + ' · ' : '') + 'Kreeg je op de RSZ-pagina de bevestiging dat je aanwezigheid geregistreerd is?</div>'
+            + '<button class="btn btn-primary btn-full" style="margin-bottom:8px" onclick="app.ciawBevestig(\'' + esc(o.id) + '\', true, \'' + esc(o.d || '') + '\')">✓ Ja, gelukt</button>'
+            + '<button class="btn btn-outline btn-full" style="margin-bottom:8px" onclick="app._ciawOpnieuw()">RSZ-pagina opnieuw openen</button>'
+            + '<button class="btn btn-outline btn-full" onclick="app.ciawBevestig(\'' + esc(o.id) + '\', false, \'' + esc(o.d || '') + '\')">Niet gelukt</button>'
+            + '</div></div>';
+        ov.addEventListener('click', (e) => {
+            if (e.target === ov || e.target === ov.firstElementChild) {
+                ov.remove();
+                try { localStorage.removeItem('qe_ciaw_open'); } catch (_e) {}   // later: via de kaart
+            }
+        });
+        document.body.appendChild(ov);
+    },
+    _ciawOpnieuw() {
+        let o = null;
+        try { o = JSON.parse(localStorage.getItem('qe_ciaw_open') || 'null'); } catch (_e) {}
+        const v = document.getElementById('ciawVraag');
+        if (v) v.remove();
+        if (!o) return;
+        o.t = Date.now();
+        try { localStorage.setItem('qe_ciaw_open', JSON.stringify(o)); } catch (_e) {}
+        this._ciawOpen(o.u || RobawsAPI.CIAW_PORTAAL);
+    },
+
+    /** Uitleg-venster (bv. een QR die niet van de RSZ is). */
+    _ciawMelding(titel, tekst) {
+        const oud = document.getElementById('ciawInfo');
+        if (oud) oud.remove();
+        const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+        const ov = document.createElement('div');
+        ov.id = 'ciawInfo';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">'
+            + '<div style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))">'
+            + '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--amber2,#E88A2A)">Check in @ work</div>'
+            + '<div style="font-size:19px;font-weight:700;color:var(--ink,#26334B);margin:2px 0 6px">' + esc(titel) + '</div>'
+            + '<div style="font-size:13.5px;color:var(--qe-grey);line-height:1.5;margin-bottom:14px">' + esc(tekst) + '</div>'
+            + '<button class="btn btn-primary btn-full" style="margin-bottom:8px" onclick="document.getElementById(\'ciawInfo\').remove();app.ciawScan()">Opnieuw scannen</button>'
+            + '<button class="btn btn-outline btn-full" onclick="document.getElementById(\'ciawInfo\').remove()">Sluiten</button>'
+            + '</div></div>';
+        ov.addEventListener('click', (e) => { if (e.target === ov || e.target === ov.firstElementChild) ov.remove(); });
+        document.body.appendChild(ov);
+    },
+
+    /** Berichten naar de Worker in volgorde (een bevestiging gaat nooit vóór
+     *  haar scan). Mislukt = blijft in de wachtrij (max 3 dagen). */
+    _ciawStuur(soort, body) {
+        const rij = this._ciawRij();
+        rij.push({ soort, body, t: Date.now() });
+        this._ciawRijZet(rij);
+        this._ciawFlush();
+    },
+    _ciawRij() {
+        let r = null;
+        try { r = JSON.parse(localStorage.getItem('qe_ciaw_rij') || 'null'); } catch (_e) {}
+        return Array.isArray(r) ? r : [];
+    },
+    _ciawRijZet(r) {
+        try { localStorage.setItem('qe_ciaw_rij', JSON.stringify((r || []).slice(-40))); } catch (_e) {}
+    },
+    async _ciawFlush() {
+        if (this._ciawFlushBezig) return;
+        this._ciawFlushBezig = true;
+        try {
+            for (let n = 0; n < 45; n++) {
+                const rij = this._ciawRij().filter(x => x && x.t && (Date.now() - x.t) < 3 * 86400e3);
+                this._ciawRijZet(rij);
+                if (!rij.length) break;
+                const x = rij[0];
+                let weg = false;
+                try { await RobawsAPI.ciawMeld(x.soort, x.body); weg = true; }
+                catch (e) { if (e && e.status === 400) weg = true; else break; }   // 400 = kapot bericht, anders blokkeert het de rij
+                if (weg) {
+                    const nu = this._ciawRij();
+                    if (nu.length && nu[0].t === x.t && nu[0].soort === x.soort) { nu.shift(); this._ciawRijZet(nu); }
+                }
+            }
+        } catch (_e) {
+        } finally { this._ciawFlushBezig = false; }
     },
 
     // ============================================================

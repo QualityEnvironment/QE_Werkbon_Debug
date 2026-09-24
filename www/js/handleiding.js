@@ -99,6 +99,21 @@
         ] },
     ] },
 
+    { slug: 'ciaw', deel: 'Jouw werkdag', kick: 'Op de grote werven', titel: 'Check in @ work', lead: 'Op sommige werven meld je elke dag je aanwezigheid bij de RSZ. De app helpt je daarbij.', scherm: 'screenPlanning', blokken: [
+        { t: 'p', h: 'Op grote werven (vanaf € 500.000) moet iedereen die er werkt zijn aanwezigheid melden bij de RSZ. Sta je vandaag op zo’n werf, dan zie je bovenaan je <b>Planning</b> een kaart <b>Check in @ work</b>.' },
+        { t: 'stap', n: 1, h: 'Kom je aan op de werf? Tik op <b>📷 Werf-QR scannen</b> en scan de QR-code op de werfaffiche (met het logo Checkin@Work).' },
+        { t: 'stap', n: 2, h: 'De app opent de RSZ-pagina. Meld je daar aan met je eigen RSZ-login.' },
+        { t: 'stap', n: 3, h: 'Terug in de app komt de vraag <b>Is je aanmelding gelukt?</b> Tik op <b>Ja, gelukt</b>. Op de kaart staat dan <b>Aangemeld om …</b> Zie je de vraag niet? Tik dan op de kaart zelf op <b>Gelukt</b>.' },
+        { t: 'letop', h: 'Meld je aan <b>vóór je begint te werken</b>. Vanaf 1 april 2027 verandert de regel: dan meld je je ook af als je vertrekt. Je hoort het op tijd van het bureel.' },
+        { t: 'faq', items: [
+            ['Er hangt geen QR-code op de werf.', 'Tik op <b>Werf-QR scannen</b> en daarna op <b>Werfnummer typen</b>. Het werfnummer staat op de werfaffiche, of vraag het aan de werfleider. Lukt het niet? Bel het bureel.'],
+            ['De app zegt "Geen Check in @ work-code".', 'Dan scande je een andere QR-code, bijvoorbeeld reclame van de drukker. Zoek de officiële affiche met het logo Checkin@Work.'],
+            ['Ik sta op een grote werf, maar ik zie geen kaart.', 'Dan staat het project in Robaws nog niet op Check in @ work. Bel het bureel.'],
+            ['Moet ik voor een collega scannen?', 'Nee. Iedereen scant met zijn eigen telefoon, zo staat de aanmelding op jouw naam.'],
+            ['Het lukte niet op de RSZ-pagina.', 'Tik op <b>Niet gelukt</b> en probeer opnieuw met <b>Opnieuw scannen</b>. Blijft het mislukken? Bel het bureel — zij zien het in hun overzicht.'],
+        ] },
+    ] },
+
     { slug: 'wo-info', deel: 'Jouw werkdag', kick: 'De werkorder · tabblad 1', titel: 'De werkorder: Info', lead: 'Bovenin de werkorder staan 4 tabbladen: Info · Uren · Materiaal · Foto’s.', blokken: [
         { t: 'stap', n: 1, h: 'Op <b>Info</b> zie je de klant (adres, telefoon) en de <b>installatie</b> waar je voor komt.' },
         { t: 'stap', n: 2, h: 'Staat er een <b>taakomschrijving</b>? Lees die eerst — daar staat wat je moet doen.' },
