@@ -403,6 +403,7 @@ const RobawsAPI = {
         if (Array.isArray(r[em])) localStorage.setItem('qe_app_tools', JSON.stringify(r[em]));
         else localStorage.removeItem('qe_app_tools');
         if (j && Array.isArray(j.tools)) localStorage.setItem('qe_app_tools_bekend', JSON.stringify(j.tools.map(t => t.key)));
+        if (j && j.gasConfig) this.gasConfigZet(j.gasConfig);   // v403
         // alleen een Worker die de logistiek-keuze kent (v436) mag die bijwerken
         if (j && j.logistiek && j.logistiek.personen) {
             const l = j.logistiek.personen[em];
@@ -1681,6 +1682,91 @@ const RobawsAPI = {
      *  naam die geen camionet is. */
     GAS_MAGAZIJN_MATCH: /groot\s*magazijn/i,
     GAS_LOG_MAX: 60,
+    // ---- v403: GASSEN, MATEN EN BESTELPUNT (vraag Levi 23-24 sep) ----
+    //  * voorraad = 2 volle per gas in het groot magazijn, amber bij 1, rood bij 0
+    //  * beschikbaar = alles behalve leeg (halfvol telt mee, keuze Levi)
+    //  * maat is een KEUZE uit een lijst per gas, geen vrije tekst: zo kan de
+    //    app bij een vervanging de juiste lege fles herkennen. Acetyleen in kg,
+    //    zuurstof en menggas in F (= waterinhoud in liter).
+    //  * de meting is BAR; per gas een vuldruk en een leeg-grens. Bij acetyleen
+    //    is de druk indicatief (opgelost in aceton, sterk temperatuurafhankelijk).
+    //  De lijst staat in de Worker-KV en komt mee met app-rechten; dit is de
+    //  standaard zolang er niets bewaard is.
+    GAS_CONFIG_STD: {
+        bestelpunt: { zuurstof: 2, acetyleen: 2, menggas: 0 },
+        amber: 1,
+        legeDrempel: 4,
+        gassen: [
+            { key: 'zuurstof', naam: 'Zuurstof', prefix: 'Zuurstof', eenheid: 'F', vuldruk: 200, leegOnder: 20,
+              maten: ['F10', 'F20', 'F40', 'F50'],
+              sub: { F10: '10 L \u00b7 \u00b12 m\u00b3', F20: '20 L \u00b7 \u00b14 m\u00b3', F40: '40 L \u00b7 \u00b18 m\u00b3', F50: '50 L \u00b7 \u00b110 m\u00b3' } },
+            { key: 'acetyleen', naam: 'Acetyleen', prefix: 'Acetyleen', eenheid: 'kg', vuldruk: 18, leegOnder: 5,
+              maten: ['1,75 kg', '3,5 kg', '4,9 kg', '7 kg', '8,7 kg'],
+              sub: { '1,75 kg': 'F10', '3,5 kg': 'F20', '4,9 kg': 'F28', '7 kg': 'F40', '8,7 kg': 'F50' } },
+            { key: 'menggas', naam: 'Menggas', prefix: 'Menggas Ferroline C18', eenheid: 'F', vuldruk: 200, leegOnder: 20,
+              maten: ['F10', 'F20', 'F40', 'F50'],
+              sub: { F10: '10 L', F20: '20 L', F40: '40 L', F50: '50 L' } },
+        ],
+    },
+    GAS_CONFIG_SLEUTEL: 'qe_gas_config',
+    /** De standaard, met de bewaarde aantallen en matenlijsten eroverheen. */
+    gasConfig() {
+        const std = this.GAS_CONFIG_STD;
+        let b = null;
+        try { b = JSON.parse(localStorage.getItem(this.GAS_CONFIG_SLEUTEL) || 'null'); } catch (_e) { b = null; }
+        const bestelpunt = Object.assign({}, std.bestelpunt);
+        if (b && b.bestelpunt && typeof b.bestelpunt === 'object') {
+            Object.keys(b.bestelpunt).forEach((k) => { const n = Number(b.bestelpunt[k]); if (n >= 0 && n < 100) bestelpunt[String(k).toLowerCase()] = Math.round(n); });
+        }
+        const gassen = std.gassen.map((g) => {
+            const o = Object.assign({}, g);
+            const m = b && b.maten && b.maten[g.key];
+            if (Array.isArray(m) && m.length) o.maten = m.map((x) => String(x).trim()).filter(Boolean).slice(0, 20);
+            return o;
+        });
+        return { bestelpunt, gassen,
+            amber: (b && Number(b.amber) >= 0) ? Math.round(Number(b.amber)) : std.amber,
+            legeDrempel: (b && Number(b.legeDrempel) > 0) ? Math.round(Number(b.legeDrempel)) : std.legeDrempel };
+    },
+    /** Komt mee met de login en met app-rechten. */
+    gasConfigZet(cfg) {
+        try { if (cfg && typeof cfg === 'object') localStorage.setItem(this.GAS_CONFIG_SLEUTEL, JSON.stringify(cfg)); } catch (_e) { /* stil */ }
+    },
+    gasGas(key) {
+        const k = String(key || '').toLowerCase();
+        return this.gasConfig().gassen.find((g) => g.key === k) || null;
+    },
+    /** Welk gas zit erin? Uit de naam, want dat is wat Robaws draagt. */
+    gasSoortKey(m) {
+        const n = String((m && m.name) || '').toLowerCase();
+        const g = this.gasConfig().gassen.find((x) => n.indexOf(x.key) === 0 || n.indexOf(x.naam.toLowerCase()) === 0);
+        return g ? g.key : null;
+    },
+    /** De maat uit de naam, vergeleken met de lijst van dat gas.
+     *  'Acetyleen F20 3,5 kg \u00b7 58449241' \u2192 '3,5 kg' (de oude F-code telt niet mee).
+     *  Geen match = {maat:null, ruw:<wat er staat>} \u2014 dat is een fles die nog
+     *  een keer moet worden rechtgezet. */
+    gasMaatInfo(m) {
+        const naam = String((m && m.name) || '').trim();
+        const nr = String((m && m.serialNumber) || '').trim();
+        let kort = naam;
+        if (nr && kort.slice(-nr.length) === nr) kort = kort.slice(0, -nr.length).trim();
+        while (kort && '\u00b7-\u2014:'.indexOf(kort.slice(-1)) >= 0) kort = kort.slice(0, -1).trim();
+        const g = this.gasSoortKey(m) ? this.gasGas(this.gasSoortKey(m)) : null;
+        if (g && kort.toLowerCase().indexOf(g.prefix.toLowerCase()) === 0) kort = kort.slice(g.prefix.length).trim();
+        else if (g && kort.toLowerCase().indexOf(g.naam.toLowerCase()) === 0) kort = kort.slice(g.naam.length).trim();
+        const ruw = kort;
+        if (!g) return { maat: null, ruw };
+        const norm = (x) => String(x).toLowerCase().replace(/\s+/g, '').replace(/\./g, ',');
+        const treffer = g.maten.find((x) => norm(ruw).indexOf(norm(x)) >= 0);
+        return { maat: treffer || null, ruw };
+    },
+    gasMaat(m) { return this.gasMaatInfo(m).maat; },
+    /** De naam zoals wij ze schrijven: "<gas> <maat> \u00b7 <nummer>". */
+    gasNaam(gasKey, maat, nr) {
+        const g = this.gasGas(gasKey);
+        return [(g ? g.prefix : 'Gasfles'), String(maat || '').trim()].filter(Boolean).join(' ') + ' \u00b7 ' + String(nr || '').trim();
+    },
     /** Messer Belgium NV factureert de cilinderHUUR (gemeten 11 sep 2026):
      *  per huurtype een lijn met het aantal CILINDERDAGEN × dagprijs
      *  ('Huur Cilinder Industrieel 932 × € 0,4964'). Gedeeld door de
@@ -1762,14 +1848,7 @@ const RobawsAPI = {
 
     // ---- v397: VULSTAND ----
     /** Sleutel ('vol' | 'halfvol' | 'leeg') uit het extraveld, of null. */
-    gasVulstand(m) {
-        const rauw = String(this._gasVeldRuw(m, this.GAS_VELD_VULSTAND) || '').trim().toLowerCase();
-        if (!rauw) return null;
-        if (/^(half|halfvol|halfleeg|1\/2|50)/.test(rauw)) return 'halfvol';
-        if (/^(vol|full|100)/.test(rauw)) return 'vol';
-        if (/^(leeg|empty|0)/.test(rauw)) return 'leeg';
-        return null;
-    },
+    gasVulstand(m) { return this.gasMeting(m).key; },   // v403: ook uit "145 bar"
     gasVulstandInfo(key) { return this.GAS_VULSTANDEN.find(v => v.key === key) || null; },
     _gasVeldRuw(m, naam) {
         const f = m && m.extraFields && m.extraFields[naam];
@@ -1878,10 +1957,11 @@ const RobawsAPI = {
 
     /** Nieuwe fles: kale POST met de natieve velden, daarna merge-PATCH
      *  voor Type + 'Huur sinds' (extravelden plakken pas na definitie). */
-    async createGasfles({ soort, inhoud, flesnr, leverancier, huurSinds, empId, projectId, locId, typeNaam }) {
+    async createGasfles({ gasKey, maat, soort, inhoud, flesnr, leverancier, huurSinds, empId, projectId, locId, typeNaam }) {
         const nr = String(flesnr || '').trim();
         if (!nr) throw new Error('Flesnummer ontbreekt');
-        const naam = [String(soort || 'Gasfles').trim(), String(inhoud || '').trim()].filter(Boolean).join(' ') + ' · ' + nr;
+        const naam = gasKey ? this.gasNaam(gasKey, maat, nr)
+            : [String(soort || 'Gasfles').trim(), String(inhoud || '').trim()].filter(Boolean).join(' ') + ' · ' + nr;
         const basis = {
             name: naam,
             brand: String(leverancier || '').trim() || null,
@@ -2002,11 +2082,12 @@ const RobawsAPI = {
             body.status = 'actief';
             extra['Ingeleverd op'] = { type: 'DATE', dateValue: null };
         }
-        let vulInfo = null;
+        let vulLabel;
         if (heeft('vulstand')) {
-            vulInfo = w.vulstand ? this.gasVulstandInfo(w.vulstand) : null;
-            if (w.vulstand && !vulInfo) throw new Error('Onbekende vulstand');
-            extra[this.GAS_VELD_VULSTAND] = { type: 'TEXT', stringValue: vulInfo ? vulInfo.label : null };
+            // v403: 'vol' | 'halfvol' | 'leeg' | { bar: 145 } | null
+            vulLabel = this.gasVulWaarde(w.vulstand);
+            if (vulLabel === undefined) throw new Error('Onbekende vulstand');
+            extra[this.GAS_VELD_VULSTAND] = { type: 'TEXT', stringValue: vulLabel };
         }
         if (heeft('huurSinds')) extra['Huur sinds'] = { type: 'DATE', dateValue: w.huurSinds ? s(w.huurSinds).slice(0, 10) : null };
         if (Object.keys(extra).length) body.extraFields = extra;
@@ -2015,12 +2096,13 @@ const RobawsAPI = {
         const logs = [];
         if (wie) {
             if (soort === 'mee' || soort === 'terug') logs.push({ a: soort, n: plaatsNaam });
+            else if (soort === 'nieuw') logs.push({ a: 'nieuw', n: plaatsNaam });   // v402: wissel
             else if (soort === 'in' || soort === 'uit') logs.push({ a: soort, n: null });
             else {
                 if (heeft('waar')) logs.push({ a: 'plaats', n: plaatsNaam || 'plaats onbekend' });
                 if (heeft('emp')) logs.push({ a: 'wie', n: body.assignedEmployeeId ? ((w.emp && w.emp.naam) || null) : null });
             }
-            if (vulInfo) logs.push({ a: 'vul', n: vulInfo.label });
+            if (vulLabel) logs.push({ a: 'vul', n: vulLabel });
             logs.forEach(l => { l.wie = wie; });
         }
         const na = await this._gasSchrijf(materialId, body, logs.length ? logs : null);
@@ -2029,7 +2111,7 @@ const RobawsAPI = {
         if (na) {
             if ('assignedEmployeeId' in body && s(na.assignedEmployeeId) !== s(body.assignedEmployeeId)) niet.push('emp');
             if ('stockLocationId' in body && (s(na.stockLocationId) !== s(body.stockLocationId) || s(na.assignedProjectId) !== s(body.assignedProjectId))) niet.push('waar');
-            if (heeft('vulstand') && s(this.gasVulstand(na)) !== s(vulInfo ? vulInfo.key : null)) niet.push('vulstand');
+            if (heeft('vulstand') && s(this.gasMeting(na).label) !== s(vulLabel)) niet.push('vulstand');
             if (heeft('huurSinds') && s(this._gasVeld(na, 'Huur sinds')) !== s(extra['Huur sinds'].dateValue)) niet.push('huurSinds');
             if (body.status && s(na.status).toLowerCase() !== body.status) niet.push('status');
         }
@@ -2039,7 +2121,7 @@ const RobawsAPI = {
     /** Vulstand zetten (vol | halfvol | leeg). Plakt het niet, dan bestaat het
      *  extraveld nog niet — dat zeggen we met zoveel woorden. (v398: via gasflesBewaar) */
     async setGasVulstand(materialId, key, wie) {
-        if (!this.gasVulstandInfo(key)) throw new Error('Onbekende vulstand');
+        if (this.gasVulWaarde(key) === undefined) throw new Error('Onbekende vulstand');
         const r = await this.gasflesBewaar(materialId, { vulstand: key }, wie || null, null);
         if (r.nietBewaard.indexOf('vulstand') >= 0) throw new Error('Het veld "' + this.GAS_VELD_VULSTAND + '" bestaat nog niet in Robaws — vraag het bureel om het aan te maken');
         return true;
@@ -2094,6 +2176,126 @@ const RobawsAPI = {
         return true;
     },
 
+    // =============================================================
+    // v403: DE METING (vraag Levi: "hoeveel er nog in zit, zoals op de
+    // manometer \u2014 dat is nauwkeuriger dan vol/halfvol/leeg")
+    // Hetzelfde extraveld "Vulstand" draagt nu \u00f3f een woord \u00f3f een meting:
+    // "Vol" | "Halfvol" | "Leeg" | "145 bar". De drie knoppen blijven de snelle
+    // weg voor de monteurs; wie wil, tikt het getal.
+    // =============================================================
+    gasMeting(m) { return this.gasMetingUit(this._gasVeldRuw(m, this.GAS_VELD_VULSTAND), this.gasSoortKey(m)); },
+    /** Een waarde ("Vol" of "145 bar") uitlezen voor een bepaald gas. */
+    gasMetingUit(rauwIn, gasKey) {
+        const rauw = String(rauwIn || '').trim();
+        const g = this.gasGas(gasKey);
+        const vuldruk = g ? g.vuldruk : 200, leegOnder = g ? g.leegOnder : 20;
+        if (!rauw) return { bar: null, pct: null, key: null, label: null, vuldruk, leegOnder };
+        const mb = rauw.replace(',', '.').match(/(\d{1,3}(?:\.\d)?)\s*bar/i);
+        if (mb) {
+            const bar = Math.max(0, Math.min(999, Number(mb[1])));
+            const pct = Math.max(0, Math.min(100, Math.round(bar / vuldruk * 100)));
+            const key = bar <= leegOnder ? 'leeg' : (pct >= 80 ? 'vol' : 'halfvol');
+            return { bar, pct, key, label: this.gasBarLabel(bar), vuldruk, leegOnder };
+        }
+        const l = rauw.toLowerCase();
+        let key = null;
+        if (/^(half|halfvol|halfleeg|1\/2|50)/.test(l)) key = 'halfvol';
+        else if (/^(vol|full|100)/.test(l)) key = 'vol';
+        else if (/^(leeg|empty|0)/.test(l)) key = 'leeg';
+        const info = key ? this.gasVulstandInfo(key) : null;
+        return { bar: null, pct: null, key, label: info ? info.label : null, vuldruk, leegOnder };
+    },
+    gasBarLabel(bar) { return String(Math.round(Number(bar) || 0)) + ' bar'; },
+    /** Wat gaat er in het veld: een woord of een meting. */
+    gasVulWaarde(v) {
+        if (v == null || v === '') return null;
+        if (typeof v === 'object' && v.bar != null) return this.gasBarLabel(v.bar);
+        if (typeof v === 'number') return this.gasBarLabel(v);
+        const info = this.gasVulstandInfo(String(v));
+        if (info) return info.label;
+        const mb = String(v).replace(',', '.').match(/(\d{1,3}(?:\.\d)?)\s*bar/i);
+        if (mb) return this.gasBarLabel(mb[1]);
+        return undefined;   // onbekend \u2014 de aanroeper gooit
+    },
+
+    // =============================================================
+    // v403: VOORRAAD EN BESTELPUNT
+    // Telt per gas wat er BESCHIKBAAR (vol of halfvol) en vrij in het groot
+    // magazijn staat. Een fles zonder meting telt NIET mee maar wordt apart
+    // getoond \u2014 anders denk je dat je voorraad hebt terwijl er lege flessen staan.
+    // =============================================================
+    gasVoorraad(flessen, locs, cfg) {
+        const c = cfg || this.gasConfig();
+        const mag = this.gasMagazijnLocatie(locs || []);
+        const magId = mag ? String(mag.id) : null;
+        const per = {};
+        c.gassen.forEach((g) => { per[g.key] = { key: g.key, soort: g.naam, totaal: 0, vol: 0, halfvol: 0, leeg: 0, onbekend: 0,
+            beschikbaar: 0, onbekendMagazijn: 0, min: Number(c.bestelpunt[g.key]) || 0, tekort: 0, stand: "ok" }; });
+        let leegTotaal = 0;
+        (flessen || []).forEach((m) => {
+            if (!m || this.gasIsIngeleverd(m)) return;
+            const k = this.gasSoortKey(m);
+            const r = per[k] || (per[k] = { key: k || "onbekend", soort: this.gasSoort(m), totaal: 0, vol: 0, halfvol: 0, leeg: 0,
+                onbekend: 0, beschikbaar: 0, onbekendMagazijn: 0, min: 0, tekort: 0, stand: "ok" });
+            r.totaal++;
+            const meting = this.gasMeting(m);
+            const staat = meting.key || 'onbekend';
+            r[staat]++;
+            if (staat === 'leeg') leegTotaal++;
+            const vrijInMagazijn = !!magId && String(m.stockLocationId || '') === magId && !m.assignedProjectId;
+            if (!vrijInMagazijn) return;
+            if (staat === 'vol' || staat === 'halfvol') r.beschikbaar++;
+            else if (staat === 'onbekend') r.onbekendMagazijn++;
+        });
+        const lijst = Object.keys(per).map((k) => per[k]).sort((a, b) => a.soort.localeCompare(b.soort));
+        lijst.forEach((r) => {
+            r.tekort = r.min > 0 ? Math.max(0, r.min - r.beschikbaar) : 0;
+            r.stand = r.min <= 0 ? 'uit' : (r.beschikbaar <= 0 ? 'rood' : (r.beschikbaar <= c.amber ? 'amber' : 'ok'));
+        });
+        return { magazijn: mag, perSoort: lijst, leeg: leegTotaal,
+            tekorten: lijst.filter((r) => r.stand === 'rood' || r.stand === 'amber'),
+            veelLeeg: c.legeDrempel > 0 && leegTotaal >= c.legeDrempel, config: c };
+    },
+
+    // =============================================================
+    // v403: FLES VERVANGEN IN \u00c9\u00c9N HANDELING
+    // Scan de lege, scan de nieuwe, kies gas en maat (al ingevuld vanuit de
+    // oude fles). Eerst de nieuwe klaarzetten, dan pas de oude inleveren:
+    // mislukt stap twee, dan staat de nieuwe er al en zie je de oude nog in huur.
+    //   opties: { nieuwNummer, bestaandNieuwId, gasKey, maat, waar, wie }
+    // =============================================================
+    async gasflesWissel(oudId, opties) {
+        const o = opties || {};
+        const wie = o.wie || null;
+        const oud = await this._gasLees(oudId);
+        if (!oud) throw new Error('De oude fles is niet leesbaar in Robaws');
+        if (this.gasIsIngeleverd(oud)) throw new Error('Die fles staat al als ingeleverd');
+        const gasKey = o.gasKey || this.gasSoortKey(oud);
+        const maat = o.maat != null ? o.maat : this.gasMaat(oud);
+        const waar = o.waar || {};
+        const plaats = (waar.projectId || waar.locId) ? { projectId: waar.projectId || null, locId: waar.locId || null, naam: waar.naam || null } : null;
+        let nieuwId = o.bestaandNieuwId ? String(o.bestaandNieuwId) : null;
+        let aangemaakt = false;
+        if (!nieuwId) {
+            const nr = String(o.nieuwNummer || '').trim();
+            if (!nr) throw new Error('Geef het nummer van de nieuwe fles');
+            const t = oud.extraFields && oud.extraFields['Type'];
+            const typeNaam = (t ? (t.stringValue != null ? t.stringValue : t.value) : null) || this.GAS_TYPE_DEFAULT;
+            nieuwId = await this.createGasfles({
+                gasKey, maat, flesnr: nr,
+                leverancier: o.leverancier || oud.brand || this.GAS_LEVERANCIER_STANDAARD,
+                huurSinds: o.huurSinds || new Date().toISOString().slice(0, 10),
+                projectId: plaats ? plaats.projectId : null, locId: plaats ? plaats.locId : null, typeNaam,
+            });
+            aangemaakt = true;
+        }
+        const wijzN = { vulstand: 'vol' };
+        if (plaats) wijzN.waar = plaats;
+        const rN = await this.gasflesBewaar(nieuwId, wijzN, wie, aangemaakt ? 'nieuw' : null);
+        const rO = await this.gasflesBewaar(oudId, {}, wie, 'in');
+        return { nieuwId: String(nieuwId), aangemaakt, gasKey, maat,
+            nietBewaardNieuw: rN.nietBewaard || [], nietBewaardOud: rO.nietBewaard || [] };
+    },
     /** QR-inhoud → {id} (onze URL of een kaal nummer) of {serie} (flesnummer). */
     qrParseMaterial(tekst) {
         const t = String(tekst || '').trim();

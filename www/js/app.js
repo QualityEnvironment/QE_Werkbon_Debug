@@ -10110,7 +10110,7 @@ const app = {
         }
         const w = document.getElementById('gfWeergave'); if (w) w.value = this._gfState.weergave;
         const z = document.getElementById('gfZoek'); if (z) z.value = this._gfState.zoek || '';
-        const nieuw = document.getElementById('gfNieuwKnop'); if (nieuw) nieuw.style.display = beheer ? '' : 'none';
+        const knoppen = document.getElementById('gfBeheerKnoppen'); if (knoppen) knoppen.style.display = beheer ? 'flex' : 'none';   // v402
         this.navigate('screenGasflessen', true);
         this._gfTabsRender();   // v397: knoppen "Bij mij / Alle flessen" meteen zichtbaar
         this.loadGasflessen();
@@ -10196,13 +10196,37 @@ const app = {
     },
     /** Vulstand-chip. groot = in de fiche, klein = in de lijst. */
     _gfVulChip(m, groot) {
-        const info = RobawsAPI.gasVulstandInfo(RobawsAPI.gasVulstand(m));
+        const meting = RobawsAPI.gasMeting(m);                                   // v403: "145 bar" i.p.v. "Vol"
+        const info = RobawsAPI.gasVulstandInfo(meting.key);
         if (!info) return groot
             ? '<span style="display:inline-block;padding:3px 10px;border-radius:99px;background:var(--l2,#EBE8E0);color:var(--g2,#5F5E56);font-size:12.5px;font-weight:600">Nog niet ingevuld</span>'
             : '';
         const p = groot ? '4px 12px' : '2px 8px';
         const f = groot ? '13px' : '11.5px';
-        return '<span style="display:inline-block;padding:' + p + ';border-radius:99px;background:' + info.wash + ';color:' + info.kleur + ';font-size:' + f + ';font-weight:700;white-space:nowrap">' + info.emoji + ' ' + info.label + '</span>';
+        return '<span style="display:inline-block;padding:' + p + ';border-radius:99px;background:' + info.wash + ';color:' + info.kleur + ';font-size:' + f + ';font-weight:700;white-space:nowrap">' + info.emoji + ' ' + (meting.bar != null ? meting.label : info.label) + '</span>';
+    },
+    /** v403: hoeveel flessen staan er BESCHIKBAAR (vol of halfvol) en vrij in
+     *  het groot magazijn? Een fles zonder meting telt niet mee maar wordt
+     *  apart genoemd, anders denk je dat je voorraad hebt. */
+    _gfVoorraadHtml(alle) {
+        if (!(alle || []).length) return '';   // nog niets geladen of geen flessen in huur
+        const vr = RobawsAPI.gasVoorraad(alle || [], this._gfLocs || []);
+        const soorten = vr.perSoort.filter(r => r.min > 0 || r.beschikbaar > 0 || r.onbekendMagazijn > 0);
+        if (!soorten.length && !vr.veelLeeg) return '';
+        const kleur = { rood: 'var(--red2,#B4372F)', amber: 'var(--amber2,#A5651A)', ok: 'var(--green2,#3E7A54)', uit: 'var(--g2,#5F5E56)' };
+        const waarschuwing = vr.tekorten.length > 0 || vr.veelLeeg;
+        const regels = soorten.map(r =>
+            '<span style="white-space:nowrap;font-weight:600;color:' + (kleur[r.stand] || kleur.ok) + '">' +
+            this.escapeHtml(r.soort) + ' ' + r.beschikbaar + (r.min ? '/' + r.min : '') +
+            (r.stand === 'rood' || r.stand === 'amber' ? ' \u26A0' : ' \u2713') + '</span>').join(' &nbsp;\u00B7&nbsp; ');
+        const onbekend = soorten.reduce((n, r) => n + r.onbekendMagazijn, 0);
+        const mag = vr.magazijn ? vr.magazijn.naam : 'het magazijn';
+        return '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:' + (waarschuwing ? 'var(--awash2,#F7EFE2)' : 'var(--wash,#F0EDE6)') + ';color:var(--ink,#26334B)">' +
+            '<strong>Klaar om mee te geven</strong> <span style="color:var(--g1,#85847C)">(vol of halfvol, vrij in ' + this.escapeHtml(mag) + ')</span>' +
+            '<div style="margin-top:3px">' + (regels || '<span style="color:var(--g1,#85847C)">nog niets aangeduid</span>') + '</div>' +
+            (onbekend ? '<div style="margin-top:3px;font-size:12px;color:var(--g1,#85847C)">' + onbekend + (onbekend === 1 ? ' fles staat' : ' flessen staan') + ' in het magazijn zonder meting \u2014 die tellen niet mee</div>' : '') +
+            (vr.veelLeeg ? '<div style="margin-top:3px;color:var(--amber2,#A5651A);font-weight:600">' + vr.leeg + ' lege flessen \u2014 tijd voor een wisselronde</div>' : '') +
+            '</div>';
     },
     /** Waar de fles naartoe gaat als iemand ze terugzet. */
     _gfTerugLocatie() { return RobawsAPI.gasMagazijnLocatie(this._gfLocs || []); },
@@ -10290,9 +10314,9 @@ const app = {
         if (!el) return;
         const beheer = this._logBeheer();
         const filters = document.getElementById('gfFilters');
-        const nieuw = document.getElementById('gfNieuwKnop');
+        const knoppen = document.getElementById('gfBeheerKnoppen');   // v402
         if (filters) filters.style.display = beheer ? 'flex' : 'none';
-        if (nieuw) nieuw.style.display = beheer ? '' : 'none';
+        if (knoppen) knoppen.style.display = beheer ? 'flex' : 'none';
         if (beheer) { el.style.display = 'none'; el.innerHTML = ''; return; }
         el.style.display = 'flex';
         const nu = (this._gfState && this._gfState.weergave) || 'mijn';
@@ -10327,6 +10351,7 @@ const app = {
                 alle.forEach(m => { const s2 = RobawsAPI.gasSoort(m); perSoort[s2] = (perSoort[s2] || 0) + 1; });
                 const lang = alle.filter(m => (RobawsAPI.gasDagen(m) || 0) > RobawsAPI.GAS_LANG_DAGEN).length;
                 const leeg = alle.filter(m => RobawsAPI.gasVulstand(m) === 'leeg').length;
+                const vrHtml = this._gfVoorraadHtml(alle);   // v402: bestelpunt
                 const h = this._gfHuur && this._gfHuur.facturen && this._gfHuur.facturen[0];
                 const tekort = h ? Math.round(h.flessen) - alle.length : 0;
                 const huurHtml = h ? '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--wash,#F0EDE6);color:var(--ink,#26334B)">' +
@@ -10338,7 +10363,7 @@ const app = {
                     ? '<strong>' + alle.length + ' in huur</strong>: ' + Object.keys(perSoort).sort().map(s2 => perSoort[s2] + ' ' + this.escapeHtml(s2.toLowerCase())).join(' · ') +
                       (leeg ? ' · <span style="color:var(--red2,#B4372F);font-weight:600">' + leeg + ' leeg</span>' : '') +
                       (lang ? ' — <span style="color:var(--red2,#B4372F);font-weight:600">' + lang + ' langer dan ' + RobawsAPI.GAS_LANG_DAGEN + ' dagen</span>' : '')
-                    : 'Nog geen flessen in huur geregistreerd.') + huurHtml;
+                    : 'Nog geen flessen in huur geregistreerd.') + vrHtml + huurHtml;
             }
         }
         let html = g.groepen.map(gr => '<div class="card" style="margin-bottom:10px;padding:12px 16px 4px">' +
@@ -10391,7 +10416,7 @@ const app = {
     // =============================================================
     _gfFicheWaarden(m) {
         return {
-            vulstand: RobawsAPI.gasVulstand(m) || '',
+            vulstand: (RobawsAPI.gasMeting(m).bar != null ? RobawsAPI.gasBarLabel(RobawsAPI.gasMeting(m).bar) : (RobawsAPI.gasVulstand(m) || '')),   // v403: woord of meting
             waar: m.assignedProjectId ? 'p:' + m.assignedProjectId : (m.stockLocationId ? 'l:' + m.stockLocationId : ''),
             emp: m.assignedEmployeeId ? String(m.assignedEmployeeId) : '',
             huurSinds: RobawsAPI.gasHuurSinds(m) || '',
@@ -10429,7 +10454,7 @@ const app = {
         if (!f) return [];
         return this._gfGewijzigd().filter(k => !alleen || alleen.indexOf(k) >= 0).map(k => {
             const v = String(f.concept[k] || '');
-            if (k === 'vulstand') { const i = RobawsAPI.gasVulstandInfo(v); return 'vulstand ' + (i ? i.label.toLowerCase() : 'niet ingevuld'); }
+            if (k === 'vulstand') { if (/bar/i.test(v)) return 'vulstand ' + v; const i = RobawsAPI.gasVulstandInfo(v); return 'vulstand ' + (i ? i.label.toLowerCase() : 'niet ingevuld'); }
             if (k === 'waar') return 'plaats ' + this._gfWaarNaam(v);
             if (k === 'emp') return 'verantwoordelijke ' + (v ? (this._gfEmpNaam(v) || '#' + v) : 'niemand');
             return 'huur sinds ' + this._gfDat(v);
@@ -10476,19 +10501,29 @@ const app = {
         const waarTekst = c.waar ? this._gfWaarNaam(c.waar) : 'Plaats onbekend';
 
         // --- vulstand: drie grote knoppen — een tik duidt aan, "Opslaan" bewaart ---
+        // --- vulstand: drie grote knoppen of de druk in bar (v403) ---
+        const cMeting = RobawsAPI.gasMetingUit(c.vulstand, RobawsAPI.gasSoortKey(m));
+        const cBar = /bar/i.test(String(c.vulstand || '')) ? String(parseInt(c.vulstand, 10)) : '';
+        const gInfo = RobawsAPI.gasGas(RobawsAPI.gasSoortKey(m)) || { key: '', naam: 'gas', vuldruk: 200 };
         const vulKnoppen = ing ? '' : (
             '<div style="margin-top:16px;font-size:15px;font-weight:700;color:var(--ink,#26334B)">' + (nieuw('vulstand') ? stip : '') + 'Hoeveel zit er nog in?</div>' +
             '<div style="display:flex;gap:8px;margin-top:8px">' +
             RobawsAPI.GAS_VULSTANDEN.map(v => {
-                const aan = c.vulstand === v.key;
+                const aan = cMeting.key === v.key && !cBar;
                 return '<button onclick="app.gfVul(\'' + id + '\',\'' + v.key + '\')" style="flex:1;padding:14px 4px;border-radius:12px;cursor:pointer;font-size:15px;font-weight:700;border:2px solid ' +
                     (aan ? v.kleur : 'var(--l2,#EBE8E0)') + ';background:' + (aan ? v.wash : 'var(--card,#FFF)') + ';color:' + (aan ? v.kleur : 'var(--g2,#5F5E56)') + '">' +
                     '<div style="font-size:20px;line-height:1.1">' + v.emoji + '</div>' + v.label + '</button>';
             }).join('') + '</div>' +
+            // de manometer: nauwkeuriger dan de drie knoppen
+            '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">' +
+            '<span style="font-size:13px;color:var(--g2,#5F5E56);flex:none">Of de manometer:</span>' +
+            '<input type="number" inputmode="numeric" min="0" max="' + gInfo.vuldruk + '" value="' + cBar + '" placeholder="—" onchange="app.gfVulBar(\'' + id + '\', this.value)" style="width:82px;font:inherit;font-size:15px;font-weight:700;text-align:right;color:var(--ink,#26334B);background:var(--card,#FFF);border:2px solid ' + (cBar ? 'var(--accent,#F99D3E)' : 'var(--l2,#EBE8E0)') + ';border-radius:10px;padding:8px 9px">' +
+            '<span style="font-size:14px;font-weight:600;color:var(--g2,#5F5E56)">bar</span>' +
+            (cBar && cMeting.pct != null ? '<span style="font-size:13px;color:var(--g1,#85847C)">= ' + cMeting.pct + '%</span>' : '') + '</div>' +
+            (gInfo.key === 'acetyleen' ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:4px;line-height:1.4">Bij acetyleen is de druk indicatief: het gas zit opgelost in aceton, dus de druk zakt niet evenredig mee.</div>' : '') +
             (this._gfVeldVul === false
                 ? '<div style="font-size:12.5px;color:var(--amber2,#A5651A);margin-top:6px;line-height:1.45">Het bureel moet het veld "' + esc(RobawsAPI.GAS_VELD_VULSTAND) + '" nog aanmaken in Robaws — tot dan wordt dit niet bewaard.</div>'
                 : ''));
-
         // --- de gegevens: voor het bureel meteen aanpasbaar, voor de rest leesbaar ---
         const empOpties = '<option value="">— niemand —</option>' +
             (this._gfEmps || []).map(e => '<option value="' + esc(e.employeeId) + '"' + (String(e.employeeId) === String(c.emp) ? ' selected' : '') + '>' + esc(e.name) + '</option>').join('') +
@@ -10603,6 +10638,17 @@ const app = {
     },
 
     // ---- v397/v398: vulstand aanduiden (iedereen die de flessen mag zien) ----
+    /** v403: de manometer. Leeg maken = terug naar de drie knoppen. */
+    gfVulBar(id, waarde) {
+        const f = this._gfFiche;
+        if (!f || String(f.id) !== String(id)) return;
+        const n = parseInt(String(waarde || '').replace(/[^0-9]/g, ''), 10);
+        const m = (this._gfAlle || {})[id];
+        const g = RobawsAPI.gasGas(RobawsAPI.gasSoortKey(m)) || { naam: 'gas', vuldruk: 200 };
+        if (!waarde || isNaN(n)) { this.gfConcept('vulstand', ''); return; }
+        if (n > g.vuldruk) { this.toast('Een volle ' + g.naam.toLowerCase() + ' staat op ' + g.vuldruk + ' bar', true); }
+        this.gfConcept('vulstand', RobawsAPI.gasBarLabel(Math.min(n, 999)));
+    },
     gfVul(id, key) {
         const m = (this._gfAlle || {})[id];
         if (!m || RobawsAPI.gasIsIngeleverd(m) || !RobawsAPI.gasVulstandInfo(key)) return;
@@ -10955,6 +11001,185 @@ const app = {
         }), 'Fles geregistreerd: ' + nr);
     },
 
+    // =============================================================
+    // v403: DRIE KNOPPEN (vraag Levi 24 sep)
+    //   1. Fles vervangen  — scan de oude, bevestig, scan de nieuwe, kies gas
+    //                        en maat (al ingevuld vanuit de oude). De rest gaat
+    //                        vanzelf: oude ingeleverd, nieuwe vol in het magazijn.
+    //   2. Fles scannen    — enkel de fiche (dit is wat de monteurs gebruiken).
+    //   3. Toevoegen of inleveren — bekende barcode opent de fiche met de
+    //                        inleverknop, een nieuwe barcode maakt een fles aan.
+    // Robaws laat een materiaal niet verwijderen via de API, dus "verwijderen"
+    // is "ingeleverd": uit alle tellingen, historiek blijft.
+    // =============================================================
+    gfVervangStart() {
+        if (!this._logBeheer()) { this.toast('Flessen vervangen doet het bureel', true); return; }
+        this._gfFiche = null;
+        this._gfVerv = {};
+        const oud = document.getElementById('gasflesSheet');
+        if (oud) oud.remove();
+        this.toast('Scan de fles die teruggaat');
+        this.openGasScan('verv-oud');
+    },
+    gfBeheerStart() {
+        if (!this._logBeheer()) { this.toast('Flessen toevoegen doet het bureel', true); return; }
+        this._gfFiche = null;
+        const oud = document.getElementById('gasflesSheet');
+        if (oud) oud.remove();
+        this.openGasScan('beheer');
+    },
+
+    /** Stap 1 van het vervangen: is dit de juiste fles? */
+    _gfVervBevestig(m) {
+        this._gfVerv = { oudId: String(m.id) };
+        const d = this._gfNaamDelen(m);
+        const meting = RobawsAPI.gasMeting(m);
+        const maat = RobawsAPI.gasMaat(m);
+        const esc = (t) => this.escapeHtml(t);
+        this._gfSheet('gvBody',
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">' +
+            '<div style="font-size:19px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">Is dit de juiste fles?</div>' +
+            '<button onclick="document.getElementById(\'gasflesSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button></div>' +
+            '<div class="card" style="padding:14px 16px;margin-top:10px">' +
+            '<div style="font-size:17px;font-weight:700;color:var(--ink,#26334B)">' + esc(d.titel) + '</div>' +
+            '<div style="font-size:13px;color:var(--g1,#85847C);margin-top:3px">nr ' + esc(d.nr || '—') +
+            (maat ? '' : ' · <span style="color:var(--amber2,#A5651A)">maat nog niet ingevuld</span>') + '</div>' +
+            '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">' + this._gfVulChip(m, false) +
+            '<span style="font-size:13px;color:var(--g2,#5F5E56)">' + esc(this._gfWaar(m).tekst) + '</span></div></div>' +
+            '<button class="btn btn-primary btn-full" style="margin-top:14px;padding:16px;font-size:16px" onclick="app.gfVervOudOk()">Ja, deze — scan nu de nieuwe fles</button>' +
+            '<button class="btn btn-outline btn-full" style="margin-top:8px" onclick="app.openGasScan(\'verv-oud\')">Opnieuw scannen</button>');
+    },
+    gfVervOudOk() {
+        if (!this._gfVerv || !this._gfVerv.oudId) { this.toast('Scan eerst de oude fles', true); return; }
+        this.toast('Scan nu de nieuwe fles');
+        this.openGasScan('verv-nieuw');
+    },
+
+    /** Gedeeld sheet-omhulsel voor de stappen van het vervangen/toevoegen. */
+    _gfSheet(bodyId, html) {
+        let ov = document.getElementById('gasflesSheet');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'gasflesSheet';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(20,28,45,0.45);overflow-y:auto;-webkit-overflow-scrolling:touch';
+            ov.innerHTML = '<div style="min-height:100%;display:flex;flex-direction:column;justify-content:flex-end">' +
+                '<div id="' + bodyId + '" style="background:var(--bg,#F4F2ED);border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))"></div></div>';
+            ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+            document.body.appendChild(ov);
+        }
+        const b = document.getElementById(bodyId) || ov.querySelector('div > div');
+        if (b) { b.id = bodyId; b.innerHTML = html; }
+    },
+
+    // ---- het keuzescherm: welk gas, welke maat ----
+    /** modus: {soort:'vervang', nr, bestaandId, oudId} | {soort:'nieuw', nr} */
+    _gfKiesOpen(modus) {
+        const k = Object.assign({ gasKey: null, maat: null }, modus || {});
+        const bron = k.oudId ? (this._gfAlle || {})[k.oudId] : null;
+        if (bron) { k.gasKey = RobawsAPI.gasSoortKey(bron); k.maat = RobawsAPI.gasMaat(bron); }
+        const best = k.bestaandId ? (this._gfAlle || {})[k.bestaandId] : null;
+        if (best) { k.gasKey = RobawsAPI.gasSoortKey(best) || k.gasKey; k.maat = RobawsAPI.gasMaat(best) || k.maat; }
+        this._gfKies = k;
+        this._gfKiesRender();
+    },
+    gfKiesGas(key) {
+        const k = this._gfKies; if (!k) return;
+        k.gasKey = key;
+        const g = RobawsAPI.gasGas(key);
+        if (!g || g.maten.indexOf(k.maat) < 0) k.maat = null;
+        this._gfKiesRender();
+    },
+    gfKiesMaat(maat) { if (this._gfKies) { this._gfKies.maat = maat; this._gfKiesRender(); } },
+    _gfKiesRender() {
+        const k = this._gfKies; if (!k) return;
+        const esc = (t) => this.escapeHtml(t);
+        const cfg = RobawsAPI.gasConfig();
+        const g = k.gasKey ? RobawsAPI.gasGas(k.gasKey) : null;
+        const vervang = k.soort === 'vervang';
+        const oud = k.oudId ? (this._gfAlle || {})[k.oudId] : null;
+        const best = k.bestaandId ? (this._gfAlle || {})[k.bestaandId] : null;
+        const knop = (aan, tekst, sub, klik) =>
+            '<button onclick="' + klik + '" style="flex:1 1 30%;min-width:90px;padding:12px 6px;border-radius:12px;cursor:pointer;text-align:center;border:2px solid ' +
+            (aan ? 'var(--accent,#F99D3E)' : 'var(--l2,#EBE8E0)') + ';background:' + (aan ? 'var(--accent,#F99D3E)' : 'var(--card,#FFF)') + ';color:' + (aan ? '#fff' : 'var(--ink,#26334B)') + '">' +
+            '<div style="font-size:15px;font-weight:700">' + esc(tekst) + '</div>' +
+            (sub ? '<div style="font-size:11px;opacity:.75;margin-top:2px">' + esc(sub) + '</div>' : '') + '</button>';
+        const kopje = (t) => '<div style="margin-top:16px;margin-bottom:7px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--g1,#85847C)">' + t + '</div>';
+        let h = '<div style="display:flex;align-items:center;justify-content:space-between">' +
+            '<div style="font-size:19px;font-weight:700;letter-spacing:-0.4px;color:var(--ink,#26334B)">' + (vervang ? 'Nieuwe fles' : 'Fles toevoegen') + '</div>' +
+            '<button onclick="document.getElementById(\'gasflesSheet\').remove()" style="border:none;background:none;font-size:24px;line-height:1;color:var(--qe-grey);padding:6px 8px;cursor:pointer">&times;</button></div>';
+        h += '<div style="display:flex;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap">' +
+            '<span style="font-size:13px;color:var(--g2,#5F5E56)">Flesnummer</span>' +
+            '<span style="font-size:17px;font-weight:700;color:var(--ink,#26334B);font-variant-numeric:tabular-nums">' + esc(k.nr || '—') + '</span>' +
+            '<button class="btn btn-outline" style="padding:5px 10px;font-size:12.5px" onclick="app.openGasScan(\'' + (vervang ? 'verv-nieuw' : 'beheer') + '\')">Opnieuw scannen</button></div>';
+        if (best) h += '<div style="font-size:12.5px;color:var(--amber2,#A5651A);margin-top:6px;line-height:1.45">Die ken ik al: ' + esc(best.name || '') + '. Ze wordt op vol gezet en naar het magazijn verplaatst.</div>';
+        else if (k.leeg) h += '<div style="font-size:12.5px;color:var(--amber2,#A5651A);margin-top:6px;line-height:1.45">Die fles stond nog niet in het register. Ik voeg ze toe als <strong>leeg</strong> — scan ze daarna opnieuw om ze te vervangen.</div>';
+        h += kopje('Welk gas?') + '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            cfg.gassen.map(x => knop(k.gasKey === x.key, x.naam, null, 'app.gfKiesGas(\'' + x.key + '\')')).join('') + '</div>';
+        if (g) {
+            h += kopje('Welke grootte? (' + (g.eenheid === 'kg' ? 'kg' : 'F = liter waterinhoud') + ')') +
+                '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+                g.maten.map(mt => knop(k.maat === mt, mt, (g.sub || {})[mt] || null, 'app.gfKiesMaat(\'' + esc(String(mt).replace(/'/g, '\\\'')) + '\')')).join('') + '</div>';
+        }
+        if (vervang && oud) {
+            const d = this._gfNaamDelen(oud);
+            h += '<div style="margin-top:16px;padding:10px 12px;border-radius:10px;background:var(--wash,#F0EDE6);font-size:13px;color:var(--g2,#5F5E56)">' +
+                'Gaat terug naar de leverancier: <strong style="color:var(--ink,#26334B)">' + esc(d.titel) + '</strong> · nr ' + esc(d.nr || '—') + '</div>';
+        }
+        const klaar = !!(k.gasKey && k.maat && k.nr);
+        h += '<button class="btn btn-primary btn-full" style="margin-top:16px;padding:16px;font-size:16px;' + (klaar ? '' : 'opacity:.5') + '" onclick="app.' + (vervang ? 'gfVervDoe' : 'gfNieuwDoe') + '()">' +
+            (vervang ? 'Vervanging bewaren' : 'Fles toevoegen') + '</button>';
+        if (!vervang) h += '<button class="btn btn-outline btn-full" style="margin-top:8px;font-size:13.5px" onclick="app.openGasflesNieuw(' + JSON.stringify(k.nr || '') + ')">Meer velden invullen</button>';
+        this._gfSheet('gvBody', h);
+    },
+    _gfKiesControle() {
+        const k = this._gfKies || {};
+        if (!k.nr) { this.toast('Scan eerst de fles', true); return null; }
+        if (!k.gasKey) { this.toast('Kies eerst welk gas', true); return null; }
+        if (!k.maat) { this.toast('Kies eerst de grootte', true); return null; }
+        return k;
+    },
+
+    gfVervDoe() {
+        const k = this._gfKiesControle();
+        if (!k || !k.oudId) { if (k) this.toast('De oude fles ontbreekt', true); return; }
+        const mag = this._gfTerugLocatie();
+        const oud = (this._gfAlle || {})[k.oudId] || {};
+        const oudNr = this._gfNaamDelen(oud).nr || this._gfNaamDelen(oud).titel || 'de oude fles';
+        return this._gfActie(async () => {
+            const r = await RobawsAPI.gasflesWissel(k.oudId, {
+                nieuwNummer: k.nr, bestaandNieuwId: k.bestaandId || null, gasKey: k.gasKey, maat: k.maat,
+                waar: mag ? { locId: mag.id, naam: mag.naam } : {}, wie: this._gfWie(),
+            });
+            if ((r.nietBewaardOud || []).indexOf('status') >= 0) throw new Error('De nieuwe fles staat er, maar Robaws zette de oude niet op ingeleverd');
+            return r;
+        }, (r) => {
+            const rest = (r.nietBewaardNieuw || []).filter(x => x !== 'status');
+            const basis = 'Gewisseld: ' + k.nr + ' staat vol' + (mag ? ' in ' + mag.naam : '') + ', ' + oudNr + ' is ingeleverd';
+            return rest.length ? { t: basis + '. ' + this._gfNietTekst(rest), err: true } : basis;
+        });
+    },
+    gfNieuwDoe() {
+        const k = this._gfKiesControle();
+        if (!k) return;
+        const mag = this._gfTerugLocatie();
+        // Een fles die je als "gaat terug" scande maar die nog niet in het
+        // register stond, komt er LEEG in — anders zou ze als voorraad tellen.
+        const vul = k.leeg ? 'leeg' : 'vol';
+        const typeNaam = (this._gfItems || []).map(m => { const t = m.extraFields && m.extraFields['Type']; return t ? (t.stringValue != null ? t.stringValue : t.value) : null; }).find(Boolean) || RobawsAPI.GAS_TYPE_DEFAULT;
+        return this._gfActie(async () => {
+            if (k.bestaandId) {
+                return await RobawsAPI.gasflesBewaar(k.bestaandId, { vulstand: vul, waar: mag ? { locId: mag.id, naam: mag.naam } : {} }, this._gfWie(), null);
+            }
+            const id = await RobawsAPI.createGasfles({
+                gasKey: k.gasKey, maat: k.maat, flesnr: k.nr, leverancier: RobawsAPI.GAS_LEVERANCIER_STANDAARD,
+                huurSinds: new Date().toISOString().slice(0, 10), locId: mag ? mag.id : null, typeNaam,
+            });
+            return await RobawsAPI.gasflesBewaar(id, { vulstand: vul }, this._gfWie(), 'nieuw');
+        }, RobawsAPI.gasNaam(k.gasKey, k.maat, k.nr) + (k.leeg
+            ? ' is toegevoegd als leeg — scan ze nu opnieuw om ze te vervangen'
+            : ' staat klaar' + (mag ? ' in ' + mag.naam : '')));
+    },
+
     // ---- Etiket scannen (v390): 1) native scanner uit de APK (QEBridge.scanBarcode,
     //      Google ML Kit — eigen camera-UI, leest QR én streepjescodes), 2) anders de
     //      webcamera met BarcodeDetector → ZXing → jsQR, 3) anders een foto (ZXing/jsQR),
@@ -10965,7 +11190,7 @@ const app = {
         try { return !!(window.QEBridge && typeof QEBridge.scanBarcode === 'function'); } catch (_) { return false; }
     },
     openGasScan(doel) {
-        this._gfScanDoel = doel === 'nummer' ? 'nummer' : 'fiche';
+        this._gfScanDoel = ['nummer', 'verv-oud', 'verv-nieuw', 'beheer'].indexOf(doel) >= 0 ? doel : 'fiche';   // v403
         if (this._gfScanNatiefKan() && !this._gfScanNatiefKapot) {
             this._gfScanNatiefBezig = true;
             try { QEBridge.scanBarcode(); return; } catch (e) { this._gfScanNatiefBezig = false; }
@@ -11196,6 +11421,30 @@ const app = {
         if (!p) { this.toast('Lege code', true); return; }
         const sleutel = (x) => String(x || '').replace(/\s+/g, '').toLowerCase();
         const opSerie = (serie) => serie ? ((this._gfItems || []).find(x => sleutel(x.serialNumber) === sleutel(serie)) || null) : null;
+        if (['verv-oud', 'verv-nieuw', 'beheer'].indexOf(this._gfScanDoel) >= 0) {   // v403
+            const doel = this._gfScanDoel; this._gfScanDoel = 'fiche';
+            const nr = String(p.serie || p.id || '');
+            const mm = opSerie(p.serie) || (p.id ? ((this._gfAlle || {})[p.id] || null) : null);
+            if (doel === 'verv-oud') {
+                if (!mm) {
+                    this.toast('Die fles staat niet in het register \u2014 voeg ze eerst toe', true);
+                    this._gfKiesOpen({ soort: 'nieuw', nr, leeg: true });
+                    return;
+                }
+                if (RobawsAPI.gasIsIngeleverd(mm)) { this.toast('Die fles staat al als ingeleverd', true); return; }
+                this._gfVervBevestig(mm);
+                return;
+            }
+            if (doel === 'verv-nieuw') {
+                if (!this._gfVerv || !this._gfVerv.oudId) { this.toast('Scan eerst de fles die teruggaat', true); return; }
+                if (mm && String(mm.id) === String(this._gfVerv.oudId)) { this.toast('Dat is dezelfde fles', true); this._gfVervBevestig(mm); return; }
+                this._gfKiesOpen({ soort: 'vervang', nr, oudId: this._gfVerv.oudId, bestaandId: mm ? String(mm.id) : null });
+                return;
+            }
+            if (mm) { this.openGasflesItem(mm.id); return; }
+            this._gfKiesOpen({ soort: 'nieuw', nr });
+            return;
+        }
         if (this._gfScanDoel === 'nummer') {
             this._gfScanDoel = 'fiche';
             const nr = p.serie || p.id || '';
