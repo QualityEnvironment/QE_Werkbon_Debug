@@ -271,6 +271,19 @@
         ] },
     ] },
 
+    { slug: 'review', deel: 'Betalen bij de klant', rol: 'technieker', kick: 'Na het versturen', titel: 'Google-review vragen', lead: 'Na de betaling, of meteen na het versturen bij "Geen factuur maken", toont de app een QR-code. Draai je gsm naar de klant.', scherm: 'screenUitgevoerd', blokken: [
+        { t: 'stap', n: 1, h: 'Na de betaling opent vanzelf het scherm <b>"Hoe vond u ons werk?"</b> met een QR-code. Bij QR-code en Bancontact komt het na "Betaald", bij contant, overschrijving en via factuur zodra je afrondt. Bij <b>"Geen factuur maken"</b> komt het meteen na het versturen, ook zonder internet.' },
+        { t: 'stap', n: 2, h: '<b>Draai je gsm naar de klant</b> en vraag het gewoon: <i>"Wilt u ons een review geven op Google? Scan deze code met de camera van uw gsm."</i>' },
+        { t: 'stap', n: 3, h: 'De klant scant met de <b>eigen gsm</b> en schrijft de review daar. Tik daarna op <b>"Klaar"</b>.' },
+        { t: 'letop', h: '<b>Schrijf nooit zelf een review</b> voor de klant, niet op jouw gsm en niet op die van de klant. Beloof geen korting of cadeau. En vraag het <b>aan iedereen</b>, ook als het werk niet vlot liep. Anders verwijdert Google de reviews en kan het ons bedrijfsprofiel straffen.' },
+        { t: 'faq', items: [
+            ['Ik tikte te snel op "Klaar".', 'Ga naar het tabblad Klaar en tik op "Google-review · QR-code tonen".'],
+            ['Het scherm kwam niet.', 'Het komt één keer per werkbon. Via het tabblad Klaar kan je het altijd tonen.'],
+            ['De klant heeft geen smartphone.', 'Geen probleem, tik op "Klaar". Wie wil, zoekt later op Google naar Quality Environment Schoten.'],
+            ['Scannen lukt niet.', 'Hou je gsm stil, op 20 à 30 cm van de camera van de klant. Lukt het echt niet: onderaan het scherm staat hoe de klant ons op Google vindt.'],
+        ] },
+    ] },
+
     /* ══ DEEL: NAKIJKEN & RECHTZETTEN ══ */
     { slug: 'uitklokken', deel: 'Nakijken & rechtzetten', kick: 'Einde van de dag', titel: 'Uitklokken + kilometers', lead: 'Scan de tag. Vul je kilometers in. Bevestig. In die volgorde.', scherm: 'screenClock', blokken: [
         { t: 'stap', n: 1, h: 'Houd je telefoon <b>tegen de NFC-tag</b>, net zoals ’s morgens.' },

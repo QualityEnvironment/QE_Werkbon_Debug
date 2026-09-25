@@ -174,6 +174,12 @@ const app = {
                     try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
                     return;
                 }
+                // 0b. v406: Google-reviewscherm sluiten + pop compenseren
+                if (document.getElementById('reviewQrScherm')) {
+                    this.sluitReviewQr();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
                 // 1. Modal heeft prioriteit: sluit hem en compenseer de pop
                 const modal = document.getElementById('modalOverlay');
                 if (modal && modal.classList.contains('show')) {
@@ -6282,7 +6288,10 @@ const app = {
         // handtekening) én gooide de bridge alles weg met een fake-succes →
         // offline werkbonnen waren definitief verloren.
         try {
-            const payload = this._buildWerkbonPayload(data);
+            // v407: de werkbon-snapshot van de flow gebruiken (v252-regel: this.currentWO
+            // kan tijdens het wachten op de time-out al een andere bon zijn).
+            const _qWo = (extra && extra.wo) || null;
+            const payload = this._buildWerkbonPayload(data, _qWo);
             // Eenmalige artikels apart meegeven — de queue-verwerking zet ze
             // als line-item op de werkbon (zelfde v93-afhandeling als online).
             payload.customArticles = (data.materials || [])
@@ -6310,9 +6319,10 @@ const app = {
                 } else {
                     this.toast('Geen internet — werkbon staat in de wachtrij en wordt automatisch verstuurd');
                 }
-                this._markWOSubmitted(data);
+                this._markWOSubmitted(data, _qWo ? _qWo.id : undefined);
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
+                return true;   // v407: de aanroeper weet dat de bon in de wachtrij staat
             } else {
                 // v206: GEEN fake-succes — de invoer blijft in woData bewaard.
                 this.toast('Kon werkbon niet in wachtrij plaatsen: ' + ((result && result.error) || 'onbekend') + ' — je invoer blijft bewaard', true);
@@ -6320,6 +6330,7 @@ const app = {
         } catch (e) {
             this.toast('Werkbon kon niet offline bewaard worden — je invoer blijft op dit toestel staan', true);
         }
+        return false;
     },
 
     // ========================================
@@ -6891,6 +6902,7 @@ const app = {
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
+                this._reviewNaWerkbon(wo);  // v407: ook zonder factuur (nooit bij monteurs)
                 return;
             }
 
@@ -7209,6 +7221,7 @@ const app = {
                 this.navigate('screenPlanning', false);
                 this.screenHistory = [];
                 this.loadPlanning();
+                this._reviewNaFactuur(invoiceResult);  // v406
             }
 
         } catch (err) {
@@ -7227,10 +7240,12 @@ const app = {
                 const noInvoice = !!(document.getElementById('wbNoInvoice') &&
                                      document.getElementById('wbNoInvoice').checked);
                 if (noInvoice) {
-                    await this.queueWerkbonOffline(data, {
+                    const _rvWachtrij = await this.queueWerkbonOffline(data, {
                         signatureName, signatureData,
-                        paymentMethod: null, noInvoice: true,
+                        paymentMethod: null, noInvoice: true, wo,
                     });
+                    // v407: reviewscherm ook in de wachtrij-route (de app maakt de QR zelf, werkt zonder bereik)
+                    if (_rvWachtrij) this._reviewNaWerkbon(wo);
                 } else {
                     this.toast('Geen internet — werkbon NIET verstuurd: de klant moet kunnen betalen. Probeer opnieuw zodra er verbinding is; je invoer blijft bewaard.', true);
                 }
@@ -7382,7 +7397,7 @@ const app = {
                 // v206: monteur heeft geen handtekening/factuur; betaalmethode
                 // expliciet op null zodat geen oude selectie meelekt.
                 // v208: noInvoice-vlag → bureel-taak zegt niet "factuur aanmaken".
-                await this.queueWerkbonOffline(data, { paymentMethod: null, noInvoice: true });
+                await this.queueWerkbonOffline(data, { paymentMethod: null, noInvoice: true, wo });  // v407: snapshot van deze bon
             } else if (isNetworkError) {
                 this.toast('Werkbon staat al in Robaws, maar foto\'s konden niet verstuurd worden (verbinding weg). NIET opnieuw versturen.', true);
             } else {
@@ -7589,6 +7604,151 @@ const app = {
         this.loadPlanning();
     },
 
+    // ========================================
+    // v406: GOOGLE-REVIEW NA DE FACTUUR (vraag Levi, 24 sep 2026)
+    // Na het tekenen, de factuur en de betaling opent vanzelf een scherm met
+    // een QR-code naar de Google-reviewpagina van QE. De klant scant met de
+    // EIGEN gsm en schrijft de review daar, nooit op het toestel van de
+    // technieker (Google weert reviews vanaf het bedrijfstoestel). Neutraal
+    // gevraagd, aan iedereen, zonder beloning (Google-beleid, geen sterren
+    // of "tevreden?"-filter). Eén keer per factuur (localStorage
+    // qe_review_getoond); opnieuw tonen kan met de kaart op het tabblad
+    // Klaar. De QR maakt de app zelf met ZXing (zit al in de app voor de
+    // gasfles-scanner, werkt ook zonder bereik); terugval = afbeelding van
+    // api.qrserver.com. Momenten: QR/terminal na de viering; overschrijving
+    // (betaald en niet betaald), contant en via factuur bij het afronden.
+    // v407 (vraag Levi, 25 sep 2026): ook na "Geen factuur maken", online en
+    // in de offline-wachtrij, één keer per werkbon (sleutel w<planning-id>).
+    // Nooit bij monteurs.
+    // ========================================
+    REVIEW_URL: 'https://g.page/r/Cfa_8_XtScJ8EBM/review',
+
+    _reviewNaFactuur(invoiceResult) {
+        try {
+            const inv = (invoiceResult && invoiceResult.invoice) || {};
+            let id = inv.id || (invoiceResult && invoiceResult.invoiceId) || null;
+            if (!id) {
+                try { id = (JSON.parse(localStorage.getItem('qe_last_payment_context') || '{}') || {}).invoiceId || null; } catch (_) {}
+            }
+            const p = this.toonReviewQr({ sleutel: id ? 'f' + id : null });
+            if (p && p.catch) p.catch(e => console.warn('[Review] scherm mislukt (niet erg):', e && e.message));
+        } catch (e) { console.warn('[Review] scherm openen mislukt (niet erg):', e && e.message); }
+    },
+
+    /** v407: ook na "Geen factuur maken" (garantie, terugkomwerk), online en in de
+     *  offline-wachtrij. Eén keer per werkbon (sleutel w<planning-id>). Nooit bij monteurs. */
+    _reviewNaWerkbon(wo) {
+        try {
+            if (this.isMonteur()) return;
+            const id = (wo && wo.id != null) ? String(wo.id) : null;
+            const p = this.toonReviewQr({ sleutel: id ? 'w' + id : null });
+            if (p && p.catch) p.catch(e => console.warn('[Review] scherm mislukt (niet erg):', e && e.message));
+        } catch (e) { console.warn('[Review] scherm openen mislukt (niet erg):', e && e.message); }
+    },
+
+    _reviewLijst() {
+        try { const a = JSON.parse(localStorage.getItem('qe_review_getoond') || '[]'); return Array.isArray(a) ? a : []; }
+        catch (_) { return []; }
+    },
+
+    _reviewMarkeer(sleutel) {
+        try {
+            const a = this._reviewLijst().filter(x => x !== sleutel);
+            a.push(sleutel);
+            localStorage.setItem('qe_review_getoond', JSON.stringify(a.slice(-60)));
+        } catch (_) {}
+    },
+
+    /** Het reviewscherm. opts.sleutel = de factuur (één keer), opts.handmatig = altijd tonen. */
+    async toonReviewQr(opts) {
+        opts = opts || {};
+        if (document.getElementById('reviewQrScherm')) return;
+        const sleutel = opts.sleutel || null;
+        if (!opts.handmatig && sleutel) {
+            if (this._reviewLijst().indexOf(sleutel) >= 0) return;
+            this._reviewMarkeer(sleutel);
+        }
+        // de eerste 3 keer een hulplijntje voor de technieker
+        let hintN = 0;
+        try { hintN = parseInt(localStorage.getItem('qe_review_hint_n') || '0', 10) || 0; } catch (_) {}
+        const hint = hintN < 3;
+        if (hint) { try { localStorage.setItem('qe_review_hint_n', String(hintN + 1)); } catch (_) {} }
+
+        const ov = document.createElement('div');
+        ov.id = 'reviewQrScherm';
+        ov.setAttribute('role', 'dialog');
+        ov.setAttribute('aria-modal', 'true');
+        ov.setAttribute('aria-label', 'Review op Google');
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99994;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch';
+        ov.innerHTML =
+            '<div style="min-height:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:calc(22px + env(safe-area-inset-top)) 20px calc(26px + env(safe-area-inset-bottom))">' +
+                (hint ? '<div id="reviewQrHint" style="background:var(--btn,#26334B);color:var(--btnfg,#fff);border-radius:999px;padding:7px 14px;font-size:12.5px;font-weight:600;margin-bottom:18px">Nieuw: draai je gsm naar de klant</div>' : '') +
+                '<div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent,#F99D3E)">Uw mening telt</div>' +
+                '<div style="font-size:27px;font-weight:800;letter-spacing:-0.6px;line-height:1.15;color:var(--ink,#26334B);margin-top:6px">Hoe vond u ons werk?</div>' +
+                '<div style="width:56px;height:3px;border-radius:2px;background:linear-gradient(90deg,#F99D3E,#6A2C91);margin:14px auto 0"></div>' +
+                '<div style="font-size:15px;line-height:1.5;color:var(--txt2,#3A4356);margin-top:14px;max-width:330px">Scan de code met de camera van uw gsm en laat een review achter op Google.</div>' +
+                '<div style="margin-top:20px;background:#fff;border-radius:22px;padding:14px;border:1px solid var(--cb,#E9E6DE);box-shadow:0 6px 24px rgba(38,51,75,0.10)">' +
+                    '<div id="reviewQrVak" style="width:min(66vw,270px);height:min(66vw,270px);display:flex;align-items:center;justify-content:center;color:#85847C;font-size:13px">QR-code laden…</div>' +
+                '</div>' +
+                '<div style="font-size:12.5px;line-height:1.5;color:var(--g1,#85847C);margin-top:16px;max-width:320px">Lukt het scannen niet? Zoek op Google naar <b style="color:var(--txt2,#3A4356)">Quality Environment Schoten</b>.</div>' +
+                '<button id="reviewQrKlaar" class="btn btn-primary btn-full" style="margin-top:22px;max-width:360px;padding:15px;font-size:16px" onclick="app.sluitReviewQr()">Klaar</button>' +
+            '</div>';
+        document.body.appendChild(ov);
+        try { if (window.QENative && QENative.schermAan) QENative.schermAan(true); } catch (_) {}   // scherm niet laten slapen
+
+        const vak = document.getElementById('reviewQrVak');
+        try {
+            await this._gfLaadZxing();
+            const svg = this._reviewQrSvg(window.ZXing, this.REVIEW_URL);
+            if (vak && document.body.contains(vak)) vak.innerHTML = svg;
+        } catch (e) {
+            console.warn('[Review] QR lokaal maken mislukt, terugval op afbeelding:', e && e.message);
+            if (vak && document.body.contains(vak)) {
+                vak.innerHTML = '<img alt="QR-code review op Google" style="width:100%;height:100%;padding:0;border-radius:0" src="https://api.qrserver.com/v1/create-qr-code/?size=600x600&ecc=M&margin=0&data=' + encodeURIComponent(this.REVIEW_URL) + '">';
+            }
+        }
+    },
+
+    sluitReviewQr() {
+        const ov = document.getElementById('reviewQrScherm');
+        if (ov) ov.remove();
+        try { if (window.QENative && QENative.schermAan) QENative.schermAan(false); } catch (_) {}
+    },
+
+    /** QR als SVG: foutcorrectie H, stille zone van 4 modules, het QE-beeldmerk in het
+     *  midden (de modules onder het logo vallen weg; H herstelt tot 30 %). */
+    _reviewQrSvg(Z, url) {
+        const code = Z.QRCodeEncoder.encode(url, Z.QRCodeDecoderErrorCorrectionLevel.H, new Map());
+        const m = code.getMatrix();
+        const n = m.getWidth();
+        const q = 4;
+        const L = n >= 33 ? 9 : 7;            // logovak in modules (oneven: precies in het midden)
+        const s0 = (n - L) / 2, s1 = s0 + L;
+        const vrij = (x, y) => x >= s0 && x < s1 && y >= s0 && y < s1;
+        let d = '';
+        for (let y = 0; y < n; y++) {
+            let x = 0;
+            while (x < n) {
+                if (m.get(x, y) === 1 && !vrij(x, y)) {
+                    let e = x;
+                    while (e < n && m.get(e, y) === 1 && !vrij(e, y)) e++;
+                    d += 'M' + (x + q) + ' ' + (y + q) + 'h' + (e - x) + 'v1h' + (x - e) + 'z';
+                    x = e;
+                } else x++;
+            }
+        }
+        const t = n + 2 * q, lx = s0 + q + 0.45, lw = L - 0.9;
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + t + ' ' + t + '" width="100%" height="100%" role="img" aria-label="QR-code naar de reviewpagina van Quality Environment op Google" style="display:block">' +
+            '<rect width="' + t + '" height="' + t + '" fill="#fff"/>' +
+            '<path d="' + d + '" fill="#000" shape-rendering="crispEdges"/>' +
+            '<svg x="' + lx + '" y="' + lx + '" width="' + lw + '" height="' + lw + '" viewBox="32 30 134 134">' +
+                '<rect x="44" y="35" width="110" height="110" rx="2" fill="#F99D3E"/>' +
+                '<path d="M91.9 147 L96.8 143.3 L103.5 140 L110.1 138.4 L116.8 138 L123.4 139.4 L130 141.3 L136.6 144 L143.2 146.6 L149.8 148.6 L156.4 150 L163 151 L164.7 152 L163 153.3 L156.4 155.6 L149.8 157 L143.2 156.6 L136.6 155 L130 152.3 L123.4 150 L116.8 148 L110.1 147.3 L103.5 147.3 L96.8 148 Z" fill="#6A2C91"/>' +
+                '<circle cx="80.5" cy="89.8" r="37" fill="none" stroke="#6A2C91" stroke-width="21"/>' +
+            '</svg>' +
+        '</svg>';
+    },
+
     /** Heropen het laatste betaalscherm (overschrijving of Viva Wallet) */
     reopenLastPaymentScreen(type) {
         try {
@@ -7657,6 +7817,7 @@ const app = {
                 ? 'Factuur op betaald — bank vereffent het openstaande bedrag bij ontvangst'
                 : 'Factuur blijft op opmaak');
             this.closePaymentScreen();
+            this._reviewNaFactuur(invoiceResult);  // v406
         } catch (e) {
             console.error('[Overschrijving] status zetten faalde:', e);
             this.toast('Status zetten mislukt: ' + ((e && e.message) || e) + ' — probeer opnieuw', true);
@@ -7814,6 +7975,7 @@ const app = {
     },
 
     async _onQrBetaald(status, invoiceResult) {
+        let _rvGepland = false;  // v406: Google-review na de viering
         // Geanimeerde 'Betaling geslaagd'-celebratie (Claude Design "Betaling").
         try {
             if (window.QECeleb) {
@@ -7821,9 +7983,12 @@ const app = {
                 const _amt = (_inv.totalInclVat != null)
                     ? this.formatPrice(parseFloat(_inv.totalInclVat))
                     : (status && status.amount ? '€ ' + status.amount : '');
-                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · QR code' });
+                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · QR code',
+                    onDone: () => this._reviewNaFactuur(invoiceResult) });
+                _rvGepland = true;
             }
         } catch (e) { /* celebratie mag de betaling nooit breken */ }
+        if (!_rvGepland) setTimeout(() => this._reviewNaFactuur(invoiceResult), 800);  // v406: zonder viering
         // v250: eerlijk zijn over de boeking — betaald is zeker (Mollie),
         // maar als de Worker de kasbeweging (nog) niet kon boeken tonen we
         // dat i.p.v. blind "automatisch geboekt" (Mollie retry't de webhook,
@@ -8157,15 +8322,19 @@ const app = {
     },
 
     async _onTerminalBetaald(status, invoiceResult) {
+        let _rvGepland = false;  // v406: Google-review na de viering
         try {
             if (window.QECeleb) {
                 const _inv = (invoiceResult && invoiceResult.invoice) || {};
                 const _amt = (_inv.totalInclVat != null)
                     ? this.formatPrice(parseFloat(_inv.totalInclVat))
                     : (status && status.amount ? '€ ' + status.amount : '');
-                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · Terminal' });
+                QECeleb.paymentSuccess({ amountText: _amt, methodLabel: 'Bancontact · Terminal',
+                    onDone: () => this._reviewNaFactuur(invoiceResult) });
+                _rvGepland = true;
             }
         } catch (e) { /* celebratie mag de betaling nooit breken */ }
+        if (!_rvGepland) setTimeout(() => this._reviewNaFactuur(invoiceResult), 800);  // v406: zonder viering
         // Eerlijk over de boeking, zoals bij QR (v250)
         const geboekt = !(status && status.robawsMarked === false && status.robawsError);
         const container = document.getElementById('overschrijvingContent');
@@ -14842,6 +15011,7 @@ const app = {
             this.navigate('screenPlanning', false);
             this.screenHistory = [];
             this.loadPlanning();
+            this._reviewNaFactuur(invoiceData);  // v406
             return;
         }
 
@@ -14945,11 +15115,13 @@ const app = {
         // al op de werkbon, dus de contante facturen blijven makkelijk
         // terugvindbaar. (Was v222: registreerde de betaling automatisch, wat
         // hier niet gewenst is.)
+        const _rvCash = this._cashCtx;  // v406: factuur voor het reviewscherm
         this._cashCtx = null;
         this.toast('Werkbon verstuurd — contant');
         this.navigate('screenPlanning', false);
         this.screenHistory = [];
         this.loadPlanning();
+        this._reviewNaFactuur({ invoice: { id: _rvCash && _rvCash.invoiceId, logicId: _rvCash && _rvCash.logicId } });  // v406
     },
 
     async startTerminalPayment(invoiceId, amount, ogm, invoiceLogicId) {
@@ -17313,6 +17485,16 @@ const app = {
                     }
                 }
             } catch(e) { console.warn('[App] Laatste betaling fetch fout:', e && e.message); }
+
+            // v406: Google-review opnieuw tonen (bv. te snel weggetikt)
+            // v407: ook zonder factuur (Geen factuur maken), nooit voor monteurs
+            if (!this.isMonteur()) {
+                paymentBtns +=
+                    '<div id="uitReviewKaart" onclick="app.toonReviewQr({ handmatig: true })" style="padding:13px 18px;border-radius:14px;background:var(--card);border:1px solid var(--cb);border-left:3px solid var(--accent,#F99D3E);box-shadow:0 2px 10px rgba(38,51,75,0.05);cursor:pointer;margin-bottom:12px">' +
+                        '<div style="font-size:13.5px;font-weight:600;color:var(--ink)">Google-review · QR-code tonen</div>' +
+                        '<div style="font-size:12.5px;color:var(--g1);margin-top:3px">De klant scant de code met de eigen gsm</div>' +
+                    '</div>';
+            }
 
             // v268 (Marble 1:1, prototype "UITGEVOERD"): pwash-infokaart +
             // platte werkbon-rijen met hairline i.p.v. kaarten/emoji's.
