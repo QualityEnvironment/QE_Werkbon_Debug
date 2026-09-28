@@ -7668,7 +7668,7 @@ const RobawsAPI = {
      * Robaws v2 ondersteunt PUT op /work-orders/{id}/time-entries/{teId}.
      */
     async closeOpenLLTimeEntry(workOrderId, teId, opts) {
-        const { startTime, endTime, date, employeeId } = opts;
+        const { startTime, endTime, date, employeeId, remark } = opts;
         // v110: bij PUT update ook hourTypeId op OVERUREN zetten (was werkuren).
         // v251: idem weekend-variant, zodat de PUT de POST niet terugzet.
         const llHourType = await this.getWeekendAdjustedHourTypeId(
@@ -7743,7 +7743,16 @@ const RobawsAPI = {
             body.hours = hrs;
             body.billableHours = this._roundUpHalfHour(hrs);
         }
-        return await this.put(`work-orders/${workOrderId}/time-entries/${teId}`, body);
+        // v409: opmerking op de klok-regel ("L&L → werkbon T… · klant") zodat het
+        // bureel in het uren-scherm ziet naar welke werf de uren gingen. Kent
+        // Robaws het veld hier niet (400/422), dan nog één keer zonder.
+        if (remark) body.remark = String(remark).slice(0, 200);
+        let r = await this.put(`work-orders/${workOrderId}/time-entries/${teId}`, body);
+        if ((r.code === 400 || r.code === 422) && remark) {
+            delete body.remark;
+            r = await this.put(`work-orders/${workOrderId}/time-entries/${teId}`, body);
+        }
+        return r;
     },
 
         async addWorkHoursTimeEntry(opts) {
@@ -7788,6 +7797,336 @@ const RobawsAPI = {
             te.billableHours = this._roundUpHalfHour(hrs);
         }
         return await this.post(`work-orders/${workOrderId}/time-entries`, te);
+    },
+
+    // ============================================================
+    // v409: LADEN & LOSSEN → WERF (vraag Levi 28 sep 2026)
+    // Bij het afsluiten van laden & lossen kiest de werknemer de werf
+    // (dagplanning) waar die uren bij horen. De L&L-regel blijft op de
+    // klok-werkbon staan (loon, uren-analyse); dezelfde uren komen als
+    // APARTE regel met het L&L-uurartikel op de werf-werkbon (nacalculatie,
+    // werfdossier) — nooit opgeteld bij het werkblok (beleidsregel L&L).
+    // Bestaat de werf-werkbon nog niet (nog niet verstuurd), dan wacht de
+    // regel in localStorage en gaat hij mee zodra die werkbon vertrekt
+    // (api-bridge roept lnlWachtVerwerk aan na een geslaagde submit).
+    // ============================================================
+    LNL_WACHT_SLEUTEL: 'qe_lnl_werf_wacht',
+    LNL_WACHT_MAX_DAGEN: 21,
+    LNL_KEUZE_DAGEN_TERUG: 21,
+
+    /** Is dit een laden-&-lossen-regel? (uurartikel 19786 of de naam) */
+    _lnlIsEntry(t) {
+        if (!t) return false;
+        const aId = t.articleId != null ? t.articleId : (t.article && t.article.id);
+        if (String(aId) === String(this.WERKUUR_ARTICLE_IDS.ladenLossen)) return true;
+        return /laden|lossen/i.test(String((t.article && t.article.name) || ''));
+    },
+
+    /** {hour, minute} → 'HH:MM' (null als er geen tijd in zit) */
+    _lnlTijd(t) {
+        if (!t || typeof t !== 'object' || t.hour == null) return null;
+        return String(t.hour).padStart(2, '0') + ':' + String(t.minute || 0).padStart(2, '0');
+    },
+
+    /** Minuten tussen twee 'HH:MM'-tijden (nooit negatief). */
+    lnlMinuten(van, tot) {
+        const m = (s) => {
+            const x = String(s || '').match(/^(\d{1,2}):(\d{2})/);
+            return x ? (parseInt(x[1], 10) * 60 + parseInt(x[2], 10)) : null;
+        };
+        const a = m(van), b = m(tot);
+        if (a == null || b == null) return 0;
+        return Math.max(0, b - a);
+    },
+
+    /** Uren met komma, zoals de werknemer ze leest (0,5 u). */
+    lnlUrenTekst(uren) {
+        const u = Math.round((Number(uren) || 0) * 100) / 100;
+        return String(u).replace('.', ',') + ' u';
+    },
+
+    /**
+     * Alle dagplanningen van één dag, klaar voor het keuzescherm.
+     * - eigen  = dagplanningen waar deze werknemer op staat (bovenaan);
+     * - andere = de rest van die dag (ingeklapt, alleen kiesbaar als er al
+     *            een werkbon voor bestaat — anders kan er niets op geboekt worden).
+     * Per dagplanning: de EIGEN werkbon van die dag (planningItemId +
+     * verantwoordelijke = ik), of anders die van een collega; met de
+     * L&L-regels die er al op staan en of hij vergrendeld is.
+     * Calls: 1-2 planning, 1-3 werkbonnen (met tijdsregels), 1 klant per eigen
+     * werf (TTL-cache). Gooit bij een netwerk-/serverfout.
+     */
+    async getLnlWerfKeuzes(dateStr, opts) {
+        const o = opts || {};
+        const empId = String(o.employeeId || '');
+        const userId = o.userId != null ? String(o.userId) : '';
+        const datum = String(dateStr || this._localDateStr()).slice(0, 10);
+        const ruw = await this._planningLijst('fromDate=' + datum + '&toDate=' + datum, 3);
+        // client-side nog eens op de dag filteren (vals-positief-les) en verlof eruit
+        const items = ruw.filter(x => x && !x.timeOffCategoryId && x.startDate && this._localDateStr(new Date(x.startDate)) === datum);
+        items.sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
+
+        // werkbonnen van die dag, met hun tijdsregels
+        const bonnen = [];
+        const gezien = new Set();
+        for (let p = 0; p < 3; p++) {
+            const r = await this.get('work-orders?limit=100&offset=' + (p * 100) + '&fromDate=' + datum + '&toDate=' + datum + '&include=timeEntries', { bypassCache: true });
+            if (r.code !== 200) throw new Error('werkbonnen ophalen mislukt (' + r.code + ')');
+            const lijst = this._lijstItems(r);
+            for (const w of lijst) {
+                if (!w || w.id == null || gezien.has(String(w.id))) continue;
+                gezien.add(String(w.id));
+                if (w.planningItemId != null) bonnen.push(w);
+            }
+            if (lijst.length < 100) break;
+        }
+        const bonnenPerPlan = {};
+        for (const w of bonnen) {
+            const k = String(w.planningItemId);
+            (bonnenPerPlan[k] = bonnenPerPlan[k] || []).push(w);
+        }
+        const bonInfo = (w, vanMij) => {
+            const eigenLnl = (w.timeEntries || []).filter(t => this._lnlIsEntry(t) && String(t.employeeId || '') === empId);
+            return {
+                id: String(w.id),
+                nr: w.logicId || String(w.id),
+                status: String(w.status || ''),
+                vergrendeld: !!w.lockedAt,
+                vanMij: !!vanMij,
+                lnlUren: Math.round(eigenLnl.reduce((s, t) => s + (Number(t.hours) || 0), 0) * 100) / 100,
+                lnlEntries: eigenLnl.map(t => ({ id: String(t.id), van: this._lnlTijd(t.startTime), tot: this._lnlTijd(t.endTime), uren: Number(t.hours) || 0 })),
+            };
+        };
+        const uur = (iso) => {
+            if (!iso) return '';
+            try {
+                return new Date(iso).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Brussels' });
+            } catch (_e) { return String(iso).slice(11, 16); }
+        };
+        const wacht = this.lnlWachtLees().filter(x => String(x.empId || '') === empId);
+        const eigen = [], andere = [];
+        for (const x of items) {
+            const pid = String(x.id);
+            const isEigen = (x.employeeIds || []).map(String).indexOf(empId) >= 0;
+            const bons = bonnenPerPlan[pid] || [];
+            const mijn = bons.find(w => userId && String(w.assignedUserId || (w.assignedUser && w.assignedUser.id) || '') === userId);
+            const bon = mijn ? bonInfo(mijn, true) : (bons.length && !isEigen ? bonInfo(bons[0], false) : null);
+            const wachtend = wacht.filter(q => String(q.planningId) === pid);
+            const item = {
+                planningId: pid,
+                projectId: x.projectId != null ? String(x.projectId) : null,
+                clientId: x.clientId != null ? String(x.clientId) : null,
+                titel: String(x.summary || '').replace(/\s+/g, ' ').trim(),
+                klant: '',
+                adres: x.address ? this.formatAddress(x.address) : '',
+                start: uur(x.startDate),
+                eind: uur(x.endDate),
+                employeeIds: (x.employeeIds || []).map(String),
+                eigen: isEigen,
+                werkbon: bon,
+                wachtUren: Math.round(wachtend.reduce((s, q) => s + (Number(q.uren) || 0), 0) * 100) / 100,
+                kiesbaar: isEigen || !!bon,
+            };
+            (isEigen ? eigen : andere).push(item);
+        }
+        // klantnaam alleen voor de eigen werven (weinig calls, TTL-cache)
+        for (const item of eigen.slice(0, 8)) {
+            if (!item.clientId) continue;
+            try {
+                const c = await this.get('clients/' + item.clientId);
+                if (c.code === 200 && c.data) item.klant = String(c.data.name || '').replace(/\s+/g, ' ').trim();
+            } catch (_e) { /* titel volstaat */ }
+        }
+        return { datum, eigen, andere };
+    },
+
+    /**
+     * Zet de L&L-uren als aparte regel op een werf-werkbon.
+     * Eerst de bestaande regels lezen: staat er voor deze werknemer al een
+     * L&L-regel met hetzelfde beginuur, dan is dit een herkansing → geen
+     * dubbel (hoogstens de uren bijwerken). Leest de lijst niet, dan wordt
+     * er NIET blind gepost (de wachtrij probeert het later opnieuw).
+     * @returns {{ok:boolean, code?:number, entryId?:string, bestond?:boolean, vergrendeld?:boolean, fout?:string}}
+     */
+    async lnlNaarWerkbon(opts) {
+        const o = opts || {};
+        const woId = String(o.workOrderId || '').replace(/\D/g, '');
+        if (!woId) return { ok: false, fout: 'geen werkbon' };
+        const empId = String(o.employeeId || '');
+        const van = String(o.startTime || ''), tot = String(o.endTime || '');
+        const minuten = this.lnlMinuten(van, tot);
+        const uren = Math.max(0, Math.round(minuten / 60 * 100) / 100);
+        let bestaande = null;
+        try {
+            const r = await this.get('work-orders/' + woId + '/time-entries?limit=100', { bypassCache: true });
+            if (r.code !== 200) return { ok: false, code: r.code, fout: 'regels lezen mislukt (' + r.code + ')' };
+            const items = this._lijstItems(r);
+            bestaande = items.find(t => this._lnlIsEntry(t) && String(t.employeeId || '') === empId && this._lnlTijd(t.startTime) === van) || null;
+        } catch (e) {
+            return { ok: false, code: 0, fout: 'regels lezen mislukt: ' + ((e && e.message) || e) };
+        }
+        const llHourType = await this.getWeekendAdjustedHourTypeId(this.HOUR_TYPE_IDS.overuren, o.date || this._localDateStr());
+        const tijd = (s) => { const [h, m] = s.split(':').map(Number); return { hour: h || 0, minute: m || 0 }; };
+        if (bestaande) {
+            const zelfde = Math.abs((Number(bestaande.hours) || 0) - uren) < 0.01 && this._lnlTijd(bestaande.endTime) === tot;
+            if (zelfde) return { ok: true, bestond: true, entryId: String(bestaande.id) };
+            // uren afwijkend (bv. na een herkansing met een later einduur) → bijwerken
+            const body = {};
+            const DROP = ['id', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'deletedAt', 'archivedAt', 'lockedAt', '_metadata'];
+            for (const [k, v] of Object.entries(bestaande)) {
+                if (DROP.includes(k)) continue;
+                if (v !== null && typeof v === 'object' && !('hour' in v)) continue;
+                body[k] = v;
+            }
+            body.employeeId = empId;
+            body.articleId = String(this.WERKUUR_ARTICLE_IDS.ladenLossen);
+            body.hourTypeId = String(llHourType);
+            body.startTime = tijd(van);
+            body.endTime = tijd(tot);
+            body.hours = uren;
+            body.billableHours = this._roundUpHalfHour(uren);
+            const pr = await this.put('work-orders/' + woId + '/time-entries/' + bestaande.id, body);
+            if (pr.code === 423) return { ok: false, code: 423, vergrendeld: true, fout: 'werkbon vergrendeld' };
+            if (pr.code !== 200 && pr.code !== 201 && pr.code !== 204) return { ok: false, code: pr.code, fout: 'bijwerken mislukt (' + pr.code + ')' };
+            return { ok: true, bestond: true, entryId: String(bestaande.id), bijgewerkt: true };
+        }
+        const te = {
+            employeeId: empId,
+            articleId: String(this.WERKUUR_ARTICLE_IDS.ladenLossen),
+            hourTypeId: String(llHourType),
+            startTime: tijd(van),
+            endTime: tijd(tot),
+            hours: uren,
+            billableHours: this._roundUpHalfHour(uren),
+        };
+        if (o.remark) te.remark = String(o.remark).slice(0, 200);
+        let pr = await this.post('work-orders/' + woId + '/time-entries', te);
+        if ((pr.code === 400 || pr.code === 422) && te.remark) {
+            // kent Robaws het opmerking-veld hier niet, dan zonder
+            delete te.remark;
+            pr = await this.post('work-orders/' + woId + '/time-entries', te);
+        }
+        if (pr.code === 423) return { ok: false, code: 423, vergrendeld: true, fout: 'werkbon vergrendeld' };
+        if (pr.code !== 200 && pr.code !== 201) return { ok: false, code: pr.code, fout: 'toevoegen mislukt (' + pr.code + ')' };
+        return { ok: true, bestond: false, entryId: pr.data && pr.data.id != null ? String(pr.data.id) : null };
+    },
+
+    // ---- wachtrij: L&L-regels die nog niet op een werkbon konden ----
+    lnlWachtLees() {
+        try {
+            const l = JSON.parse(localStorage.getItem(this.LNL_WACHT_SLEUTEL) || '[]');
+            return Array.isArray(l) ? l : [];
+        } catch (_e) { return []; }
+    },
+    lnlWachtSchrijf(lijst) {
+        try { localStorage.setItem(this.LNL_WACHT_SLEUTEL, JSON.stringify((lijst || []).slice(-60))); } catch (_e) {}
+    },
+    /** Zet een L&L-regel in de wachtrij (werkbon bestaat nog niet, of schrijven mislukte). */
+    lnlWachtZet(item) {
+        const lijst = this.lnlWachtLees();
+        const nieuw = Object.assign({
+            id: 'lnl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            t: Date.now(), pogingen: 0,
+        }, item || {});
+        nieuw.uren = Math.round(this.lnlMinuten(nieuw.van, nieuw.tot) / 60 * 100) / 100;
+        // zelfde werknemer + zelfde blok = één keer (herkansing na een fout)
+        const rest = lijst.filter(x => !(String(x.empId) === String(nieuw.empId) && x.datum === nieuw.datum && x.van === nieuw.van));
+        rest.push(nieuw);
+        this.lnlWachtSchrijf(rest);
+        return nieuw;
+    },
+    /** Som van de wachtende L&L-uren voor een dagplanning (badge op de planningkaart). */
+    lnlWachtVoor(planningId, employeeId) {
+        const pid = String(planningId || ''), emp = String(employeeId || '');
+        return Math.round(this.lnlWachtLees()
+            .filter(x => String(x.planningId) === pid && (!emp || String(x.empId) === emp))
+            .reduce((s, x) => s + (Number(x.uren) || 0), 0) * 100) / 100;
+    },
+    /** Taak voor de uren-opvolging als een L&L-regel niet op de werkbon raakt. */
+    async _lnlTaak(item, reden) {
+        const wie = (item.naam ? item.naam + ' ' : '') + '(fiche ' + item.empId + ')';
+        const titel = 'L&L-uren niet op werkbon: ' + this.lnlUrenTekst(item.uren) + ' van ' + (item.naam || 'fiche ' + item.empId);
+        const tekst = [
+            'Laden & lossen van ' + item.datum + ' ' + item.van + '-' + item.tot + ' door ' + wie + '.',
+            'Gekozen werf: ' + (item.klant || item.titel || '?') + (item.werkbonNr ? ' (werkbon ' + item.werkbonNr + ')' : '') + ', dagplanning #' + item.planningId + ' van ' + item.werfDatum + '.',
+            'Reden: ' + reden + '.',
+            'De regel staat wel op de klok-werkbon' + (item.klokBonNr ? ' ' + item.klokBonNr : '') + '. Graag handmatig op de werf-werkbon zetten (uurcode laden & lossen).',
+        ].join('\n');
+        // uren/werkbon-opvolging → Vince (TASK_USERS volgt de instelbare ontvangers, v381)
+        return this.createTask({ title: titel, description: tekst, assignedUserId: this.TASK_USERS.OPVOLGING,
+            relatedResource: item.workOrderId ? '/work-orders/' + item.workOrderId : (item.klokBonId ? '/work-orders/' + item.klokBonId : null) });
+    },
+    /**
+     * Wachtende L&L-regels verwerken. Roep aan na een geslaagde werkbon-
+     * submit (met planningId + workOrderId van die nieuwe werkbon), bij het
+     * openen van de app en na een L&L-afsluiting. Best effort: fouten
+     * blijven in de rij (max LNL_WACHT_MAX_DAGEN, daarna een taak).
+     * @returns {{verwerkt:number, gewacht:number, taken:number}}
+     */
+    async lnlWachtVerwerk(opts) {
+        const o = opts || {};
+        const uit = { verwerkt: 0, gewacht: 0, taken: 0 };
+        if (this._lnlWachtBezig) return uit;
+        this._lnlWachtBezig = true;
+        try {
+            const empId = String(o.employeeId || '');
+            const userId = o.userId != null ? String(o.userId) : '';
+            let lijst = this.lnlWachtLees();
+            if (!lijst.length) return uit;
+            const blijft = [];
+            const bonCache = {};
+            for (const item of lijst) {
+                if (empId && String(item.empId) !== empId) { blijft.push(item); continue; }
+                if (o.planningId && String(item.planningId) === String(o.planningId) && o.workOrderId && !item.workOrderId) {
+                    item.workOrderId = String(o.workOrderId);
+                }
+                // te oud → taak voor het bureel, uit de rij
+                if (Date.now() - (Number(item.t) || 0) > this.LNL_WACHT_MAX_DAGEN * 86400e3) {
+                    try { await this._lnlTaak(item, 'de werkbon van deze dagplanning is na ' + this.LNL_WACHT_MAX_DAGEN + ' dagen nog niet verstuurd'); uit.taken++; }
+                    catch (_e) { blijft.push(item); }
+                    continue;
+                }
+                // werkbon zoeken als hij nog niet gekend is
+                if (!item.workOrderId && userId && item.werfDatum) {
+                    try {
+                        if (!bonCache[item.werfDatum]) {
+                            const r = await this.get('work-orders?limit=100&fromDate=' + item.werfDatum + '&toDate=' + item.werfDatum, { bypassCache: true });
+                            bonCache[item.werfDatum] = r.code === 200 ? this._lijstItems(r) : null;
+                        }
+                        const bons = bonCache[item.werfDatum] || [];
+                        const mijn = bons.find(w => String(w.planningItemId || '') === String(item.planningId)
+                            && String(w.assignedUserId || (w.assignedUser && w.assignedUser.id) || '') === userId);
+                        if (mijn) { item.workOrderId = String(mijn.id); item.werkbonNr = mijn.logicId || String(mijn.id); }
+                    } catch (_e) { /* volgende keer */ }
+                }
+                if (!item.workOrderId) { uit.gewacht++; blijft.push(item); continue; }
+                let r;
+                try {
+                    r = await this.lnlNaarWerkbon({ workOrderId: item.workOrderId, employeeId: item.empId, startTime: item.van, endTime: item.tot,
+                        date: item.datum, remark: this.lnlRemarkWerf(item) });
+                } catch (e) { r = { ok: false, fout: (e && e.message) || String(e) }; }
+                if (r.ok) { uit.verwerkt++; continue; }
+                if (r.vergrendeld) {
+                    try { await this._lnlTaak(item, 'de werkbon ' + (item.werkbonNr || item.workOrderId) + ' is vergrendeld door het bureel'); uit.taken++; }
+                    catch (_e) { blijft.push(item); }
+                    continue;
+                }
+                item.pogingen = (Number(item.pogingen) || 0) + 1;
+                item.laatsteFout = String(r.fout || r.code || '?').slice(0, 120);
+                uit.gewacht++;
+                blijft.push(item);
+            }
+            this.lnlWachtSchrijf(blijft);
+            return uit;
+        } finally {
+            this._lnlWachtBezig = false;
+        }
+    },
+    /** Opmerking op de werf-regel: waar en wanneer het laden & lossen gebeurde. */
+    lnlRemarkWerf(item) {
+        const d = String(item.datum || '');
+        const nl = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(8, 10) + '/' + d.slice(5, 7) : d;
+        return ('Laden & lossen ' + nl + ' ' + (item.van || '') + '-' + (item.tot || '') + ' via app' + (item.klokBonNr ? ' · klok ' + item.klokBonNr : '')).slice(0, 200);
     },
 
     /**

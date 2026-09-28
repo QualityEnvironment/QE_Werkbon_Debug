@@ -536,6 +536,11 @@ const APIBridge = {
         // later alsnog versturen → dubbele werkbon).
         if (result && result.success) {
             this._dropQueuedWerkbon(body.planningItemId, body.date);
+            // v409: wachtende laden-&-lossen-uren voor deze dagplanning meteen op de nieuwe werkbon
+            try {
+                await RobawsAPI.lnlWachtVerwerk({ employeeId: user.robawsEmployeeId, userId: user.robawsUserId,
+                    planningId: body.planningItemId, workOrderId: result.workOrderId });
+            } catch (e) { console.warn('[Bridge] L&L-wachtrij na werkbon faalde:', e && e.message); }
         }
         return this.jsonResponse(result);
     },
@@ -659,6 +664,11 @@ const APIBridge = {
                             throw new Error((result && result.error) || 'submitWerkbon faalde');
                         }
                         const workOrderId = result.workOrderId;
+                        // v409: wachtende laden-&-lossen-uren voor deze dagplanning (best effort)
+                        try {
+                            await RobawsAPI.lnlWachtVerwerk({ employeeId: p.employeeId, userId: p.userId,
+                                planningId: p.planningItemId, workOrderId: workOrderId });
+                        } catch (_e) {}
 
                         // Bijlagen: best-effort. De werkbon staat al in Robaws —
                         // opnieuw proberen zou een duplicaat maken, dus fouten

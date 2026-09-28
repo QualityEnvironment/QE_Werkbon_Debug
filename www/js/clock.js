@@ -736,8 +736,31 @@ window.QEClock = {
 
                 // ── LADEN & LOSSEN ──
                 if (tag.type === 'laden_lossen') {
+                    // v409 (vraag Levi): afsluiten kan ALLEEN met een werf. Het
+                    // keuzescherm (dagplanningen van vandaag, pijltjes naar vorige
+                    // dagen) komt vóór het afsluiten; annuleren = de L&L blijft
+                    // lopen en er wordt niets geschreven.
+                    let llWerf = null;
+                    if (session.llActive && window.app && typeof app.promptLnlWerf === 'function') {
+                        hideLoad();
+                        try {
+                            const nuLL = await this._getNow();
+                            llWerf = await app.promptLnlWerf(session, {
+                                van: session.llStartTime || '',
+                                minuten: session.llStartTime ? Math.max(0, this._llMinuten(this._localTime(nuLL)) - this._llMinuten(session.llStartTime)) : null,
+                            });
+                        } catch (e) {
+                            console.warn('[Clock] werf-keuze faalde:', e && e.message);
+                            llWerf = null;
+                        }
+                        if (!llWerf) {
+                            console.log('[Clock] L&L afsluiten geannuleerd — geen werf gekozen');
+                            if (window.app && app.toast) app.toast('Laden & lossen blijft lopen — kies een werf om af te sluiten');
+                            return;
+                        }
+                    }
                     showLoad();
-                    scanResult = await this._handleLadenLossen(session, tag);
+                    scanResult = await this._handleLadenLossen(session, tag, { werf: llWerf });
                     return;
                 }
 
@@ -1804,9 +1827,16 @@ window.QEClock = {
     // LADEN & LOSSEN (v73: time-entry direct posten bij start)
     // =============================================
 
-    async _handleLadenLossen(session, tag) {
+    async _handleLadenLossen(session, tag, opts) {
         const now = await this._getNow();
         const time = this._localTime(now);
+        // v409: gekozen werf (dagplanning) — onthouden vóór het schrijven, zodat
+        // een herkansing na een fout het scherm met dezelfde keuze opent.
+        const werf = (opts && opts.werf) || null;
+        if (werf && session.llActive) {
+            session.llWerfKeuze = { planningId: String(werf.planningId), werfDatum: werf.werfDatum || null };
+            this._saveSession(session);
+        }
 
         const round5 = (mins) => Math.round(mins / 5) * 5;
         const toMinutes = (hhmm) => {
@@ -1855,7 +1885,8 @@ window.QEClock = {
                         session.workOrderId, session.llActiveTeId,
                         { startTime: llStartRounded, endTime: llEnd,
                           date: session.dateStr || session.date,
-                          employeeId: session.employeeId }
+                          employeeId: session.employeeId,
+                          remark: werf ? this._lnlKlokRemark(werf) : undefined }   // v409
                     );
                     if (r.code !== 200 && r.code !== 201 && r.code !== 204) {
                         console.warn('[Clock] L&L PUT faalde:', r.code, r.data,
@@ -1905,17 +1936,31 @@ window.QEClock = {
                 };
             }
 
+            // v409: dezelfde uren als aparte L&L-regel op de gekozen werf-werkbon
+            // (of in de wachtrij tot die werkbon verstuurd is). De klok-regel
+            // hierboven is al dicht — een fout hier blokkeert de werknemer niet.
+            let werfTekst = '';
+            if (werf) {
+                try {
+                    werfTekst = await this._lnlWerfBoeken(session, werf, llStartRounded, llEnd);
+                } catch (e) {
+                    console.warn('[Clock] L&L werf-boeking faalde:', e && e.message);
+                    werfTekst = 'Werf ' + (werf.klant || werf.titel || '') + ': doorsturen mislukt — wordt later opnieuw geprobeerd';
+                }
+            }
+
             session.llActive = false;
             session.llActiveTeId = null;
             session.llEntries = session.llEntries || [];
-            session.llEntries.push({ startTime: llStartRounded, endTime: llEnd });
+            session.llEntries.push({ startTime: llStartRounded, endTime: llEnd, werf: werf ? { planningId: String(werf.planningId), nr: werf.werkbon ? werf.werkbon.nr : null } : null });
             session.llStartTime = null;
             session.llStartISO = null;
+            session.llWerfKeuze = null;
             this._saveSession(session);
 
             return {
                 ok: true,
-                message: 'Laden & Lossen klaar\n' + llStartRounded + ' - ' + llEnd,
+                message: 'Laden & Lossen klaar\n' + llStartRounded + ' - ' + llEnd + (werfTekst ? '\n' + werfTekst : ''),
                 refresh: true,
             };
         }
@@ -2002,6 +2047,48 @@ window.QEClock = {
         };
     },
 
+
+    /** 'HH:MM' → minuten (0 als het geen tijd is). */
+    _llMinuten(hhmm) {
+        const m = String(hhmm || '').match(/^(\d{1,2}):(\d{1,2})/);
+        return m ? ((parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0)) : 0;
+    },
+
+    /** v409: opmerking op de klok-regel — naar welke werf de L&L-uren gingen. */
+    _lnlKlokRemark(werf) {
+        const wie = werf.werkbon ? 'werkbon ' + werf.werkbon.nr : 'dagplanning van ' + (werf.werfDatum || '?');
+        return ('L&L → ' + wie + ' · ' + (werf.klant || werf.titel || '')).replace(/\s+/g, ' ').trim().slice(0, 120);
+    },
+
+    /** v409: de L&L-uren op de gekozen werf-werkbon zetten; bestaat die nog
+     *  niet (werkbon nog niet verstuurd), of lukt het schrijven niet, dan in
+     *  de wachtrij (RobawsAPI.lnlWacht*). Geeft de tekst voor het eindscherm. */
+    async _lnlWerfBoeken(session, werf, van, tot) {
+        const user = RobawsAPI.getLoggedInUser() || {};
+        const item = {
+            planningId: String(werf.planningId), werfDatum: werf.werfDatum || null,
+            empId: String(session.employeeId || user.robawsEmployeeId || ''),
+            userId: user.robawsUserId != null ? String(user.robawsUserId) : null,
+            naam: user.name || session.employeeName || '',
+            datum: session.dateStr || session.date || this._localDate(), van: van, tot: tot,
+            titel: werf.titel || '', klant: werf.klant || '',
+            klokBonId: session.workOrderId ? String(session.workOrderId) : null, klokBonNr: session.workOrderNr || null,
+            workOrderId: werf.werkbon ? String(werf.werkbon.id) : null, werkbonNr: werf.werkbon ? werf.werkbon.nr : null,
+        };
+        const label = (werf.klant || werf.titel || 'werf') + (werf.werkbon ? ' (' + werf.werkbon.nr + ')' : '');
+        if (!item.workOrderId) {
+            RobawsAPI.lnlWachtZet(item);
+            return 'Werf: ' + label + ' — komt op je werkbon zodra je die verstuurt';
+        }
+        const r = await RobawsAPI.lnlNaarWerkbon({ workOrderId: item.workOrderId, employeeId: item.empId, startTime: van, endTime: tot,
+            date: item.datum, remark: RobawsAPI.lnlRemarkWerf(item) });
+        if (r.ok) return 'Uren op werf: ' + label;
+        // vergrendeld of mislukt → wachtrij (bij vergrendeld maakt die een taak voor het bureel)
+        RobawsAPI.lnlWachtZet(item);
+        setTimeout(() => { try { RobawsAPI.lnlWachtVerwerk({ employeeId: item.empId, userId: item.userId }).catch(() => {}); } catch (_e) {} }, 1500);
+        if (r.vergrendeld) return 'Werf: ' + label + ' — die werkbon is afgesloten door het bureel; het bureel krijgt een taak';
+        return 'Werf: ' + label + ' — doorsturen mislukt (' + (r.fout || r.code || '?') + '), wordt later opnieuw geprobeerd';
+    },
 
     // =============================================
     // GPS
