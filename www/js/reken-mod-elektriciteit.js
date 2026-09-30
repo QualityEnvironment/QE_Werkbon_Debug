@@ -9,6 +9,55 @@
     var R = root.QEReken;
     if (!R) throw new Error('reken-kern.js eerst laden');
     var SECTIES = R.SECTIES, AUTOMATEN = R.AUTOMATEN;
+    var VINK = String.fromCharCode(0x2713);
+
+    // v411 — temperatuurvoelers: weerstand als functie van de temperatuur (°C)
+    function rPt(R0, t) { return t >= 0 ? R0 * (1 + 3.9083e-3 * t - 5.775e-7 * t * t) : R0 * (1 + 3.9083e-3 * t - 5.775e-7 * t * t - 4.183e-12 * (t - 100) * t * t * t); }
+    function rNiDin(t) { return 1000 * (1 + 5.485e-3 * t + 6.65e-6 * t * t + 2.805e-11 * Math.pow(t, 4) - 2e-17 * Math.pow(t, 6)); }
+    function rNiTk5000(t) { return 1000 * (1 + 4.427e-3 * t + 5.172e-6 * t * t + 5.585e-9 * t * t * t); }
+    function rNtc(R25, B, t) { return R25 * Math.exp(B * (1 / (t + 273.15) - 1 / 298.15)); }
+    // Voeler uit de tabel van de fabrikant: tussen twee punten loopt ln(R) recht tegen 1/T (kelvin).
+    // Buiten de tabel loopt de laatste helling door. punten = [[°C, Ω], ...] oplopend in temperatuur.
+    function rTabel(punten) {
+        var x = punten.map(function (p) { return 1 / (p[0] + 273.15); }), y = punten.map(function (p) { return Math.log(p[1]); });
+        return function (t) {
+            var xi = 1 / (t + 273.15), i = 0;
+            while (i < punten.length - 2 && t > punten[i + 1][0]) i++;
+            return Math.exp(y[i] + (y[i + 1] - y[i]) * (xi - x[i]) / (x[i + 1] - x[i]));
+        };
+    }
+    // Tabellen uit de servicehandleidingen (Viessmann Vitotronic 200 WO1C, Honeywell, Siemens QAC32), nagelezen 29 sep 2026
+    var NTC10_VI = [[-20, 97070], [-10, 55330], [0, 32650], [10, 19900], [20, 12490], [25, 10000], [30, 8057], [40, 5327], [50, 3603], [60, 2488], [70, 1752], [80, 1258], [100, 680]];
+    var NTC20_VI = [[-20, 198442], [-10, 112403], [0, 66048], [10, 40034], [20, 25027], [25, 20000], [30, 16090], [40, 10613], [50, 7166], [60, 4943], [70, 3478], [80, 2492]];
+    var NTC20_HW = [[-10, 122380], [0, 70200], [10, 41560], [20, 25340], [25, 20000], [30, 15884], [40, 10210], [50, 6718], [60, 4518], [70, 3100], [80, 2168]];
+    var QAC32 = [[-20, 657.34], [-10, 642.38], [0, 623.21], [10, 600.58], [20, 575], [25, 563.5], [30, 551.21]];
+    var VOELERS = [
+        { v: 'pt1000', t: 'Pt1000 (1.000 Ω bij 0 °C): Danfoss ESM, zonneregelaars', r: function (t) { return rPt(1000, t); }, stijgt: true },
+        { v: 'pt100', t: 'Pt100 (100 Ω bij 0 °C)', r: function (t) { return rPt(100, t); }, stijgt: true },
+        { v: 'pt500', t: 'Pt500 (500 Ω bij 0 °C): oudere Viessmann ketel- en boilervoeler', r: function (t) { return rPt(500, t); }, stijgt: true },
+        { v: 'ni1000', t: 'Ni1000 DIN (6.180 ppm/K)', r: rNiDin, stijgt: true },
+        { v: 'ni1000tk', t: 'Ni1000 TK5000 (LG-Ni, Siemens)', r: rNiTk5000, stijgt: true },
+        { v: 'ntc10a', t: 'NTC 10 kΩ: Viessmann (blauw), Vaillant VR 11, Honeywell', r: rTabel(NTC10_VI), ntc: true },
+        { v: 'ntc20v', t: 'NTC 20 kΩ: Viessmann (oranje), Daikin Altherma', r: rTabel(NTC20_VI), ntc: true },
+        { v: 'ntc20h', t: 'NTC 20 kΩ: Honeywell', r: rTabel(NTC20_HW), ntc: true },
+        { v: 'vr10', t: 'NTC 2,7 kΩ: Vaillant VR 10', r: function (t) { return rNtc(2692, 4000, t); }, ntc: true },
+        { v: 'qac32', t: 'Siemens QAC32 buitenvoeler (575 Ω bij 20 °C)', r: rTabel(QAC32), ntc: true, lo: -30, hi: 35 },
+        { v: 'ntc10b', t: 'NTC 10 kΩ, B 3.435 (algemeen)', r: function (t) { return rNtc(10000, 3435, t); }, ntc: true },
+        { v: 'ntc10c', t: 'NTC 10 kΩ, B 3.950 (algemeen)', r: function (t) { return rNtc(10000, 3950, t); }, ntc: true },
+        { v: 'ntc5', t: 'NTC 5 kΩ, B 3.480 (algemeen)', r: function (t) { return rNtc(5000, 3480, t); }, ntc: true },
+        { v: 'eigen', t: 'Eigen NTC (vul R bij 25 °C en B in)', ntc: true }
+    ];
+    function voelerT(fn, Rohm, stijgt, lo, hi) {       // omgekeerde functie via halveren, standaard tussen −60 en +250 °C
+        if (lo == null) lo = -60;
+        if (hi == null) hi = 250;
+        if ((stijgt && (Rohm < fn(lo) || Rohm > fn(hi))) || (!stijgt && (Rohm > fn(lo) || Rohm < fn(hi)))) return null;
+        for (var i = 0; i < 60; i++) { var m = (lo + hi) / 2, r = fn(m); if ((r < Rohm) === !!stijgt) lo = m; else hi = m; }
+        return (lo + hi) / 2;
+    }
+    var SIGNALEN = [{ v: '0-10', t: '0 tot 10 V', a: 0, b: 10, e: 'V' }, { v: '2-10', t: '2 tot 10 V', a: 2, b: 10, e: 'V' }, { v: '4-20', t: '4 tot 20 mA', a: 4, b: 20, e: 'mA' }, { v: '0-20', t: '0 tot 20 mA', a: 0, b: 20, e: 'mA' }, { v: '0-5', t: '0 tot 5 V', a: 0, b: 5, e: 'V' }, { v: '1-5', t: '1 tot 5 V', a: 1, b: 5, e: 'V' }];
+    var TRANSFOS = [10, 16, 25, 40, 63, 100, 160, 250, 400, 630];
+    var LADERS = [{ v: 2.3, t: '2,3 kW: stopcontact, 10 A enkelfasig' }, { v: 3.7, t: '3,7 kW: 16 A enkelfasig' }, { v: 7.4, t: '7,4 kW: 32 A enkelfasig' }, { v: 11, t: '11 kW: 16 A driefasig' }, { v: 22, t: '22 kW: 32 A driefasig' }];
+    function duur(uren) { var min = Math.round(uren * 60), u = Math.floor(min / 60), m = min % 60; return u + ' u ' + (m < 10 ? '0' : '') + m; }
 
     // Stroombelastbaarheid Iz (A), koper, per plaatsingswijze, index = SECTIES
     var IZ = {
@@ -61,7 +110,7 @@
 
     R.registreer({
         key: 'elektriciteit', naam: 'Elektriciteit', emoji: '⚡', volgorde: 3,
-        omschrijving: 'Ohm, vermogen en stroom, kabelsectie en spanningsval, beveiliging, motoren, verbruik',
+        omschrijving: 'Ohm, vermogen en stroom, kabelsectie en spanningsval, beveiliging, laadpaal, capaciteitstarief, voelers en stuursignalen',
         groepen: [
             { naam: 'Basis', items: [
                 {
@@ -154,7 +203,7 @@
                         var rho = rho20 * (1 + alpha * (v.T - 20)), L = v.L * (v.heenterug ? 2 : 1);
                         var Rr = rho * L / v.S;
                         var uit = [h.uit('Weerstand R', Rr, 'Ω', { dec: 4, hoofd: true }), h.uit('ρ bij ' + h.f(v.T) + ' °C', rho, 'Ω·mm²/m', { dec: 5 }), h.uit('Geleiderlengte in rekening', L, 'm')];
-                        var st = ['ρ = ' + h.f(rho20, 5) + ' × (1 + ' + alpha + ' × (' + h.f(v.T) + ' − 20)) = ' + h.f(rho, 5), 'R = ρ × L / S = ' + h.f(rho, 5) + ' × ' + h.f(L) + ' / ' + h.f(v.S) + ' = ' + h.f(Rr, 4, 'Ω')];
+                        var st = ['ρ = ' + h.f(rho20, 5) + ' × (1 + ' + h.fmt(alpha, 5) + ' × (' + h.f(v.T) + ' − 20)) = ' + h.f(rho, 5), 'R = ρ × L / S = ' + h.f(rho, 5) + ' × ' + h.f(L) + ' / ' + h.f(v.S) + ' = ' + h.f(Rr, 4, 'Ω')];
                         if (v.I != null) { uit.push(h.uit('Spanningsval bij ' + h.f(v.I) + ' A', Rr * v.I, 'V', { dec: 2 }), h.uit('Verlies in de geleider', Rr * v.I * v.I, 'W', { dec: 1 })); st.push('ΔU = R × I = ' + h.f(Rr * v.I, 2, 'V')); }
                         return { uit: uit, stappen: st };
                     }
@@ -258,7 +307,7 @@
                         var L3 = du.U0 * 0.03 / per, L5 = du.U0 * 0.05 / per;
                         return {
                             uit: [h.uit('Spanningsval ΔU', du.dU, 'V', { dec: 2, hoofd: true }), h.uit('Procentueel', du.pct, '%', { dec: 2, hoofd: true, kleur: du.pct > 5 ? 'rood' : du.pct > 3 ? 'amber' : 'groen' }), h.uit('Spanning aan de verbruiker', du.U0 - du.dU, 'V', { dec: 1 }), h.uit('Max. lengte voor 3 %', L3, 'm', { dec: 0 }), h.uit('Max. lengte voor 5 %', L5, 'm', { dec: 0 })],
-                            stappen: ['ΔU = ' + (v.net === '3f' ? '√3' : '2') + ' × ' + h.f(v.I) + ' × ' + h.f(v.L) + ' × (' + h.fmt(RHO[v.geleider], 4) + ' × ' + h.f(v.cosphi) + ' / ' + S + ' + 0,00008 × ' + h.fmt(Math.sqrt(1 - v.cosphi * v.cosphi), 2) + ') = ' + h.f(du.dU, 2, 'V'), 'Procent = ΔU / ' + du.U0 + ' V = ' + h.f(du.pct, 2, '%')],
+                            stappen: ['ΔU = ' + (v.net === '3f' ? '√3' : '2') + ' × ' + h.f(v.I) + ' × ' + h.f(v.L) + ' × (' + h.fmt(RHO[v.geleider], 4) + ' × ' + h.f(v.cosphi) + ' / ' + h.fmt(S) + ' + 0,00008 × ' + h.fmt(Math.sqrt(1 - v.cosphi * v.cosphi), 2) + ') = ' + h.f(du.dU, 2, 'V'), 'Procent = ΔU / ' + du.U0 + ' V = ' + h.f(du.pct, 2, '%')],
                             waarsch: du.pct > 5 ? ['Boven 5 %: zwaardere sectie of kortere leiding nodig.'] : du.pct > 3 ? ['Boven 3 %: niet geschikt voor een verlichtingskring.'] : []
                         };
                     }
@@ -348,27 +397,89 @@
                     bereken: function (v, h) {
                         return {
                             tabel: {
-                                kop: ['Kring', 'Kabel', 'Automaat', 'Differentieel', 'Opmerking'],
+                                kop: ['Kring', 'Kabel en beveiliging', 'Opmerking'],
                                 rijen: [
-                                    ['Verlichting', '3G1,5 mm²', '16 A B', '300 mA', 'max. 8 lichtpunten per kring'],
-                                    ['Stopcontacten', '3G2,5 mm²', '20 A B', '300 mA (30 mA nat/buiten)', 'max. 8 enkelvoudige stopcontacten'],
-                                    ['Kookvuur / inductie', '3G6 mm²', '32 A B (40 A + 10 mm² zwaar)', '300 mA', 'eigen kring, aansluitdoos'],
-                                    ['Oven', '3G2,5 mm²', '20 A B', '300 mA', 'eigen kring'],
-                                    ['Wasmachine', '3G2,5 mm²', '20 A B', '30 mA', 'eigen kring'],
-                                    ['Droogkast', '3G2,5 mm²', '20 A B', '30 mA', 'eigen kring'],
-                                    ['Vaatwasser', '3G2,5 mm²', '20 A B', '30 mA', 'eigen kring'],
-                                    ['Boiler', '3G2,5 mm²', '20 A B', '30 mA in badkamer', 'eigen kring'],
-                                    ['Badkamer (stopcontact, verlichting)', '3G2,5 / 3G1,5', '20 / 16 A B', '30 mA', 'volumes en equipotentiaal'],
-                                    ['Elektrische vloerverwarming', '3G2,5 mm²', '16–20 A B', '30 mA', 'max. 3.680 W per 16 A'],
-                                    ['Warmtepomp (buitenunit)', 'volgens fabrikant', 'C-curve', '30 mA type A', 'eigen kring'],
-                                    ['Airco split', '3G2,5 mm²', '16–20 A C', '30 mA', 'eigen kring'],
-                                    ['Laadpaal 1-fase 7,4 kW', '3G6 mm²', '32 A B', '30 mA A + 6 mA DC', 'eigen kring'],
-                                    ['Laadpaal 3-fase 11 kW', '5G2,5 mm²', '16 A B', '30 mA A + 6 mA DC', 'eigen kring; 22 kW = 32 A / 5G6'],
-                                    ['Buitenstopcontacten / tuin', '3G2,5 mm²', '16–20 A B', '30 mA', 'IP44'],
-                                    ['Hoofdschakelaar', '—', '2P 40/63 A of 4P', '300 mA type A (hoofd)', 'teller → bord 10 mm² (40 A) / 16 mm² (63 A)']
+                                    ['Verlichting', '3G1,5 mm² · 16 A B · 300 mA', 'max. 8 lichtpunten per kring'],
+                                    ['Stopcontacten', '3G2,5 mm² · 20 A B · 300 mA (30 mA nat/buiten)', 'max. 8 enkelvoudige stopcontacten'],
+                                    ['Kookvuur of inductie', '3G6 mm² · 32 A B (40 A + 10 mm² zwaar) · 300 mA', 'eigen kring, aansluitdoos'],
+                                    ['Oven', '3G2,5 mm² · 20 A B · 300 mA', 'eigen kring'],
+                                    ['Wasmachine', '3G2,5 mm² · 20 A B · 30 mA', 'eigen kring'],
+                                    ['Droogkast', '3G2,5 mm² · 20 A B · 30 mA', 'eigen kring'],
+                                    ['Vaatwasser', '3G2,5 mm² · 20 A B · 30 mA', 'eigen kring'],
+                                    ['Boiler', '3G2,5 mm² · 20 A B · 30 mA in badkamer', 'eigen kring'],
+                                    ['Badkamer (stopcontact, verlichting)', '3G2,5 / 3G1,5 · 20 / 16 A B · 30 mA', 'volumes en equipotentiaal'],
+                                    ['Vloerverwarming (elektrisch)', '3G2,5 mm² · 16–20 A B · 30 mA', 'max. 3.680 W per 16 A'],
+                                    ['Warmtepomp (buitenunit)', 'volgens fabrikant · C-curve · 30 mA type A', 'eigen kring'],
+                                    ['Airco split', '3G2,5 mm² · 16–20 A C · 30 mA', 'eigen kring'],
+                                    ['Laadpaal 1-fase 7,4 kW', '3G6 mm² · 32 A B · 30 mA A + 6 mA DC', 'eigen kring'],
+                                    ['Laadpaal 3-fase 11 kW', '5G2,5 mm² · 16 A B · 30 mA A + 6 mA DC', 'eigen kring; 22 kW = 32 A / 5G6'],
+                                    ['Stopcontact buiten of in de tuin', '3G2,5 mm² · 16–20 A B · 30 mA', 'IP44'],
+                                    ['Hoofdschakelaar', '2P 40/63 A of 4P · 300 mA type A (hoofd)', 'teller → bord 10 mm² (40 A) / 16 mm² (63 A)']
                                 ]
                             },
                             opm: 'Sectie geldt voor korte leidingen; bij lange leidingen bepaalt de spanningsval de sectie (zie “Kabelsectie kiezen”).'
+                        };
+                    }
+                },
+                {
+                    id: 'elek.kortsluit', naam: 'Kortsluitstroom en grootste kabellengte', kort: 'Schakelt de automaat nog af bij een kortsluiting aan het einde van de kabel?',
+                    zoek: 'kortsluitstroom kortsluiting maximale kabellengte automaat magnetische uitschakeling curve b c d lange kabel tuinhuis laadpaal ik', soort: 'indicatief',
+                    bron: 'Conventionele methode: I_k,min = 0,8 × U × S / (ρ × 2 × L) met ρ koper 0,0225 en aluminium 0,036 Ω·mm²/m · de automaat schakelt magnetisch af vanaf 5 × I_n (curve B), 10 × I_n (curve C) of 20 × I_n (curve D)',
+                    uitleg: 'Bij een lange, dunne kabel wordt de kortsluitstroom zo klein dat de automaat niet meer onmiddellijk afschakelt. De factor 0,8 rekent de weerstand van het net vóór het bord mee. Beide geleiders hebben dezelfde sectie.',
+                    velden: [
+                        { k: 'U', label: 'Spanning tussen de twee geleiders', eh: 'V', std: 230, min: 1 },
+                        { k: 'S', label: 'Sectie', type: 'keuze', opties: SECTIES.slice(0, 11).map(function (s) { return { v: s, t: R.fmt(s, 1) + ' mm²' }; }), std: 2.5 },
+                        { k: 'L', label: 'Kabellengte (enkele richting)', eh: 'm', std: 30, min: 0.1 },
+                        { k: 'In', label: 'Automaat', type: 'keuze', opties: AUTOMATEN.slice(0, 12).map(function (a) { return { v: a, t: a + ' A' }; }), std: 16 },
+                        { k: 'curve', label: 'Curve', type: 'keuze', opties: [{ v: 5, t: 'B (schakelt af vanaf 5 × In)' }, { v: 10, t: 'C (vanaf 10 × In)' }, { v: 20, t: 'D (vanaf 20 × In)' }], std: 10 },
+                        { k: 'geleider', label: 'Geleider', type: 'keuze', opties: [{ v: 'koper', t: 'Koper' }, { v: 'alu', t: 'Aluminium' }], std: 'koper' }
+                    ],
+                    bereken: function (v, h) {
+                        var rho = v.geleider === 'alu' ? 0.036 : 0.0225, S = Number(v.S), In = Number(v.In), Im = Number(v.curve) * In;
+                        var Ik = 0.8 * v.U * S / (rho * 2 * v.L), Lmax = 0.8 * v.U * S / (rho * 2 * Im), ok = Ik >= Im;
+                        var rijen = SECTIES.slice(0, 11).map(function (s) { var ik = 0.8 * v.U * s / (rho * 2 * v.L), lm = 0.8 * v.U * s / (rho * 2 * Im); return [h.fmt(s, 1) + ' mm²', h.fmt(ik, 0) + ' A', h.fmt(lm, 0) + ' m', ik >= Im ? VINK : 'te lang']; });
+                        var waarsch = [];
+                        if (!ok) waarsch.push('De kortsluitstroom (' + h.fmt(Ik, 0) + ' A) blijft onder de afschakelstroom van de automaat (' + h.fmt(Im, 0) + ' A). Kies een dikkere kabel, een curve B of een kleinere automaat.');
+                        return {
+                            uit: [h.uit('Kortsluitstroom aan het einde', Ik, 'A', { dec: 0, hoofd: true, kleur: ok ? 'groen' : 'rood' }), h.uit('Grootste kabellengte', Lmax, 'm', { dec: 0, hoofd: true }), h.uit('Afschakelstroom van de automaat', Im, 'A', { dec: 0, opm: h.fmt(Number(v.curve), 0) + ' × ' + In + ' A' })],
+                            stappen: ['I_k = 0,8 × ' + h.f(v.U, 0) + ' × ' + h.fmt(S, 1) + ' / (' + h.fmt(rho, 4) + ' × 2 × ' + h.f(v.L, 1) + ') = ' + h.f(Ik, 0, 'A'), 'L_max = 0,8 × ' + h.f(v.U, 0) + ' × ' + h.fmt(S, 1) + ' / (' + h.fmt(rho, 4) + ' × 2 × ' + h.fmt(Im, 0) + ') = ' + h.f(Lmax, 0, 'm')],
+                            tabel: { kop: ['Sectie', 'Kortsluitstroom', 'Grootste lengte', ''], rijen: rijen, kies: SECTIES.slice(0, 11).indexOf(S) }, waarsch: waarsch,
+                            opm: 'Controleer daarnaast altijd de spanningsval en de stroombelastbaarheid (“Kabelsectie kiezen”). De bescherming tegen aanraking loopt in een woning via de differentieelschakelaar.'
+                        };
+                    }
+                },
+                {
+                    id: 'elek.netten', naam: 'Net 3 × 230 V of 3N 400 V', kort: 'Naslag: welk net heb je en wat kan je erop aansluiten?',
+                    zoek: 'net 3x230 3n400 driefasig zonder nul nulgeleider ster driehoek laadpaal warmtepomp aansluiten tweepolige automaat fluvius naslag', soort: 'naslag',
+                    bron: 'AREI Boek 1 en de technische voorschriften van de netbeheerder (Synergrid C1/107). Samenvatting: controleer altijd het net ter plaatse.',
+                    velden: [],
+                    bereken: function () {
+                        return {
+                            tabel: { kop: ['', '3N 400 V (met nul)', '3 × 230 V (zonder nul)'], rijen: [
+                                ['Spanning tussen twee fasen', '400 V', '230 V'],
+                                ['Spanning tussen fase en nul', '230 V', 'er is geen nul'],
+                                ['Herkennen', '4 geleiders op de teller, blauwe nulgeleider', '3 geleiders op de teller, geen blauwe geleider'],
+                                ['Enkelfasig toestel (230 V)', 'tussen één fase en de nul', 'tussen twee fasen'],
+                                ['Automaten', 'fase en nul samen onderbreken', 'tweepolig: beide geleiders staan onder spanning'],
+                                ['Driefasig toestel van 400 V', 'rechtstreeks', 'niet rechtstreeks: versie voor 3 × 230 V of een transformator'],
+                                ['Warmtepomp', 'enkelfasig of 3 × 400 V', 'enkelfasig, of een toestel dat de fabrikant voor 3 × 230 V levert'],
+                                ['Laadpaal', '3,7 of 7,4 kW enkelfasig, 11 of 22 kW driefasig', 'enkelfasig tussen twee fasen (tot 7,4 kW); driefasig enkel met paal en auto die 3 × 230 V aankunnen'],
+                                ['Stroom voor 11 kW driefasig', '16 A per fase', '28 A per fase']
+                            ] },
+                            opm: 'In oudere wijken ligt vaak nog een net van 3 × 230 V. De netbeheerder bouwt die netten geleidelijk om naar 3N 400 V. Vraag bij twijfel het nettype op bij Fluvius voor je een warmtepomp of laadpaal bestelt.'
+                        };
+                    }
+                },
+                {
+                    id: 'elek.ip', naam: 'IP-klassen', kort: 'Naslag: bescherming tegen stof en water',
+                    zoek: 'ip klasse ip44 ip54 ip65 ip67 beschermingsgraad stof water spatwater badkamer buiten naslag', soort: 'naslag',
+                    bron: 'EN 60529. Het eerste cijfer geldt voor vaste deeltjes en aanraking, het tweede voor water. Een X betekent: niet getest.',
+                    velden: [],
+                    bereken: function () {
+                        return {
+                            tabel: { kop: ['Eerste cijfer', 'Bescherming tegen vaste deeltjes'], rijen: [['0', 'geen'], ['1', 'voorwerpen groter dan 50 mm (hand)'], ['2', 'groter dan 12,5 mm (vinger)'], ['3', 'groter dan 2,5 mm (gereedschap)'], ['4', 'groter dan 1 mm (draad)'], ['5', 'stof dringt beperkt binnen, zonder schade'], ['6', 'stofdicht']] },
+                            tabel2: { kop: ['Tweede cijfer', 'Bescherming tegen water'], rijen: [['0', 'geen'], ['1', 'druppels die loodrecht vallen'], ['2', 'druppels bij een helling tot 15°'], ['3', 'sproeiwater tot 60° van de verticale'], ['4', 'spatwater uit alle richtingen'], ['5', 'waterstralen'], ['6', 'krachtige waterstralen'], ['7', 'tijdelijke onderdompeling (1 m, 30 minuten)'], ['8', 'blijvende onderdompeling volgens de fabrikant']] },
+                            opm: 'Veel gebruikt: IP20 in een droge ruimte, IP44 tegen spatwater (badkamer buiten de douche, buiten onder een afdak), IP55 of IP65 buiten en in natte ruimtes, IP67 of IP68 onder water. Een buitenunit of een pomp buiten heeft minstens IPX4 nodig.'
                         };
                     }
                 }
@@ -458,6 +569,58 @@
                             stappen: ['n = E × A / (Φ × η × MF) = ' + h.f(v.E) + ' × ' + h.f(v.A) + ' / (' + h.f(v.lm) + ' × ' + h.f(v.eta) + ' × ' + h.f(v.mf) + ') = ' + h.f(n, 2) + ' → ' + nn]
                         };
                     }
+                },
+                {
+                    id: 'elek.laadpaal', naam: 'Laadpaal: laadtijd en kost', kort: 'Hoe lang duurt het laden en wat kost het?',
+                    zoek: 'laadpaal laden elektrische auto laadtijd kwh batterij 11 kw 7,4 kw 22 kw laadvermogen kost kilometer wallbox', soort: 'exact',
+                    bron: 'Energie = batterij × (tot − van) · uit het net = energie / (1 − laadverlies) · tijd = energie uit het net / laadvermogen · de boordlader van de auto begrenst het vermogen bij wisselstroom',
+                    velden: [
+                        { k: 'bat', label: 'Batterij van de auto', eh: 'kWh', std: 60, min: 1, snel: [{ t: '40', v: 40 }, { t: '60', v: 60 }, { t: '77', v: 77 }, { t: '100', v: 100 }] },
+                        { k: 'van', label: 'Laden van', eh: '%', std: 20, min: 0, max: 100 },
+                        { k: 'tot', label: 'tot', eh: '%', std: 80, min: 0, max: 100 },
+                        { k: 'P', label: 'Laadvermogen', type: 'keuze', opties: LADERS, std: 11 },
+                        { k: 'verlies', label: 'Laadverlies', eh: '%', std: 10, min: 0, max: 40 },
+                        { k: 'verbruik', label: 'Verbruik van de auto', eh: 'kWh/100 km', std: 18, min: 5 },
+                        { k: 'prijs', label: 'Stroomprijs', eh: '€/kWh', std: 0.35, min: 0 }
+                    ],
+                    bereken: function (v, h) {
+                        if (v.tot <= v.van) return { fout: 'Het eindpercentage moet hoger zijn dan het beginpercentage' };
+                        var P = Number(v.P), E = v.bat * (v.tot - v.van) / 100, net = E / (1 - v.verlies / 100), t = net / P, km = E / v.verbruik * 100;
+                        var rijen = LADERS.map(function (l) { return [h.fmt(l.v, 1) + ' kW', duur(net / l.v), h.fmt(l.v * (1 - v.verlies / 100) / v.verbruik * 100, 0) + ' km per uur']; });
+                        return {
+                            uit: [h.uit('Laadtijd', duur(t), '', { hoofd: true }), h.uit('Kost', net * v.prijs, '€', { dec: 2, hoofd: true }), h.uit('In de batterij', E, 'kWh', { dec: 1 }), h.uit('Uit het net', net, 'kWh', { dec: 1 }), h.uit('Bijgeladen rijbereik', km, 'km', { dec: 0 }), h.uit('Kost per 100 km', v.verbruik / (1 - v.verlies / 100) * v.prijs, '€', { dec: 2 })],
+                            stappen: ['E = ' + h.f(v.bat, 0) + ' kWh × (' + h.f(v.tot, 0) + ' − ' + h.f(v.van, 0) + ') % = ' + h.f(E, 1, 'kWh'), 'Uit het net = ' + h.fmt(E, 1) + ' / (1 − ' + h.f(v.verlies, 0) + ' %) = ' + h.f(net, 1, 'kWh'), 'Tijd = ' + h.fmt(net, 1) + ' / ' + h.fmt(P, 1) + ' = ' + h.f(t, 2, 'uur')],
+                            tabel: { kop: ['Laadvermogen', 'Laadtijd', 'Rijbereik'], rijen: rijen, kies: LADERS.map(function (l) { return l.v; }).indexOf(P) },
+                            opm: 'Veel auto’s laden op wisselstroom hoogstens 7,4 of 11 kW, ook aan een paal van 22 kW. Boven 80 % laadt de auto trager. Een laadpaal weegt zwaar op het capaciteitstarief: laad traag of slim gestuurd.'
+                        };
+                    }
+                },
+                {
+                    id: 'elek.transfo', naam: 'Transformator 24 V voor regeling', kort: 'Hoeveel VA voor stelmotoren, kleppen en thermostaten, en de spanningsval in de kabel',
+                    zoek: 'transformator transfo 24 v va stelmotor zoneklep thermostaat regeling vloerverwarming voeding spanningsval dunne kabel', soort: 'exact',
+                    bron: 'Som van de vermogens + reserve → eerstvolgende transformator · I = S / U · spanningsval ΔU = 2 × L × I × 0,0225 / sectie',
+                    uitleg: 'Thermische stelmotoren trekken bij het inschakelen kort een veel hogere stroom (tot 0,3 A per stuk): kies de transformator daarom ruim.',
+                    velden: [
+                        { k: 'rijen', label: 'Verbruikers', type: 'rijen', kolommen: [{ k: 'soort', label: 'Verbruiker', type: 'keuze', opties: [{ v: 2, t: 'Thermische stelmotor (2 VA)' }, { v: 6, t: 'Zoneklep met motor (6 VA)' }, { v: 3, t: 'Thermostaat of regelaar (3 VA)' }, { v: 5, t: 'Klepaandrijving 0-10 V (5 VA)' }, { v: 10, t: 'Magneetventiel of relais (10 VA)' }, { v: 1, t: 'Andere (1 VA per stuk)' }] }, { k: 'n', label: 'Aantal', type: 'getal' }], std: [{ soort: 2, n: 8 }, { soort: 3, n: 4 }] },
+                        { k: 'U', label: 'Secundaire spanning', type: 'keuze', opties: [{ v: 24, t: '24 V' }, { v: 12, t: '12 V' }, { v: 230, t: '230 V' }], std: 24 },
+                        { k: 'res', label: 'Reserve', eh: '%', std: 30, min: 0 },
+                        { k: 'L', label: 'Kabellengte naar de verste verbruiker', eh: 'm', std: 15, min: 0 },
+                        { k: 'S', label: 'Sectie van de kabel', type: 'keuze', opties: [{ v: 0.5, t: '0,5 mm²' }, { v: 0.75, t: '0,75 mm²' }, { v: 0.8, t: '0,8 mm (0,5 mm²) signaalkabel' }, { v: 1, t: '1 mm²' }, { v: 1.5, t: '1,5 mm²' }, { v: 2.5, t: '2,5 mm²' }], std: 0.75 }
+                    ],
+                    bereken: function (v, h) {
+                        var som = 0, rijen = [];
+                        v.rijen.forEach(function (r) { if (!r.n || !r.soort) return; var va = Number(r.soort) * r.n; som += va; rijen.push([h.fmt(r.n, 0) + ' × ' + h.fmt(Number(r.soort), 0) + ' VA', h.fmt(va, 0) + ' VA']); });
+                        if (!(som > 0)) return { wacht: true, ontbreekt: ['minstens één verbruiker'] };
+                        var U = Number(v.U), nodig = som * (1 + v.res / 100), tr = h.omhoogNaar(nodig, TRANSFOS), I = som / U;
+                        var S = Number(v.S) === 0.8 ? 0.5 : Number(v.S), dU = 2 * v.L * I * 0.0225 / S, pct = dU / U * 100;
+                        var waarsch = [];
+                        if (pct > 10) waarsch.push('De spanningsval is ' + h.fmt(pct, 0) + ' %: de verste verbruiker krijgt te weinig spanning. Neem een dikkere kabel of zet de transformator dichterbij.');
+                        return {
+                            uit: [h.uit('Transformator', tr ? tr + ' VA' : 'groter dan 630 VA', '', { hoofd: true, opm: 'nodig ' + h.fmt(nodig, 0) + ' VA met reserve' }), h.uit('Som van de verbruikers', som, 'VA', { dec: 0 }), h.uit('Stroom secundair', I, 'A', { dec: 2, hoofd: true }), h.uit('Stroom primair (230 V)', som / 230, 'A', { dec: 3 }), h.uit('Spanningsval in de kabel', dU, 'V', { dec: 2, kleur: pct > 10 ? 'rood' : pct > 5 ? 'amber' : 'groen', opm: h.fmt(pct, 1) + ' % van ' + U + ' V' })],
+                            stappen: ['Som = ' + h.f(som, 0, 'VA') + ', met ' + h.f(v.res, 0) + ' % reserve = ' + h.f(nodig, 0, 'VA'), 'I = ' + h.fmt(som, 0) + ' / ' + U + ' = ' + h.f(I, 2, 'A'), 'ΔU = 2 × ' + h.f(v.L, 1) + ' × ' + h.fmt(I, 2) + ' × 0,0225 / ' + h.fmt(S, 2) + ' = ' + h.f(dU, 2, 'V')],
+                            tabel: { kop: ['Verbruiker', 'Vermogen'], rijen: rijen }, waarsch: waarsch
+                        };
+                    }
                 }
             ] },
             { naam: 'Verbruik en opwekking', items: [
@@ -518,6 +681,98 @@
                             stappen: ['kWp = ' + v.n + ' × ' + h.f(v.wp) + ' / 1000 = ' + h.f(kwp, 2), 'E = kWp × 950 × ' + h.fmt(f, 2) + ' = ' + h.f(kwh, 0, 'kWh')],
                             waarsch: kwp > 10 ? ['Boven 10 kVA is een 3-fasige aansluiting en een netstudie bij Fluvius nodig.'] : []
                         };
+                    }
+                },
+                {
+                    id: 'elek.capaciteit', naam: 'Capaciteitstarief', kort: 'Wat kost een hogere piek door een laadpaal, warmtepomp of doorstromer?',
+                    zoek: 'capaciteitstarief piek maandpiek kwartiervermogen fluvius nettarief laadpaal warmtepomp doorstromer kost per kw digitale meter', soort: 'indicatief',
+                    bron: 'Vlaamse Nutsregulator, tarieven 2026: de maandpiek is het hoogste kwartiervermogen van de maand, de factuur rekent met het gemiddelde van de laatste 12 maandpieken en met minstens 2,5 kW · Fluvius Antwerpen 52,37 euro per kW per jaar (met 6 % btw), andere netgebieden 52 tot 61 euro',
+                    uitleg: 'De piek telt als een gemiddelde over een kwartier. Een toestel dat kort veel vraagt, weegt dus minder dan een laadpaal die een uur op vol vermogen laadt.',
+                    velden: [
+                        { k: 'piek', label: 'Gemiddelde maandpiek nu', eh: 'kW', std: 4, min: 0, snel: [{ t: 'Klein 2,5', v: 2.5 }, { t: 'Gezin 4', v: 4 }, { t: 'Groot 6', v: 6 }] },
+                        { k: 'extra', label: 'Vermogen van het nieuwe toestel', eh: 'kW', std: 7.4, min: 0, snel: [{ t: 'Warmtepomp 3', v: 3 }, { t: 'Laadpaal 3,7', v: 3.7 }, { t: 'Laadpaal 7,4', v: 7.4 }, { t: 'Laadpaal 11', v: 11 }, { t: 'Doorstromer 18', v: 18 }] },
+                        { k: 'samen', label: 'Deel dat samenvalt met de bestaande piek', eh: '%', std: 100, min: 0, max: 100, snel: [{ t: 'Altijd 100', v: 100 }, { t: 'Half 50', v: 50 }, { t: '’s Nachts 0', v: 0 }] },
+                        { k: 'tarief', label: 'Tarief', eh: '€/kW', std: 52.37, min: 0, snel: [{ t: 'Antwerpen 52,37', v: 52.37 }, { t: 'Limburg 51,99', v: 51.99 }, { t: 'Imewo 57,45', v: 57.45 }, { t: 'Kempen 59,58', v: 59.58 }, { t: 'West 60,53', v: 60.53 }] }
+                    ],
+                    bereken: function (v, h) {
+                        var basis = Math.max(2.5, v.piek), nacht = Math.max(2.5, v.extra), nieuw = Math.max(basis + v.extra * v.samen / 100, v.samen < 100 ? nacht : 0);
+                        var k1 = basis * v.tarief, k2 = nieuw * v.tarief;
+                        var rijen = [2.5, 4, 6, 8, 10, 12, 15].map(function (p) { return [h.fmt(p, 1) + ' kW', h.fmt(p * v.tarief, 0) + ' euro', h.fmt(p * v.tarief / 12, 2) + ' euro']; });
+                        return {
+                            uit: [h.uit('Meerkost per jaar', k2 - k1, '€', { dec: 0, hoofd: true }), h.uit('Nieuwe piek', nieuw, 'kW', { dec: 1, hoofd: true }), h.uit('Kost nu', k1, '€', { dec: 0, opm: 'piek ' + h.fmt(basis, 1) + ' kW' }), h.uit('Kost met het nieuwe toestel', k2, '€', { dec: 0 })],
+                            stappen: ['Nu: ' + h.fmt(basis, 1) + ' kW × ' + h.f(v.tarief, 2) + ' = ' + h.fmt(k1, 0) + ' euro', 'Nieuw: ' + h.fmt(nieuw, 1) + ' kW × ' + h.f(v.tarief, 2) + ' = ' + h.fmt(k2, 0) + ' euro'],
+                            tabel: { kop: ['Gemiddelde maandpiek', 'Per jaar', 'Per maand'], rijen: rijen },
+                            opm: 'Richtwaarde: de factuur volgt het gemiddelde van twaalf maanden, dus één uitschieter weegt voor een twaalfde. Een laadpaal met slimme sturing of een lager ingesteld laadvermogen houdt de piek laag. Wie weinig verbruikt, betaalt hoogstens het maximumtarief per kWh.'
+                        };
+                    }
+                }
+            ] },
+            { naam: 'Regeltechniek', items: [
+                {
+                    id: 'elek.voeler', naam: 'Temperatuurvoeler: weerstand en temperatuur', kort: 'Pt1000, Ni1000 en NTC nameten met de multimeter',
+                    zoek: 'temperatuurvoeler voeler sensor weerstand ohm pt100 pt1000 ni1000 ntc 10k buitenvoeler ketelvoeler boilervoeler multimeter nameten defect', soort: 'indicatief',
+                    bron: 'Pt (IEC 60751): R = R₀ × (1 + 3,9083 × 10⁻³ × T − 5,775 × 10⁻⁷ × T²) · Ni1000 DIN 43760 en Ni1000 TK5000: veelterm, nagerekend tegen de tabellen van Testo en Siemens · NTC van Viessmann, Honeywell en Siemens: de tabel uit de servicehandleiding · Vaillant VR 10: 2.692 Ω bij 25 °C, B 4.000 K · algemene NTC: R = R₂₅ × exp(B × (1/T − 1/298,15)) met T in kelvin',
+                    uitleg: 'Maak de voeler los van de regelaar en meet de weerstand. Vergelijk met de temperatuur die je met een thermometer meet. Oneindig = draadbreuk, bijna 0 Ω = kortsluiting. Staat jouw voeler niet in de lijst: kies “Eigen NTC” en vul de waarden van de fiche in.',
+                    velden: [
+                        { k: 'type', label: 'Voeler', type: 'keuze', opties: VOELERS.map(function (x) { return { v: x.v, t: x.t }; }), std: 'ntc10a' },
+                        { k: 'T', label: 'Temperatuur', eh: '°C', opt: true, min: -50, max: 200 },
+                        { k: 'Rm', label: 'of gemeten weerstand', eh: 'Ω', ehs: ['Ω', 'kΩ'], opt: true, min: 0 },
+                        { k: 'R25', label: 'Eigen NTC: weerstand bij 25 °C', eh: 'kΩ', std: 10, min: 0.1 },
+                        { k: 'B', label: 'Eigen NTC: B-waarde', eh: 'K', std: 3975, min: 1000, max: 6000 }
+                    ],
+                    bereken: function (v, h) {
+                        var V = VOELERS.filter(function (x) { return x.v === v.type; })[0] || VOELERS[0];
+                        var fn = V.v === 'eigen' ? function (t) { return rNtc(v.R25 * 1000, v.B, t); } : V.r;
+                        function toon(r) { return r >= 1000 ? h.fmt(r / 1000, r >= 100000 ? 0 : r >= 10000 ? 1 : 2) + ' kΩ' : h.fmt(r, 1) + ' Ω'; }
+                        var uit = [], st = [], lo = V.lo == null ? -60 : V.lo, hi = V.hi == null ? 250 : V.hi;
+                        if (v.T != null && (v.T < lo || v.T > hi)) return { fout: 'Deze voeler werkt tussen ' + h.fmt(lo, 0) + ' en ' + h.fmt(hi, 0) + ' °C' };
+                        if (v.Rm != null && v.Rm > 0) {
+                            var T = voelerT(fn, v.Rm, V.stijgt, lo, hi);
+                            if (T == null) return { fout: 'Deze weerstand valt buiten het bereik van de voeler (' + h.fmt(lo, 0).replace('-', '−') + ' tot ' + h.fmt(hi, 0) + ' °C): draadbreuk, kortsluiting of een ander type voeler' };
+                            uit.push(h.uit('Temperatuur bij ' + toon(v.Rm), T, '°C', { dec: 1, hoofd: true }));
+                            if (v.T != null) uit.push(h.uit('Verschil met de gemeten temperatuur', T - v.T, 'K', { dec: 1, kleur: Math.abs(T - v.T) > 3 ? 'rood' : 'groen' }), h.uit('Weerstand die bij ' + h.fmt(v.T, 1) + ' °C hoort', toon(fn(v.T)), ''));
+                            st.push('R = ' + toon(v.Rm) + ' → T = ' + h.f(T, 1, '°C'));
+                        } else if (v.T != null) {
+                            uit.push(h.uit('Weerstand bij ' + h.fmt(v.T, 1) + ' °C', toon(fn(v.T)), '', { hoofd: true }));
+                            st.push('T = ' + h.f(v.T, 1) + ' °C → R = ' + toon(fn(v.T)));
+                        } else return { wacht: true, ontbreekt: ['temperatuur of weerstand'] };
+                        var rijen = [-20, -10, 0, 10, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100].filter(function (t) { return t >= lo && t <= hi; }).map(function (t) { return [String(t).replace('-', '−') + ' °C', toon(fn(t))]; });
+                        return {
+                            uit: uit, stappen: st, tabel: { kop: ['Temperatuur', 'Weerstand'], rijen: rijen },
+                            waarsch: v.Rm != null && v.T != null && Math.abs(voelerT(fn, v.Rm, V.stijgt, lo, hi) - v.T) > 3 ? ['Meer dan 3 K verschil: controleer eerst of het juiste type voeler gekozen is, daarna de kabel en de aansluitingen. Blijft het verschil, vervang dan de voeler.'] : [],
+                            opm: 'Welke voeler waar: Viessmann Vitotronic 200 type KW (oudere ketels) gebruikt Pt500 voor ketel en boiler en Ni500 voor buiten en aanvoer. Vitotronic 200 type WO1C en de nieuwere Vitodens gebruiken NTC 10 kΩ. De voelers ESM van Danfoss zijn Pt1000. De tabel van de fabrikant gaat altijd voor.'
+                        };
+                    }
+                },
+                {
+                    id: 'elek.signaal', naam: 'Stuursignaal 0-10 V en 4-20 mA', kort: 'Van signaal naar meetwaarde of klepstand, en terug',
+                    zoek: 'stuursignaal analoog signaal 0-10 v 4-20 ma 2-10 v meetwaarde klepstand procent schalen druksensor frequentieregelaar gebouwbeheer', soort: 'exact',
+                    bron: 'Lineair: waarde = min + (signaal − begin) / (einde − begin) × (max − min) · 4 tot 20 mA over 500 Ω geeft 2 tot 10 V, over 250 Ω 1 tot 5 V',
+                    velden: [
+                        { k: 'sig', label: 'Signaal', type: 'keuze', opties: SIGNALEN.map(function (x) { return { v: x.v, t: x.t }; }), std: '0-10' },
+                        { k: 'min', label: 'Waarde bij het laagste signaal', std: 0 },
+                        { k: 'max', label: 'Waarde bij het hoogste signaal', std: 100 },
+                        { k: 's', label: 'Gemeten signaal (V of mA)', opt: true },
+                        { k: 'w', label: 'of gewenste waarde', opt: true }
+                    ],
+                    bereken: function (v, h) {
+                        var G = SIGNALEN.filter(function (x) { return x.v === v.sig; })[0] || SIGNALEN[0];
+                        if (v.max === v.min) return { fout: 'De hoogste en de laagste waarde moeten verschillen' };
+                        if (v.s == null && v.w == null) return { wacht: true, ontbreekt: ['signaal of waarde'] };
+                        var uit = [], st = [], waarsch = [];
+                        if (v.s != null) {
+                            var w = v.min + (v.s - G.a) / (G.b - G.a) * (v.max - v.min), pct = (v.s - G.a) / (G.b - G.a) * 100;
+                            uit.push(h.uit('Waarde', w, '', { dec: 2, hoofd: true }), h.uit('Aandeel van het bereik', pct, '%', { dec: 1 }));
+                            st.push('Waarde = ' + h.f(v.min) + ' + (' + h.f(v.s, 2) + ' − ' + G.a + ') / (' + G.b + ' − ' + G.a + ') × (' + h.f(v.max) + ' − ' + h.f(v.min) + ') = ' + h.f(w, 2));
+                            if (v.s < G.a - 0.01 * (G.b - G.a)) waarsch.push(G.a > 0 ? 'Het signaal ligt onder ' + G.a + ' ' + G.e + ': draadbreuk of geen voeding van de sensor.' : 'Het signaal is negatief: controleer de polariteit.');
+                            if (v.s > G.b * 1.02) waarsch.push('Het signaal ligt boven ' + G.b + ' ' + G.e + ': de meetwaarde valt buiten het bereik van de sensor.');
+                        } else {
+                            var s = G.a + (v.w - v.min) / (v.max - v.min) * (G.b - G.a);
+                            uit.push(h.uit('Signaal', s, G.e, { dec: 2, hoofd: true }), h.uit('Aandeel van het bereik', (v.w - v.min) / (v.max - v.min) * 100, '%', { dec: 1 }));
+                            st.push('Signaal = ' + G.a + ' + (' + h.f(v.w) + ' − ' + h.f(v.min) + ') / (' + h.f(v.max) + ' − ' + h.f(v.min) + ') × (' + G.b + ' − ' + G.a + ') = ' + h.f(s, 2, G.e));
+                        }
+                        var rijen = [0, 25, 50, 75, 100].map(function (p) { return [p + ' %', h.fmt(G.a + p / 100 * (G.b - G.a), 2) + ' ' + G.e, h.fmt(v.min + p / 100 * (v.max - v.min), 2)]; });
+                        return { uit: uit, stappen: st, waarsch: waarsch, tabel: { kop: ['Bereik', 'Signaal', 'Waarde'], rijen: rijen } };
                     }
                 }
             ] },

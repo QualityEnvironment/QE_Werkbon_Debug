@@ -24,6 +24,9 @@
         ['vermogenopp', 'W/m², kcal/(h·m²), BTU/(h·ft²)', 'vermogen per m2 omrekenen'],
         ['warmtedoorgang', 'W/(m²·K), kcal/(h·m²·°C)', 'u-waarde warmtedoorgang omrekenen'],
         ['dichtheid', 'kg/m³, g/cm³, kg/l', 'dichtheid soortelijk gewicht omrekenen'],
+        ['koppel', 'N·m, kgf·m, lbf·ft, lbf·in', 'aanhaalmoment koppel momentsleutel newtonmeter flare moer omrekenen'],
+        ['kracht', 'N, daN, kN, kgf, lbf', 'kracht newton kilogramkracht last omrekenen'],
+        ['doorstroom', 'Kv in m³/h en l/min, Cv', 'kv cv doorstroomcoefficient afsluiter klep amerikaans omrekenen'],
         ['hardheid', '°fH, °dH, mg/l CaCO₃, mmol/l', 'waterhardheid franse duitse graden omrekenen'],
         ['lichtstroom', 'lm, klm', 'lumen omrekenen'],
         ['verlichting', 'lux, fc', 'lux footcandle omrekenen'],
@@ -37,7 +40,7 @@
             velden: [{ k: 'w', label: 'Waarde', std: 1 }, { k: 'van', label: 'Van', type: 'keuze', opties: eenheden.map(function (e) { return { v: e, t: e }; }), std: eenheden[0] }],
             bereken: function (v, h) {
                 var rijen = eenheden.filter(function (e) { return e !== v.van; }).map(function (e) { var w = R.conv(v.w, v.van, e, key); return [e, h.fmt(w, Math.abs(w) >= 1000 ? 1 : Math.abs(w) >= 1 ? 4 : 6)]; });
-                return { uit: [h.uit(h.fmt(v.w) + ' ' + v.van, '=', '', { hoofd: true })], tabel: { kop: ['Eenheid', 'Waarde'], rijen: rijen } };
+                return { uit: [h.uit('Omgerekend van', v.w, v.van, { hoofd: true, dec: Math.abs(v.w) >= 1000 ? 1 : 4 })], tabel: { kop: ['Eenheid', 'Waarde'], rijen: rijen } };
             }
         };
     });
@@ -69,6 +72,6 @@
             };
         }
     });
-    R.registreer({ key: 'omrekenen', naam: 'Omrekenen', emoji: '🔁', volgorde: 5, omschrijving: 'Eenheden, temperatuur en buismaten', groepen: [{ naam: 'Eenheden', items: items }] });
+    R.registreer({ key: 'omrekenen', naam: 'Omrekenen', emoji: '🔁', volgorde: 7, omschrijving: 'Eenheden, temperatuur, aanhaalmoment en buismaten', groepen: [{ naam: 'Eenheden', items: items }] });
 })(typeof window !== 'undefined' ? window : globalThis);
 /* QE-EIND reken-mod-omrekenen */

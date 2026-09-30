@@ -20942,7 +20942,8 @@ const app = {
     _rekenLaad() {
         if (window.QERekenUI) return Promise.resolve();
         if (this._rekenBelofte) return this._rekenBelofte;
-        const lijst = ['js/reken-kern.js', 'js/reken-mod-verwarming.js', 'js/reken-mod-sanitair.js', 'js/reken-mod-elektriciteit.js', 'js/reken-mod-ventilatie.js', 'js/reken-mod-omrekenen.js', 'js/reken-ui.js'];
+        // v411: + airco en werf (zelfde lijst als sync-reken.js en QE-Software/reken.html)
+        const lijst = ['js/reken-kern.js', 'js/reken-mod-verwarming.js', 'js/reken-mod-sanitair.js', 'js/reken-mod-elektriciteit.js', 'js/reken-mod-ventilatie.js', 'js/reken-mod-airco.js', 'js/reken-mod-werf.js', 'js/reken-mod-omrekenen.js', 'js/reken-ui.js'];
         this._rekenBelofte = lijst.reduce((p, pad) => p.then(() => this._rkScript(pad)), Promise.resolve())
             .then(() => { if (!window.QERekenUI) throw new Error('QERekenUI ontbreekt'); })
             .catch(e => { this._rekenBelofte = null; throw e; });

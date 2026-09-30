@@ -1,4 +1,5 @@
-/* QE Rekenmachine — module Ventilatie & rookgas (v408)
+/* QE Rekenmachine — module Ventilatie & rookgas (v408; v411: kanaaltraject, roosters, meten, vochtige lucht;
+ * koellast en koelmiddel staan sinds v411 in reken-mod-airco.js)
  * BRON = QE-Software/reken-mod-ventilatie.js; kopie in de www via `node sync-reken.js`.
  * Normen/bronnen: NBN D 50-001 + EPB (woningventilatie), EN 13384-1 (schouwberekening, vereenvoudigd),
  * NBN B 61-001 / B 61-002 (stookplaatsen en schoorstenen), NBN D 51-003 (gas: verbrandingslucht),
@@ -32,11 +33,33 @@
     ];
     var DIAMETERS = [80, 100, 110, 125, 130, 150, 160, 180, 200, 250, 300, 350, 400];
     function rho(T) { return 1.293 * 273.15 / (273.15 + T); }
-    var KOELMIDDELEN = [{ v: 'R32', t: 'R32 (GWP 675)', gwp: 675 }, { v: 'R410A', t: 'R410A (GWP 2088)', gwp: 2088 }, { v: 'R454B', t: 'R454B (GWP 466)', gwp: 466 }, { v: 'R290', t: 'R290 propaan (GWP 3)', gwp: 3 }, { v: 'R134a', t: 'R134a (GWP 1430)', gwp: 1430 }, { v: 'R407C', t: 'R407C (GWP 1774)', gwp: 1774 }, { v: 'R1234ze', t: 'R1234ze (GWP 7)', gwp: 7 }, { v: 'R744', t: 'R744 CO₂ (GWP 1)', gwp: 1 }];
+    // v411 — vochtige lucht (Magnus boven water; drukken in hPa, x in kg per kg droge lucht, h in kJ/kg)
+    function pws(T) { return 6.112 * Math.exp(17.62 * T / (243.12 + T)); }
+    function dauw(pv) { var g = Math.log(pv / 6.112); return 243.12 * g / (17.62 - g); }
+    function lucht(T, rv, p) {
+        var pv = pws(T) * rv / 100, x = 0.622 * pv / (p - pv);
+        return { pv: pv, x: x, h: 1.006 * T + x * (2501 + 1.86 * T), td: dauw(pv), rho: (p - pv) * 100 / (287.05 * (T + 273.15)) + pv * 100 / (461.5 * (T + 273.15)) };
+    }
+    function natteBol(T, rv, p) {
+        var pv = pws(T) * rv / 100, lo = -60, hi = T;
+        for (var i = 0; i < 60; i++) { var m = (lo + hi) / 2; if (pws(m) - 6.62e-4 * p * (T - m) - pv > 0) hi = m; else lo = m; }
+        return (lo + hi) / 2;
+    }
+    var VINK = String.fromCharCode(0x2713);
 
+    // v411 — verluchting tot 70 kW: cm² vrije doorlaat per kW [van buiten, 1 doorstroomopening, 2 doorstroomopeningen]
+    var STOOK = [
+        { v: 'b1', t: 'Gas, type B1 (open toestel met trekonderbreker)', kort: 'Gas B1, met trekonderbreker', gas: true, f: [6, 8, 10] },
+        { v: 'b2', t: 'Gas, type B2 of B3 (open toestel zonder trekonderbreker)', kort: 'Gas B2 en B3', gas: true, f: [3, 4, 5] },
+        { v: 'olie', t: 'Stookolie (open toestel)', kort: 'Stookolie', f: [3, 3, 3] },
+        { v: 'pellet', t: 'Pellets of kolen', kort: 'Pellets of kolen', f: [6, 6, 6] },
+        { v: 'hout', t: 'Hout', kort: 'Hout', f: [30, 30, 30] },
+        { v: 'a', t: 'Gas, type A (zonder afvoer, bijvoorbeeld een kooktoestel)', kort: 'Gas type A, zonder afvoer', gas: true, f: [13, 18, 23] },
+        { v: 'c', t: 'Type C (gesloten toestel)' }
+    ];
     R.registreer({
         key: 'ventilatie', naam: 'Ventilatie & rookgas', emoji: '🌬️', volgorde: 4,
-        omschrijving: 'Woningventilatie, kanalen, warmteterugwinning, schouw en verbrandingslucht, airco en koelmiddel, vocht en geluid',
+        omschrijving: 'Woningventilatie en luchtdichtheid, kanalen en roosters, schouw en verluchting van het stooklokaal, vochtige lucht en geluid',
         groepen: [
             { naam: 'Woningventilatie', items: [
                 {
@@ -103,6 +126,32 @@
                     }
                 },
                 {
+                    id: 'vent.luchtdichtheid', naam: 'Luchtdichtheid: n50 en v50', kort: 'Uitslag van de blowerdoortest omrekenen en begrijpen',
+                    zoek: 'luchtdichtheid blowerdoor blowerdoortest n50 v50 lekdebiet 50 pascal epb infiltratie lekken passiefhuis luchtdichtheidsmeting', soort: 'exact',
+                    bron: 'n50 = lekdebiet bij 50 Pa / inwendig volume · v50 = lekdebiet bij 50 Pa / verliesoppervlakte · EPB rekent met v50 = 12 m³/(h·m²) als er geen meting is · passiefhuis: n50 hoogstens 0,6 per uur · natuurlijke infiltratie ≈ n50 / 20 (vuistregel) · gat met dezelfde lek: A = Q / (0,61 × √(2 × 50 / 1,2))',
+                    uitleg: 'Vul één van de drie waarden in (lekdebiet, n50 of v50), samen met het volume en de verliesoppervlakte. De rest volgt.',
+                    velden: [
+                        { k: 'q', label: 'Lekdebiet bij 50 Pa', eh: 'm³/h', opt: true, min: 0 },
+                        { k: 'n50', label: 'of n50', eh: '1/h', opt: true, min: 0 },
+                        { k: 'v50', label: 'of v50', eh: 'm³/(h·m²)', opt: true, min: 0, snel: [{ t: 'EPB zonder meting 12', v: 12 }] },
+                        { k: 'V', label: 'Inwendig volume', eh: 'm³', opt: true, min: 0 },
+                        { k: 'A', label: 'Verliesoppervlakte', eh: 'm²', opt: true, min: 0, hint: 'alle wanden, daken en vloeren rond het beschermd volume' },
+                        { k: 'dT', label: 'Temperatuurverschil binnen en buiten', eh: 'K', std: 28, min: 0 }
+                    ],
+                    bereken: function (v, h) {
+                        var q = v.q, st = [];
+                        if (q == null && v.n50 != null) { if (!(v.V > 0)) return { wacht: true, ontbreekt: ['Inwendig volume'] }; q = v.n50 * v.V; st.push('Lekdebiet = ' + h.f(v.n50, 2) + ' × ' + h.f(v.V, 0) + ' m³ = ' + h.f(q, 0, 'm³/h')); }
+                        if (q == null && v.v50 != null) { if (!(v.A > 0)) return { wacht: true, ontbreekt: ['Verliesoppervlakte'] }; q = v.v50 * v.A; st.push('Lekdebiet = ' + h.f(v.v50, 2) + ' × ' + h.f(v.A, 0) + ' m² = ' + h.f(q, 0, 'm³/h')); }
+                        if (q == null) return { wacht: true, ontbreekt: ['lekdebiet, n50 of v50'] };
+                        if (!(v.V > 0) && !(v.A > 0)) return { wacht: true, ontbreekt: ['volume of verliesoppervlakte'] };
+                        var n50 = v.V > 0 ? q / v.V : null, v50 = v.A > 0 ? q / v.A : null, gat = q / 3600 / (0.61 * Math.sqrt(2 * 50 / 1.2)) * 10000;
+                        var oordeel = n50 == null ? null : n50 <= 0.6 ? 'passiefhuisniveau' : n50 <= 1 ? 'zeer goed' : n50 <= 3 ? 'goed' : 'meer dan 3: ruimte voor verbetering';
+                        var uit = [h.uit('n50', n50, '1/h', { dec: 2, hoofd: true, opm: oordeel || '' }), h.uit('v50', v50, 'm³/(h·m²)', { dec: 2, hoofd: true, opm: v50 == null ? '' : v50 < 12 ? 'beter dan de EPB-waarde zonder meting (12)' : 'niet beter dan de EPB-waarde zonder meting (12)' }), h.uit('Lekdebiet bij 50 Pa', q, 'm³/h', { dec: 0 }), h.uit('Alle lekken samen, als één gat', gat, 'cm²', { dec: 0, opm: 'een vierkant van ' + h.fmt(Math.sqrt(gat), 0) + ' cm' })];
+                        if (n50 != null) { var inf = n50 / 20, P = 0.34 * inf * v.V * v.dT; uit.push(h.uit('Natuurlijke infiltratie', inf, '1/h', { dec: 2, opm: h.fmt(inf * v.V, 0) + ' m³/h' }), h.uit('Warmteverlies door de lekken', P, 'W', { dec: 0, opm: 'bij ΔT ' + h.fmt(v.dT, 0) + ' K' })); st.push('Infiltratie ≈ ' + h.fmt(n50, 2) + ' / 20 = ' + h.f(inf, 2, '1/h'), 'Warmteverlies = 0,34 × ' + h.fmt(inf * v.V, 0) + ' m³/h × ' + h.f(v.dT, 0) + ' K = ' + h.f(P, 0, 'W')); }
+                        return { uit: uit, stappen: st, opm: 'De meting zelf gebeurt volgens STS-P 71-3 door een erkend meetbedrijf. Een luchtdichte woning heeft een ventilatiesysteem nodig: zie “Ventilatiedebieten per ruimte”. Open toestellen (type B) en een luchtdichte woning gaan niet samen.' };
+                    }
+                },
+                {
                     id: 'vent.co2', naam: 'CO₂ en verse lucht per persoon', kort: 'Hoeveel buitenlucht om onder 1.000 ppm te blijven?',
                     zoek: 'co2 ppm personen verse lucht per persoon klaslokaal vergaderzaal 1000 ppm en 16798 ida', soort: 'exact',
                     bron: 'Q = G / (C_binnen − C_buiten); CO₂-productie zittend 18 l/h, licht werk 25, zwaar 40; buitenlucht ±420 ppm; EN 16798: klasse II ≤ 800 ppm boven buiten (±1.200), Vlaamse scholen streef ≤ 900–1.200 ppm',
@@ -119,7 +168,7 @@
                     }
                 }
             ] },
-            { naam: 'Kanalen', items: [
+            { naam: 'Kanalen, roosters en meten', items: [
                 {
                     id: 'vent.kanaal', naam: 'Kanaaldiameter en drukverlies', kort: 'Rond kanaal uit debiet en snelheid, drukverlies per meter, rechthoekig equivalent',
                     zoek: 'kanaal kanaaldiameter luchtkanaal snelheid drukverlies pa/m spiro flexibel rechthoekig equivalent', soort: 'exact',
@@ -179,6 +228,106 @@
                         var jaar = L.wh_m3_K * v.Q * 24 * 2400 / 1000, bespaard = jaar * v.eta;
                         return { uit: [h.uit('Toevoer na WTW', tna, '°C', { dec: 1, hoofd: true }), h.uit('Teruggewonnen vermogen', Pterug, 'W', { dec: 0 }), h.uit('Naverwarmer tot ' + h.fmt(v.tin) + ' °C', Pna, 'W', { dec: 0, hoofd: Pna > 0 }), h.uit('Ventilatieverlies zonder WTW (jaar)', jaar, 'kWh', { dec: 0 }), h.uit('Besparing per jaar (±)', bespaard, 'kWh', { dec: 0, opm: '€ ' + h.fmt(bespaard * v.prijs, 0) })], stappen: ['θ_na = ' + h.f(v.tb) + ' + ' + h.f(v.eta) + ' × (' + h.f(v.ti) + ' − ' + h.f(v.tb) + ') = ' + h.f(tna, 1, '°C'), 'P = 0,34 × ' + h.f(v.Q) + ' × Δθ'] };
                     }
+                },
+                {
+                    id: 'vent.kanaalnet', naam: 'Drukverlies van een kanaaltraject', kort: 'Wrijving over de lengte plus bochten, T-stukken en ventielen',
+                    zoek: 'drukverlies kanaal traject luchtkanaal bochten t-stuk verloop ventiel weerstand pascal ventilatordruk tak', soort: 'indicatief',
+                    bron: 'Δp = (Δp per meter × L) + Σζ × ρ × v² / 2 + toestellen · ζ: bocht 90° 0,3 · bocht 45° 0,15 · T-stuk aftakking 1,0 · verloop 0,2 · lucht ρ 1,2 kg/m³',
+                    uitleg: 'Reken het traject naar het verste ventiel door. De som van alle deeltrajecten plus de unit, de filters en de roosters geeft de druk die de ventilator moet leveren.',
+                    velden: [
+                        { k: 'Q', label: 'Debiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], min: 0 },
+                        { k: 'd', label: 'Kanaal', type: 'keuze', opties: KANALEN.map(function (d) { return { v: d, t: 'Ø ' + d + ' mm' }; }), std: 125 },
+                        { k: 'mat', label: 'Soort kanaal', type: 'keuze', opties: [{ v: 0.15, t: 'Spiro / verzinkt staal' }, { v: 0.05, t: 'Kunststof (PE/PP)' }, { v: 3, t: 'Flexibel (alu/PVC)' }], std: 0.15 },
+                        { k: 'L', label: 'Lengte', eh: 'm', std: 10, min: 0 },
+                        { k: 'b90', label: 'Bochten 90°', std: 2, min: 0 },
+                        { k: 'b45', label: 'Bochten 45°', std: 0, min: 0 },
+                        { k: 'tst', label: 'T-stukken (aftakking)', std: 0, min: 0 },
+                        { k: 'verl', label: 'Verlopen', std: 0, min: 0 },
+                        { k: 'extra', label: 'Ventiel, demper of rooster', eh: 'Pa', std: 30, min: 0, snel: [{ t: 'Geen 0', v: 0 }, { t: 'Ventiel 30', v: 30 }, { t: 'Demper 15', v: 15 }, { t: 'Buitenrooster 20', v: 20 }] }
+                    ],
+                    bereken: function (v, h) {
+                        if (!(v.Q > 0)) return { fout: 'Het debiet moet groter zijn dan 0' };
+                        var d = Number(v.d), r = R.darcy(v.Q, d, Number(v.mat), 15e-6, L.rho), pd = L.rho * r.v * r.v / 2;
+                        var zeta = v.b90 * 0.3 + v.b45 * 0.15 + v.tst * 1.0 + v.verl * 0.2, dpL = r.dp * v.L, dpZ = zeta * pd, tot = dpL + dpZ + v.extra;
+                        var waarsch = [];
+                        if (r.v > 4) waarsch.push('Snelheid ' + h.fmt(r.v, 1) + ' m/s: dat hoor je in een woning. Kies een groter kanaal (streef naar 3 m/s in het hoofdkanaal en 2 m/s bij de ventielen).');
+                        if (Number(v.mat) === 3 && v.L > 1.5) waarsch.push('Flexibele slang geeft veel weerstand en vervuilt snel: gebruik ze enkel voor de laatste meter naar het ventiel en trek ze strak.');
+                        return {
+                            uit: [h.uit('Drukverlies van het traject', tot, 'Pa', { dec: 0, hoofd: true }), h.uit('Wrijving in het kanaal', dpL, 'Pa', { dec: 1, opm: h.fmt(r.dp, 2) + ' Pa per meter' }), h.uit('Bochten en hulpstukken (Σζ = ' + h.fmt(zeta, 2) + ')', dpZ, 'Pa', { dec: 1 }), h.uit('Ventiel, demper of rooster', v.extra, 'Pa', { dec: 0 }), h.uit('Snelheid', r.v, 'm/s', { dec: 2, kleur: r.v > 4 ? 'amber' : 'groen' }), h.uit('Dynamische druk', pd, 'Pa', { dec: 1 })],
+                            stappen: ['v = ' + h.f(r.v, 2, 'm/s') + ', Δp per meter = ' + h.f(r.dp, 2, 'Pa'), 'Δp = ' + h.fmt(r.dp, 2) + ' × ' + h.f(v.L, 1) + ' + ' + h.fmt(zeta, 2) + ' × ' + h.fmt(pd, 1) + ' + ' + h.f(v.extra, 0) + ' = ' + h.f(tot, 0, 'Pa')],
+                            waarsch: waarsch
+                        };
+                    }
+                },
+                {
+                    id: 'vent.rooster', naam: 'Rooster en ventiel: doorlaat en snelheid', kort: 'Hoe groot moet het rooster zijn, of hoe snel gaat de lucht erdoor?',
+                    zoek: 'rooster ventiel doorlaat netto vrije doorlaat luchtsnelheid buitenrooster deurrooster doorstroomopening spleet onder deur cm2 afmeting', soort: 'indicatief',
+                    bron: 'v = Q / (A_bruto × vrije doorlaat) · A_netto = Q / v_max · doorstroomopening volgens NBN D 50-001: 70 cm² per 25 m³/h (bij 2 Pa) · drukverlies rooster ≈ 2 × ρ × v² / 2',
+                    velden: [
+                        { k: 'Q', label: 'Debiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], min: 0 },
+                        { k: 'vmax', label: 'Grootste snelheid in de vrije doorlaat', eh: 'm/s', std: 2.5, min: 0.1, snel: [{ t: 'Toevoer in de kamer 2', v: 2 }, { t: 'Buitenrooster 2,5', v: 2.5 }, { t: 'Afvoer 3', v: 3 }, { t: 'Technische ruimte 4', v: 4 }] },
+                        { k: 'vrij', label: 'Vrije doorlaat van het rooster', eh: '%', std: 50, min: 5, max: 100, snel: [{ t: 'Lamellen 50', v: 50 }, { t: 'Gaas 60', v: 60 }, { t: 'Open 80', v: 80 }] },
+                        { k: 'b', label: 'Bestaand rooster: breedte', eh: 'mm', opt: true, min: 0 },
+                        { k: 'hgt', label: 'hoogte', eh: 'mm', opt: true, min: 0 },
+                        { k: 'deur', label: 'Breedte van de deur (voor de spleet)', eh: 'cm', std: 80, min: 1 }
+                    ],
+                    bereken: function (v, h) {
+                        if (!(v.Q > 0)) return { fout: 'Het debiet moet groter zijn dan 0' };
+                        var netto = v.Q / 3600 / v.vmax * 1e4, bruto = netto / (v.vrij / 100), zij = Math.ceil(Math.sqrt(bruto) * 10 / 50) * 50;
+                        var door = 70 * v.Q / 25, spleet = door / v.deur;
+                        var uit = [h.uit('Nodige vrije doorlaat', netto, 'cm²', { dec: 0, hoofd: true }), h.uit('Rooster bruto', bruto, 'cm²', { dec: 0, hoofd: true, opm: 'bijvoorbeeld ' + zij + ' × ' + zij + ' mm' })];
+                        var st = ['A_netto = ' + h.fmt(v.Q / 3600, 4) + ' m³/s / ' + h.f(v.vmax, 1) + ' m/s = ' + h.f(netto, 0, 'cm²'), 'A_bruto = ' + h.fmt(netto, 0) + ' / ' + h.f(v.vrij, 0) + ' % = ' + h.f(bruto, 0, 'cm²')];
+                        var waarsch = [];
+                        if (v.b != null && v.hgt != null && v.b > 0 && v.hgt > 0) {
+                            var An = v.b * v.hgt / 100 * v.vrij / 100, vv = v.Q / 3600 / (An / 1e4);
+                            uit.push(h.uit('Snelheid in het rooster van ' + h.fmt(v.b, 0) + ' × ' + h.fmt(v.hgt, 0) + ' mm', vv, 'm/s', { dec: 2, hoofd: true, kleur: vv > v.vmax ? 'rood' : 'groen' }), h.uit('Drukverlies over dat rooster (±)', 2 * L.rho * vv * vv / 2, 'Pa', { dec: 0 }));
+                            st.push('v = ' + h.fmt(v.Q / 3600, 4) + ' / (' + h.fmt(An, 0) + ' cm²) = ' + h.f(vv, 2, 'm/s'));
+                            if (vv > v.vmax) waarsch.push('Het rooster is te klein: de lucht gaat er sneller door dan ' + h.fmt(v.vmax, 1) + ' m/s. Dat geeft geluid en tocht.');
+                        }
+                        uit.push(h.uit('Doorstroomopening naar een andere ruimte', door, 'cm²', { dec: 0, opm: 'spleet van ' + h.fmt(spleet * 10, 0) + ' mm onder een deur van ' + h.fmt(v.deur, 0) + ' cm' }));
+                        return { uit: uit, stappen: st, waarsch: waarsch };
+                    }
+                },
+                {
+                    id: 'vent.meten', naam: 'Debiet meten en inregelen', kort: 'Uit de luchtsnelheid of uit het drukverschil met de k-factor',
+                    zoek: 'debiet meten inregelen ventiel anemometer luchtsnelheid drukverschil k-factor meetkruis flowmeter ventilatieverslag afwijking ontwerpdebiet', soort: 'exact',
+                    bron: 'Uit de snelheid: Q = v × A × correctiefactor · uit het drukverschil: Q = k × √Δp (k-factor uit de fiche van het ventiel of de meetflens)',
+                    uitleg: 'Meet de snelheid op meerdere punten en vul het gemiddelde in. De k-factor van een ventiel hangt af van de stand: lees hem af in de fiche voor de ingestelde opening.',
+                    velden: [
+                        { k: 'meth', label: 'Methode', type: 'keuze', opties: [{ v: 'v', t: 'Luchtsnelheid in een kanaal of op een rooster' }, { v: 'dp', t: 'Drukverschil met k-factor' }], std: 'v' },
+                        { k: 'v', label: 'Gemiddelde luchtsnelheid', eh: 'm/s', opt: true, min: 0 },
+                        { k: 'd', label: 'Rond kanaal: diameter', eh: 'mm', opt: true, min: 0, snel: [{ t: '100', v: 100 }, { t: '125', v: 125 }, { t: '160', v: 160 }, { t: '200', v: 200 }] },
+                        { k: 'a', label: 'of rechthoek: breedte', eh: 'mm', opt: true, min: 0 },
+                        { k: 'b', label: 'hoogte', eh: 'mm', opt: true, min: 0 },
+                        { k: 'cf', label: 'Correctiefactor', std: 1, min: 0.1, max: 1.2, snel: [{ t: 'Kanaal 1', v: 1 }, { t: 'Rooster 0,8', v: 0.8 }, { t: 'Gaas 0,7', v: 0.7 }] },
+                        { k: 'dp', label: 'Drukverschil', eh: 'Pa', opt: true, min: 0 },
+                        { k: 'k', label: 'k-factor', opt: true, min: 0 },
+                        { k: 'keh', label: 'Eenheid van de k-factor', type: 'keuze', opties: [{ v: 1, t: 'm³/h per √Pa' }, { v: 3.6, t: 'l/s per √Pa' }], std: 1 },
+                        { k: 'Qo', label: 'Ontwerpdebiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], opt: true, min: 0 }
+                    ],
+                    bereken: function (v, h) {
+                        var Q, st = [];
+                        if (v.meth === 'dp') {
+                            if (v.dp == null || v.k == null) return { wacht: true, ontbreekt: ['drukverschil en k-factor'] };
+                            Q = v.k * Number(v.keh) * Math.sqrt(v.dp);
+                            st.push('Q = ' + h.f(v.k, 2) + ' × √' + h.f(v.dp, 1) + (Number(v.keh) === 1 ? '' : ' × 3,6') + ' = ' + h.f(Q, 1, 'm³/h'));
+                        } else {
+                            var A = v.d != null ? Math.PI * v.d * v.d / 4 / 1e6 : (v.a != null && v.b != null ? v.a * v.b / 1e6 : null);
+                            if (v.v == null || A == null) return { wacht: true, ontbreekt: ['luchtsnelheid en de maat van het kanaal of rooster'] };
+                            Q = v.v * A * v.cf * 3600;
+                            st.push('A = ' + h.f(A * 1e4, 1, 'cm²'), 'Q = ' + h.f(v.v, 2) + ' m/s × ' + h.fmt(A, 5) + ' m² × ' + h.f(v.cf, 2) + ' × 3.600 = ' + h.f(Q, 1, 'm³/h'));
+                        }
+                        var uit = [h.uit('Gemeten debiet', Q, 'm³/h', { dec: 0, hoofd: true, opm: h.fmt(Q / 3.6, 1) + ' l/s' })];
+                        var waarsch = [];
+                        if (v.Qo > 0) {
+                            var afw = (Q - v.Qo) / v.Qo * 100;
+                            uit.push(h.uit('Afwijking van het ontwerp', afw, '%', { dec: 0, hoofd: true, kleur: Math.abs(afw) <= 10 ? 'groen' : Math.abs(afw) <= 20 ? 'amber' : 'rood' }), h.uit('Ontwerpdebiet', v.Qo, 'm³/h', { dec: 0 }));
+                            if (v.meth === 'dp' && v.k > 0) uit.push(h.uit('Drukverschil bij het ontwerpdebiet', Math.pow(v.Qo / (v.k * Number(v.keh)), 2), 'Pa', { dec: 1, opm: 'bij deze k-factor' }));
+                            if (afw < -10) waarsch.push('Te weinig debiet: ventiel verder open, of de ventilator een stand hoger. Regel altijd eerst het verste ventiel in.');
+                            if (afw > 20) waarsch.push('Te veel debiet: ventiel verder dicht. Te veel lucht geeft geluid en tocht.');
+                        }
+                        return { uit: uit, stappen: st, waarsch: waarsch };
+                    }
                 }
             ] },
             { naam: 'Rookgas en verbrandingslucht', items: [
@@ -216,31 +365,65 @@
                         if (v.H < 4 && T.trek > 0) waarsch.push('Minder dan 4 m effectieve hoogte geeft zelden genoeg trek voor een toestel met natuurlijke trek.');
                         return {
                             uit: [h.uit('Diameter', keus ? 'Ø ' + keus.d + ' mm' : 'geen maat voldoet', '', { hoofd: true, kleur: keus ? 'groen' : 'rood' }), h.uit('Rookgasdebiet', m * 1000, 'g/s', { dec: 1, opm: h.fmt(m * 3600, 0) + ' kg/h' }), h.uit('Natuurlijke trek (schouw)', pH, 'Pa', { dec: 1 }), h.uit('Weerstand bij gekozen maat', keus ? keus.dp : null, 'Pa', { dec: 1 }), h.uit(T.trek > 0 ? 'Beschikbaar voor het toestel (nodig ' + T.trek + ' Pa)' : 'Netto over te winnen door de ventilator', keus ? (T.trek > 0 ? keus.beschikbaar : Math.max(0, keus.dp - pH)) : null, 'Pa', { dec: 1 }), h.uit('Snelheid', keus ? keus.w : null, 'm/s', { dec: 2 }), h.uit('Temperatuur aan de monding (±)', Tmond, '°C', { dec: 0, kleur: Tmond < T.dauw ? 'amber' : 'groen' })],
-                            stappen: ['ṁ = ' + T.f + ' g/s per kW × ' + h.f(v.P) + ' kW = ' + h.f(m * 1000, 1, 'g/s'), 'ρ_rookgas (' + h.fmt(Tgem, 0) + ' °C) = ' + h.fmt(rg, 3) + ' kg/m³, ρ_lucht (' + h.f(v.tl) + ' °C) = ' + h.fmt(rl, 3), 'p_H = 9,81 × ' + h.f(v.H) + ' × (' + h.fmt(rl, 3) + ' − ' + h.fmt(rg, 3) + ') = ' + h.f(pH, 1, 'Pa'), 'Δp = (λ × H/d + Σζ) × ρ × w² / 2 met λ = ' + S.lam + ', Σζ = ' + h.fmt(zeta, 1) + ' (intrede 0,5 + monding 1,0 + ' + v.bochten + ' × 0,4)'],
+                            stappen: ['ṁ = ' + h.fmt(T.f, 2) + ' g/s per kW × ' + h.f(v.P) + ' kW = ' + h.f(m * 1000, 1, 'g/s'), 'ρ_rookgas (' + h.fmt(Tgem, 0) + ' °C) = ' + h.fmt(rg, 3) + ' kg/m³, ρ_lucht (' + h.f(v.tl) + ' °C) = ' + h.fmt(rl, 3), 'p_H = 9,81 × ' + h.f(v.H) + ' × (' + h.fmt(rl, 3) + ' − ' + h.fmt(rg, 3) + ') = ' + h.f(pH, 1, 'Pa'), 'Δp = (λ × H/d + Σζ) × ρ × w² / 2 met λ = ' + h.fmt(S.lam, 3) + ', Σζ = ' + h.fmt(zeta, 1) + ' (intrede 0,5 + monding 1,0 + ' + v.bochten + ' × 0,4)'],
                             tabel: { kop: ['Maat', 'Snelheid', 'Weerstand', 'Trek − weerstand', ''], rijen: rijen }, waarsch: waarsch,
                             opm: 'Nooit kleiner dan de rookgasaansluiting van het toestel. Monding: minstens 1 m boven een plat dak, bij een hellend dak liefst boven de nok en buiten de windzone van hogere gebouwen (NBN B 61-002).'
                         };
                     }
                 },
                 {
-                    id: 'vent.stookplaats', naam: 'Verbrandingslucht en stookplaatsventilatie', kort: 'Openingen (cm²) voor open toestellen en stookplaatsen',
-                    zoek: 'verbrandingslucht toevoeropening stookplaats ventilatie cm2 per kw rooster nbn d 51-003 b 61-001 type b type c', soort: 'indicatief',
-                    bron: 'Richtwaarden NBN D 51-003 / NBN B 61-001: onderste (toevoer) opening ≥ 6 cm² per kW, minimum 150 cm²; bovenste (afvoer) opening ≥ 3 cm² per kW, minimum 150 cm²; type C (gesloten, concentrisch) heeft geen toevoer nodig; luchtbehoefte ±1,2 m³ per kWh',
+                    id: 'vent.stookplaats', naam: 'Verluchting van het stooklokaal', kort: 'Lage en hoge verluchting in cm² voor open toestellen en stookafdelingen',
+                    zoek: 'verbrandingslucht toevoeropening stookplaats stooklokaal stookafdeling verluchting ventilatie cm2 per kw rooster nbn d 51-003 b 61-001 b 61-002 type b type c trekonderbreker doorstroomopening', soort: 'indicatief',
+                    bron: 'Tot 70 kW (NBN D 51-003 en NBN/DTD B 61-002): cm² vrije doorlaat per kW, gelezen in het dossier van KVBG (Inforgas) en in de opleiding van Cedicol · vanaf 70 kW (NBN/DTD B 61-001): gelezen in de opleiding van Techlink · stookolie: ook besluit van de Vlaamse Regering van 8 december 2006 · luchtbehoefte ±1,2 m³ per kWh. De normen zelf zijn betalend en niet geraadpleegd: controleer bij twijfel de norm.',
+                    uitleg: 'De lage verluchting brengt de verbrandingslucht binnen, de hoge verluchting voert warmte en gassen af. Een gesloten toestel (type C) neemt zijn lucht buiten en heeft geen opening voor de verbranding nodig.',
                     velden: [
-                        { k: 'P', label: 'Totale belasting van de open toestellen', eh: 'kW', std: 30 },
-                        { k: 'soort', label: 'Situatie', type: 'keuze', opties: [{ v: 'b', t: 'Type B (open) toestel(len) in een lokaal, < 70 kW' }, { v: 'stook', t: 'Stookplaats ≥ 70 kW (NBN B 61-001)' }, { v: 'c', t: 'Type C (gesloten) toestel' }] },
-                        { k: 'vrij', label: 'Vrije doorlaat van het rooster', eh: '%', std: 60, snel: [{ t: 'Lamellen 50', v: 50 }, { t: 'Gaas 60', v: 60 }, { t: 'Open 80', v: 80 }] }
+                        { k: 'P', label: 'Totale belasting van de toestellen in het lokaal', eh: 'kW', std: 30, min: 0 },
+                        { k: 'soort', label: 'Toestel', type: 'keuze', opties: STOOK.map(function (x) { return { v: x.v, t: x.t }; }), std: 'b1' },
+                        { k: 'weg', label: 'Waar komt de lucht vandaan? (gas, tot 30 kW)', type: 'keuze', opties: [{ v: 0, t: 'Rechtstreeks van buiten' }, { v: 1, t: 'Via 1 doorstroomopening (bestaand gebouw)' }, { v: 2, t: 'Via 2 doorstroomopeningen (bestaand gebouw)' }], std: 0 },
+                        { k: 'schouw', label: 'Schoorsteen (vanaf 70 kW)', type: 'keuze', opties: [{ v: 'hoog', t: 'Hoger dan 6 m' }, { v: 'laag', t: '6 m of lager' }], std: 'hoog' },
+                        { k: 'V', label: 'Inhoud van het lokaal of de kast (type C)', eh: 'm³', opt: true, min: 0 },
+                        { k: 'afz', label: 'Afzuiging in hetzelfde lokaal (dampkap, droogkast)', eh: 'm³/h', opt: true, min: 0 },
+                        { k: 'vrij', label: 'Vrije doorlaat van het rooster', eh: '%', std: 60, min: 10, max: 100, snel: [{ t: 'Lamellen 50', v: 50 }, { t: 'Gaas 60', v: 60 }, { t: 'Open 80', v: 80 }] }
                     ],
                     bereken: function (v, h) {
-                        if (v.soort === 'c') return { uit: [h.uit('Toevoeropening', 'niet nodig', '', { hoofd: true })], opm: 'Een gesloten toestel (type C) haalt zijn verbrandingslucht via de concentrische afvoer of een aparte luchtbuis; het lokaal hoeft geen verbrandingsluchtopening. Wel gewone ventilatie voor de ruimte.' };
-                        var onder = Math.max(150, 6 * v.P), boven = Math.max(150, 3 * v.P);
-                        var brutoO = onder / (v.vrij / 100), brutoB = boven / (v.vrij / 100), lucht = 1.2 * v.P;
-                        function maat(cm2) { var z = Math.ceil(Math.sqrt(cm2) * 10 / 50) * 50; return z + ' × ' + z + ' mm'; }
-                        return {
-                            uit: [h.uit('Onderste opening (toevoer), netto', onder, 'cm²', { dec: 0, hoofd: true, opm: 'rooster bruto ±' + h.fmt(brutoO, 0) + ' cm² → ' + maat(brutoO) }), h.uit('Bovenste opening (afvoer), netto', boven, 'cm²', { dec: 0, hoofd: v.soort === 'stook', opm: 'rooster bruto ±' + h.fmt(brutoB, 0) + ' cm² → ' + maat(brutoB) }), h.uit('Verbrandingslucht bij vollast', lucht, 'm³/h', { dec: 0 })],
-                            stappen: ['Onder = max(150, 6 × ' + h.f(v.P) + ') = ' + h.f(onder, 0, 'cm²'), 'Boven = max(150, 3 × ' + h.f(v.P) + ') = ' + h.f(boven, 0, 'cm²'), 'Bruto = netto / ' + h.f(v.vrij) + ' %'],
-                            opm: 'Openingen rechtstreeks naar buiten, niet afsluitbaar, onder: laag bij de vloer; boven: hoog. Bij < 70 kW in een woonruimte gelden de vereenvoudigde regels van NBN D 51-003 (rechtstreekse opening of ventilatie via aangrenzende ruimtes) — controleer de norm.'
-                        };
+                        if (!(v.P > 0)) return { fout: 'De belasting moet groter zijn dan 0' };
+                        var T = STOOK.filter(function (x) { return x.v === v.soort; })[0] || STOOK[0], weg = Number(v.weg), uit = [], st = [], waarsch = [], opm;
+                        function maat(cm2) { var z = Math.ceil(Math.sqrt(cm2) * 10 / 50) * 50; return h.fmt(z, 0) + ' × ' + h.fmt(z, 0) + ' mm'; }
+                        function rooster(cm2) { var bruto = cm2 / (v.vrij / 100); return 'rooster bruto ±' + h.fmt(bruto, 0) + ' cm², bijvoorbeeld ' + maat(bruto); }
+                        if (v.P >= 70) {
+                            if (v.P > 12000) return { fout: 'Boven 12.000 kW geeft de norm geen formule: laat de verluchting berekenen' };
+                            var laagK = v.schouw === 'laag', per = laagK ? 150 : 100;
+                            var onder = v.P > 1200 ? Math.sqrt(v.P) * (laagK ? 300 : 200) : v.P / 17.5 * per, boven = Math.max(200, onder / 3);
+                            uit.push(h.uit('Lage verluchting, vrije doorlaat', onder, 'cm²', { dec: 0, hoofd: true, opm: rooster(onder) }), h.uit('Hoge verluchting, vrije doorlaat', boven, 'cm²', { dec: 0, hoofd: true, opm: rooster(boven) }), h.uit('Of mechanische luchttoevoer', v.P * 2 / 1.16, 'm³/h', { dec: 0, opm: '2 m³/h per 1,16 kW, met de ketels vergrendeld op de luchtstroom' }), h.uit('Verbrandingslucht bij vollast', 1.2 * v.P, 'm³/h', { dec: 0 }));
+                            st.push(v.P > 1200 ? 'Laag = √' + h.f(v.P, 0) + ' × ' + (laagK ? 300 : 200) + ' = ' + h.f(onder, 0, 'cm²') : 'Laag = ' + h.f(v.P, 1) + ' / 17,5 × ' + per + ' = ' + h.f(onder, 0, 'cm²'), 'Hoog = het grootste van 200 cm² en een derde van de lage verluchting = ' + h.f(boven, 0, 'cm²'));
+                            if (T.v === 'c') waarsch.push('Vanaf 70 kW blijft luchtaanvoer nodig, ook als de branders hun lucht buiten nemen. De norm geeft daarvoor geen cijfer: de waarden hierboven zijn die voor open toestellen.');
+                            opm = 'Stookafdeling vanaf 70 kW (NBN/DTD B 61-001). De waarden gelden voor hoogstens 3 roosters en bochten van 90° na elkaar: tel er per extra rooster of bocht 10 % bij. De bovenrand van de lage verluchting ligt hoogstens op een kwart van de hoogte van het lokaal. Geen klep of schuif in de openingen. De hoge verluchting is altijd natuurlijk.';
+                            return { uit: uit, stappen: st, waarsch: waarsch, opm: opm };
+                        }
+                        if (T.v === 'c') {
+                            if (v.V != null && v.V > 0 && v.P / v.V > 35) {
+                                var opening = Math.max(50, v.P);
+                                uit.push(h.uit('Opening onderaan en bovenaan, elk', opening, 'cm²', { dec: 0, hoofd: true, opm: 'een spleet onder en boven de deur mag' }), h.uit('Belasting per m³', v.P / v.V, 'kW/m³', { dec: 0, opm: 'meer dan 35: de kast moet verlucht worden' }));
+                                st.push(h.f(v.P, 1) + ' kW / ' + h.f(v.V, 2) + ' m³ = ' + h.f(v.P / v.V, 0, 'kW/m³') + ', meer dan 35', 'Opening = het grootste van 50 cm² en 1 cm² per kW = ' + h.f(opening, 0, 'cm²'));
+                            } else {
+                                uit.push(h.uit('Opening voor de verbranding', 'niet nodig', '', { hoofd: true }));
+                                if (v.V != null && v.V > 0) uit.push(h.uit('Belasting per m³', v.P / v.V, 'kW/m³', { dec: 1, opm: 'tot 35: geen verluchting van het lokaal nodig' }));
+                                else waarsch.push('Staat het toestel in een kast of een klein lokaal? Vul dan de inhoud in: boven 35 kW per m³ zijn openingen nodig.');
+                            }
+                            return { uit: uit, stappen: st, waarsch: waarsch, opm: 'Een gesloten toestel (type C) haalt zijn verbrandingslucht via de concentrische afvoer of een aparte luchtbuis. De gewone ventilatie van de ruimte blijft nodig.' };
+                        }
+                        if (weg > 0 && !T.gas) { waarsch.push('Doorstroomopeningen staan alleen in de tabel voor gastoestellen: de lucht komt hier rechtstreeks van buiten.'); weg = 0; }
+                        if (weg > 0 && v.P > 30) { waarsch.push('Doorstroomopeningen zijn alleen toegelaten tot 30 kW, in een bestaand gebouw: de lucht komt hier rechtstreeks van buiten.'); weg = 0; }
+                        var f = T.f[weg], laag = Math.max(50, f * v.P), hoog = Math.max(50, laag / 3);
+                        uit.push(h.uit('Lage verluchting, vrije doorlaat', laag, 'cm²', { dec: 0, hoofd: true, opm: rooster(laag) }));
+                        st.push('Laag = het grootste van 50 cm² en ' + h.fmt(f, 0) + ' cm² × ' + h.f(v.P, 1) + ' kW = ' + h.f(laag, 0, 'cm²') + (weg ? ' per opening' : ''));
+                        if (T.v !== 'a') { uit.push(h.uit('Hoge verluchting, vrije doorlaat', hoog, 'cm²', { dec: 0, hoofd: true, opm: rooster(hoog) })); st.push('Hoog = het grootste van 50 cm² en een derde van de lage verluchting = ' + h.f(hoog, 0, 'cm²')); }
+                        if (v.afz > 0) { var extra = 160 * v.afz / 100; uit.push(h.uit('Extra toevoer voor de afzuiging', extra, 'cm²', { dec: 0, opm: '160 cm² per 100 m³/h, rechtstreeks van buiten' })); st.push('Extra = 160 × ' + h.f(v.afz, 0) + ' / 100 = ' + h.f(extra, 0, 'cm²')); }
+                        uit.push(h.uit('Verbrandingslucht bij vollast', 1.2 * v.P, 'm³/h', { dec: 0 }));
+                        if (weg) waarsch.push('Elke doorstroomopening en de opening naar buiten krijgen deze doorlaat. Een spleet onder een deur telt alleen als ze minstens 2,5 cm hoog is en 150 cm² groot.');
+                        if (T.v === 'a') waarsch.push('Een keukengeiser zonder afvoer (type A1AS) vraagt een toevoer van minstens 150 cm² en bovenaan een opening van minstens 150 cm² rechtstreeks naar buiten. Zulke toestellen mogen sinds 2014 niet meer geplaatst of vervangen worden.');
+                        var tabel = { kop: ['cm² per kW', 'Van buiten', 'Via 1 opening', 'Via 2'], rijen: STOOK.filter(function (x) { return x.f; }).map(function (x) { return [x.kort, String(x.f[0]), x.gas ? String(x.f[1]) : '–', x.gas ? String(x.f[2]) : '–']; }), kies: STOOK.filter(function (x) { return x.f; }).indexOf(T) };
+                        return { uit: uit, stappen: st, waarsch: waarsch, tabel: tabel, opm: 'Toestellen tot 70 kW. De lage verluchting zit onderaan (bijvoorbeeld 10 cm boven de vloer) en is niet afsluitbaar. De hoge verluchting mag via het rookkanaal lopen als er één ketel met trekonderbreker staat waarvan de instroomopening op minstens twee derde van de hoogte van het lokaal zit. Open toestellen (type B) zijn verboden in slaapkamer, badkamer, douche en wc.' };
                     }
                 },
                 {
@@ -261,44 +444,6 @@
                             ] },
                             opm: 'De trek van een schouw hangt vooral van de hoogte en de temperatuur af; een te lage monding in een windzone geeft terugslag ondanks een juiste diameter.'
                         };
-                    }
-                }
-            ] },
-            { naam: 'Koeling', items: [
-                {
-                    id: 'vent.koellast', naam: 'Koellast airco snel', kort: 'kW en BTU/h uit oppervlakte, bezetting en toestellen',
-                    zoek: 'airco koellast koelvermogen btu kw ruimte oppervlakte split personen zolder', soort: 'indicatief',
-                    bron: 'Richtwaarden W/m²: slaapkamer 60, woonkamer 80, veel glas / zuid 120, kantoor 100, zolder onder een dak 150; + 100 W per persoon + toestellen · 1 kW = 3.412 BTU/h',
-                    velden: [
-                        { k: 'A', label: 'Oppervlakte', eh: 'm²' },
-                        { k: 'q', label: 'Basislast', eh: 'W/m²', std: 80, snel: [{ t: 'Slaapkamer 60', v: 60 }, { t: 'Woonkamer 80', v: 80 }, { t: 'Kantoor 100', v: 100 }, { t: 'Veel glas 120', v: 120 }, { t: 'Zolder 150', v: 150 }] },
-                        { k: 'pers', label: 'Personen', std: 2, min: 0 },
-                        { k: 'app', label: 'Toestellen (pc’s, verlichting, keuken)', eh: 'W', std: 300 },
-                        { k: 'eer', label: 'EER / SEER van de airco', std: 3.5, min: 1 },
-                        { k: 'prijs', label: 'Stroomprijs', eh: '€/kWh', std: 0.35 }
-                    ],
-                    bereken: function (v, h) {
-                        var P = (v.A * v.q + v.pers * 100 + v.app) / 1000, unit = h.omhoogNaar(P, [2, 2.5, 3.5, 5, 6, 7.1, 8.5, 10, 12, 14]);
-                        return { uit: [h.uit('Koellast', P, 'kW', { dec: 2, hoofd: true, opm: h.fmt(P * 3412, 0) + ' BTU/h' }), h.uit('Toestel kiezen', unit ? unit + ' kW' : '> 14 kW', '', { hoofd: true }), h.uit('Elektrisch vermogen (EER ' + h.fmt(v.eer, 1) + ')', P / v.eer, 'kW', { dec: 2 }), h.uit('Kost per uur op vol vermogen', P / v.eer * v.prijs, '€', { dec: 2 })], stappen: ['P = (' + h.f(v.A) + ' × ' + h.f(v.q) + ' + ' + v.pers + ' × 100 + ' + h.f(v.app) + ') / 1000 = ' + h.f(P, 2, 'kW')], opm: 'Voor grote of atypische ruimtes (serverlokaal, veranda) een echte koellastberekening (VDI 2078) laten maken.' };
-                    }
-                },
-                {
-                    id: 'vent.koelmiddel', naam: 'Koelmiddel: extra vulling en F-gassen', kort: 'Bijvullen bij langere leidingen, CO₂-equivalent en lekcontrole',
-                    zoek: 'koelmiddel bijvullen extra vulling leidinglengte r32 r410a gwp co2 equivalent f-gassen lekcontrole', soort: 'exact',
-                    bron: 'Extra vulling = (leidinglengte − voorgevulde lengte) × g/m (fiche fabrikant, typisch 20 g/m bij 6,35/9,52 mm) · CO₂-eq = kg × GWP · (EU) 2024/573: lekcontrole vanaf 5 t CO₂-eq jaarlijks (10 t hermetisch), ≥ 50 t halfjaarlijks, ≥ 500 t per kwartaal; werken op het koelcircuit enkel door een gecertificeerde technicus',
-                    velden: [
-                        { k: 'km', label: 'Koelmiddel', type: 'keuze', opties: KOELMIDDELEN, std: 'R32' },
-                        { k: 'vul', label: 'Fabrieksvulling', eh: 'kg', std: 1.2 },
-                        { k: 'L', label: 'Leidinglengte', eh: 'm', std: 8 },
-                        { k: 'L0', label: 'Voorgevuld tot', eh: 'm', std: 5 },
-                        { k: 'gm', label: 'Bijvullen per meter', eh: 'g/m', std: 20 },
-                        { k: 'herm', label: 'Hermetisch gesloten (fabrieksdicht, monoblok)', type: 'vink', std: false }
-                    ],
-                    bereken: function (v, h) {
-                        var K = KOELMIDDELEN.filter(function (x) { return x.v === v.km; })[0];
-                        var extra = Math.max(0, v.L - v.L0) * v.gm / 1000, tot = v.vul + extra, co2 = tot * K.gwp / 1000;
-                        var drempel = v.herm ? 10 : 5, freq = co2 >= 500 ? 'elke 3 maanden' : co2 >= 50 ? 'elke 6 maanden' : co2 >= drempel ? 'jaarlijks (om de 24 maanden met lekdetectie)' : 'geen verplichte lekcontrole';
-                        return { uit: [h.uit('Bij te vullen', extra * 1000, 'g', { dec: 0, hoofd: true }), h.uit('Totale vulling', tot, 'kg', { dec: 2 }), h.uit('CO₂-equivalent', co2, 't', { dec: 2, hoofd: true, kleur: co2 >= drempel ? 'amber' : 'groen' }), h.uit('Lekcontrole', freq, '')], stappen: ['Extra = (' + h.f(v.L) + ' − ' + h.f(v.L0) + ') × ' + h.f(v.gm) + ' g/m = ' + h.f(extra * 1000, 0, 'g'), 'CO₂-eq = ' + h.fmt(tot, 2) + ' kg × ' + K.gwp + ' = ' + h.f(co2, 2, 't')], opm: 'Registreer elke vulling in het logboek van de installatie (verplicht vanaf 5 t CO₂-eq).' };
                     }
                 }
             ] },
@@ -336,6 +481,77 @@
                         var som = 10 * Math.log10(ls.reduce(function (a, l) { return a + Math.pow(10, l / 10); }, 0));
                         var op = som - 20 * Math.log10(v.r2 / v.r1);
                         return { uit: [h.uit('Samen', som, 'dB', { dec: 1, hoofd: true }), h.uit('Op ' + h.fmt(v.r2) + ' m', op, 'dB', { dec: 1, hoofd: true, kleur: op > 40 ? 'amber' : 'groen' })], stappen: ['L = 10 × log(' + ls.map(function (l) { return '10^(' + h.f(l) + '/10)'; }).join(' + ') + ') = ' + h.f(som, 1, 'dB'), 'L(' + h.f(v.r2) + ' m) = ' + h.fmt(som, 1) + ' − 20 × log(' + h.f(v.r2) + '/' + h.f(v.r1) + ') = ' + h.f(op, 1, 'dB')], opm: '+3 dB = dubbel geluidsvermogen, +10 dB = ervaren als dubbel zo luid. Geluidsvermogen L_W (fiche) ≈ geluidsdruk op 1 m + 8 dB.' };
+                    }
+                },
+                {
+                    id: 'vent.mollier', naam: 'Vochtige lucht (h-x)', kort: 'Vochtgehalte, enthalpie, dauwpunt en natteboltemperatuur',
+                    zoek: 'vochtige lucht mollier h-x diagram enthalpie vochtgehalte absolute vochtigheid natte bol natteboltemperatuur dauwpunt g/kg psychrometrie', soort: 'exact',
+                    bron: 'Magnus: p_ws = 6,112 × exp(17,62 × T / (243,12 + T)) hPa · x = 0,622 × p_v / (p − p_v) · h = 1,006 × T + x × (2.501 + 1,86 × T) kJ/kg · natte bol: p_v = p_ws(T_nb) − 0,000662 × p × (T − T_nb)',
+                    velden: [
+                        { k: 'T', label: 'Luchttemperatuur', eh: '°C', std: 20, min: -40, max: 80 },
+                        { k: 'rv', label: 'Relatieve vochtigheid', eh: '%', std: 50, min: 1, max: 100 },
+                        { k: 'p', label: 'Luchtdruk', eh: 'hPa', std: 1013, min: 600, max: 1100 }
+                    ],
+                    bereken: function (v, h) {
+                        var a = lucht(v.T, v.rv, v.p), s = lucht(v.T, 100, v.p), nb = natteBol(v.T, v.rv, v.p);
+                        return {
+                            uit: [h.uit('Vochtgehalte x', a.x * 1000, 'g/kg', { dec: 2, hoofd: true }), h.uit('Enthalpie h', a.h, 'kJ/kg', { dec: 1, hoofd: true }), h.uit('Dauwpunt', a.td, '°C', { dec: 1 }), h.uit('Natteboltemperatuur', nb, '°C', { dec: 1 }), h.uit('Dichtheid', a.rho, 'kg/m³', { dec: 3 }), h.uit('Dampdruk', a.pv, 'hPa', { dec: 2 }), h.uit('Vochtgehalte bij verzadiging', s.x * 1000, 'g/kg', { dec: 2 })],
+                            stappen: ['p_ws = 6,112 × exp(17,62 × ' + h.f(v.T, 1) + ' / (243,12 + ' + h.f(v.T, 1) + ')) = ' + h.f(pws(v.T), 2, 'hPa'), 'p_v = ' + h.fmt(pws(v.T), 2) + ' × ' + h.f(v.rv, 0) + ' % = ' + h.f(a.pv, 2, 'hPa'), 'x = 0,622 × ' + h.fmt(a.pv, 2) + ' / (' + h.f(v.p, 0) + ' − ' + h.fmt(a.pv, 2) + ') = ' + h.f(a.x * 1000, 2, 'g/kg'), 'h = 1,006 × ' + h.f(v.T, 1) + ' + ' + h.fmt(a.x, 5) + ' × (2.501 + 1,86 × ' + h.f(v.T, 1) + ') = ' + h.f(a.h, 1, 'kJ/kg')]
+                        };
+                    }
+                },
+                {
+                    id: 'vent.mengen', naam: 'Twee luchtstromen mengen', kort: 'Temperatuur en vochtigheid na het mengen van buitenlucht en retourlucht',
+                    zoek: 'lucht mengen mengkast buitenlucht retourlucht recirculatie mengtemperatuur vochtigheid luchtbehandelingskast mist', soort: 'exact',
+                    bron: 'Massabalans op droge lucht: x_m = Σ(m × x) / Σm en h_m = Σ(m × h) / Σm · T_m = (h_m − 2.501 × x_m) / (1,006 + 1,86 × x_m)',
+                    velden: [
+                        { k: 'Q1', label: 'Stroom 1: debiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], std: 200, min: 0 },
+                        { k: 'T1', label: 'Stroom 1: temperatuur', eh: '°C', std: -5, min: -40, max: 80 },
+                        { k: 'rv1', label: 'Stroom 1: relatieve vochtigheid', eh: '%', std: 85, min: 1, max: 100 },
+                        { k: 'Q2', label: 'Stroom 2: debiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], std: 400, min: 0 },
+                        { k: 'T2', label: 'Stroom 2: temperatuur', eh: '°C', std: 21, min: -40, max: 80 },
+                        { k: 'rv2', label: 'Stroom 2: relatieve vochtigheid', eh: '%', std: 45, min: 1, max: 100 }
+                    ],
+                    bereken: function (v, h) {
+                        if (!(v.Q1 + v.Q2 > 0)) return { fout: 'Minstens één debiet moet groter zijn dan 0' };
+                        var a = lucht(v.T1, v.rv1, 1013), b = lucht(v.T2, v.rv2, 1013);
+                        var m1 = a.rho * v.Q1 / (1 + a.x), m2 = b.rho * v.Q2 / (1 + b.x), m = m1 + m2;
+                        var x = (m1 * a.x + m2 * b.x) / m, hm = (m1 * a.h + m2 * b.h) / m, T = (hm - 2501 * x) / (1.006 + 1.86 * x);
+                        var pv = x * 1013 / (0.622 + x), rv = pv / pws(T) * 100, waarsch = [];
+                        if (rv > 100) waarsch.push('Het mengpunt ligt boven de verzadigingslijn: er ontstaat mist of condens in de mengkast. Verwarm de buitenlucht voor.');
+                        return {
+                            uit: [h.uit('Temperatuur na het mengen', T, '°C', { dec: 1, hoofd: true }), h.uit('Relatieve vochtigheid', Math.min(rv, 100), '%', { dec: 0, hoofd: true, kleur: rv > 100 ? 'rood' : '' }), h.uit('Vochtgehalte', x * 1000, 'g/kg', { dec: 2 }), h.uit('Enthalpie', hm, 'kJ/kg', { dec: 1 }), h.uit('Totaal debiet', v.Q1 + v.Q2, 'm³/h', { dec: 0 }), h.uit('Aandeel van stroom 1', m1 / m * 100, '%', { dec: 0 })],
+                            stappen: ['Stroom 1: x = ' + h.fmt(a.x * 1000, 2) + ' g/kg, h = ' + h.f(a.h, 1, 'kJ/kg'), 'Stroom 2: x = ' + h.fmt(b.x * 1000, 2) + ' g/kg, h = ' + h.f(b.h, 1, 'kJ/kg'), 'Mengsel: x = ' + h.fmt(x * 1000, 2) + ' g/kg, h = ' + h.f(hm, 1, 'kJ/kg')],
+                            waarsch: waarsch
+                        };
+                    }
+                },
+                {
+                    id: 'vent.luchtvermogen', naam: 'Lucht verwarmen of koelen', kort: 'Vermogen van een batterij uit debiet en temperaturen, met ontvochtiging',
+                    zoek: 'lucht verwarmen koelen batterij verwarmingsbatterij koelbatterij naverwarmer vermogen debiet temperatuur ontvochtigen latent voelbaar luchtgordijn', soort: 'exact',
+                    bron: 'Voelbaar: P = 0,34 × Q × ΔT [W, m³/h, K] · totaal: P = m × (h₂ − h₁) met m de massa droge lucht · condens = m × (x₁ − x₂) · waterzijdig: Q_w = P / (1,163 × ΔT_water)',
+                    uitleg: 'Zonder vochtigheid rekent de tool enkel de voelbare warmte. Vul bij koelen de relatieve vochtigheid voor en na de batterij in: dan komt de ontvochtiging erbij.',
+                    velden: [
+                        { k: 'Q', label: 'Luchtdebiet', eh: 'm³/h', ehs: ['m³/h', 'l/s'], min: 0 },
+                        { k: 'T1', label: 'Temperatuur voor de batterij', eh: '°C', std: -8, min: -40, max: 80 },
+                        { k: 'T2', label: 'Temperatuur na de batterij', eh: '°C', std: 20, min: -40, max: 80 },
+                        { k: 'rv1', label: 'Relatieve vochtigheid voor', eh: '%', opt: true, min: 1, max: 100 },
+                        { k: 'rv2', label: 'Relatieve vochtigheid na', eh: '%', opt: true, min: 1, max: 100 },
+                        { k: 'dTw', label: 'ΔT aan de waterzijde', eh: 'K', std: 20, min: 1, snel: [{ t: 'Verwarmen 20', v: 20 }, { t: 'Warmtepomp 5', v: 5 }, { t: 'Koelen 5', v: 5 }] }
+                    ],
+                    bereken: function (v, h) {
+                        var Ps = L.wh_m3_K * v.Q * (v.T2 - v.T1) / 1000, koelen = v.T2 < v.T1;
+                        var uit = [h.uit(koelen ? 'Voelbaar koelvermogen' : 'Verwarmingsvermogen', Math.abs(Ps), 'kW', { dec: 2, hoofd: true })];
+                        var st = ['P = 0,34 × ' + h.f(v.Q, 0) + ' × (' + h.f(v.T2, 1) + ' − ' + h.f(v.T1, 1) + ') = ' + h.f(Ps * 1000, 0, 'W')], P = Math.abs(Ps);
+                        if (v.rv1 != null && v.rv2 != null) {
+                            var a = lucht(v.T1, v.rv1, 1013), b = lucht(v.T2, v.rv2, 1013), m = a.rho * v.Q / 3600 / (1 + a.x);
+                            var Pt = m * (b.h - a.h), water = m * (a.x - b.x) * 3600;
+                            P = Math.abs(Pt);
+                            uit.push(h.uit('Totaal vermogen (met vocht)', P, 'kW', { dec: 2, hoofd: true }), h.uit('Latent deel', Math.abs(Pt - Ps), 'kW', { dec: 2 }), h.uit(water >= 0 ? 'Condenswater' : 'Toe te voegen vocht', Math.abs(water), 'l/h', { dec: 2 }));
+                            st.push('h₁ = ' + h.fmt(a.h, 1) + ' en h₂ = ' + h.f(b.h, 1, 'kJ/kg') + ', m = ' + h.f(m, 3, 'kg/s'), 'P = ' + h.fmt(m, 3) + ' × (' + h.fmt(b.h, 1) + ' − ' + h.fmt(a.h, 1) + ') = ' + h.f(Pt, 2, 'kW'));
+                        }
+                        uit.push(h.uit('Waterdebiet door de batterij', P * 1000 / (R.WATER.wh_l_K * v.dTw), 'l/h', { dec: 0, opm: 'bij ΔT ' + h.fmt(v.dTw, 0) + ' K' }));
+                        return { uit: uit, stappen: st };
                     }
                 }
             ] }

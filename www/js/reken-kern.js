@@ -1,4 +1,4 @@
-/* QE Rekenmachine — rekenmotor (v408, 28 sep 2026)
+/* QE Rekenmachine — rekenmotor (v408, 28 sep 2026; v411: eenheden voor vacuüm, aanhaalmoment, kracht en Kv/Cv)
  *
  * BRON = QE-Software/reken-kern.js. De kopie in Werkbon_v2_Debug_Updates/www/js/
  * wordt gemaakt met `node sync-reken.js` (projectroot). Nooit de kopie bewerken.
@@ -27,7 +27,7 @@
     var FAMILIES = {
         vermogen: { basis: 'W', naam: 'Vermogen', e: { 'W': 1, 'kW': 1000, 'MW': 1e6, 'kcal/h': 1.163, 'BTU/h': 0.29307107, 'pk': 735.49875, 'ton koeling': 3516.853 } },
         energie: { basis: 'kWh', naam: 'Energie', e: { 'kWh': 1, 'Wh': 0.001, 'MWh': 1000, 'J': 1 / 3.6e6, 'kJ': 1 / 3600, 'MJ': 1 / 3.6, 'GJ': 1000 / 3.6, 'kcal': 0.001163, 'BTU': 0.00029307107, 'therm': 29.3071 } },
-        druk: { basis: 'Pa', naam: 'Druk', e: { 'Pa': 1, 'kPa': 1000, 'MPa': 1e6, 'bar': 1e5, 'mbar': 100, 'hPa': 100, 'psi': 6894.757, 'mWK': 9806.65, 'cmWK': 98.0665, 'mmWK': 9.80665, 'atm': 101325, 'kg/cm²': 98066.5, 'mmHg': 133.322, 'inH₂O': 249.089 } },
+        druk: { basis: 'Pa', naam: 'Druk', e: { 'Pa': 1, 'kPa': 1000, 'MPa': 1e6, 'bar': 1e5, 'mbar': 100, 'hPa': 100, 'psi': 6894.757, 'mWK': 9806.65, 'cmWK': 98.0665, 'mmWK': 9.80665, 'atm': 101325, 'kg/cm²': 98066.5, 'mmHg': 133.322, 'inH₂O': 249.089, 'Torr': 133.322, 'micron': 0.133322 } },
         debiet: { basis: 'm³/h', naam: 'Debiet', e: { 'm³/h': 1, 'l/h': 0.001, 'l/min': 0.06, 'l/s': 3.6, 'm³/s': 3600, 'm³/min': 60, 'cfm': 1.699011, 'gal/min (US)': 0.2271247, 'gal/min (UK)': 0.2727654 } },
         lengte: { basis: 'm', naam: 'Lengte', e: { 'm': 1, 'mm': 0.001, 'cm': 0.01, 'dm': 0.1, 'km': 1000, 'inch': 0.0254, 'ft': 0.3048, 'yd': 0.9144, 'mijl': 1609.344 } },
         oppervlakte: { basis: 'm²', naam: 'Oppervlakte', e: { 'm²': 1, 'mm²': 1e-6, 'cm²': 1e-4, 'dm²': 0.01, 'are': 100, 'ha': 10000, 'km²': 1e6, 'ft²': 0.09290304, 'inch²': 0.00064516 } },
@@ -43,6 +43,9 @@
         dichtheid: { basis: 'kg/m³', naam: 'Dichtheid', e: { 'kg/m³': 1, 'g/cm³': 1000, 'kg/l': 1000, 'lb/ft³': 16.01846 } },
         lichtstroom: { basis: 'lm', naam: 'Lichtstroom', e: { 'lm': 1, 'klm': 1000 } },
         verlichting: { basis: 'lux', naam: 'Verlichtingssterkte', e: { 'lux': 1, 'fc': 10.76391 } },
+        koppel: { basis: 'N·m', naam: 'Aanhaalmoment', e: { 'N·m': 1, 'cN·m': 0.01, 'kgf·m': 9.80665, 'kgf·cm': 0.0980665, 'lbf·ft': 1.3558179, 'lbf·in': 0.1129848 } },
+        kracht: { basis: 'N', naam: 'Kracht', e: { 'N': 1, 'daN': 10, 'kN': 1000, 'kgf': 9.80665, 'lbf': 4.4482216 } },
+        doorstroom: { basis: 'Kv (m³/h)', naam: 'Kv en Cv', e: { 'Kv (m³/h)': 1, 'Kv (l/min)': 0.06, 'Cv (US gpm)': 0.865 } },
         hardheid: { basis: '°fH', naam: 'Waterhardheid', e: { '°fH': 1, '°dH': 1.7848, '°e': 1.4285, 'mg/l CaCO₃': 0.1, 'mmol/l': 10, 'ppm CaCO₃': 0.1 } },
         temperatuur: { basis: '°C', naam: 'Temperatuur', e: { '°C': 1, 'K': 1, '°F': 1 }, speciaal: true },
         tempverschil: { basis: 'K', naam: 'Temperatuurverschil', e: { 'K': 1, '°C': 1, '°F': 5 / 9 } }
@@ -240,10 +243,12 @@
         return { v: v, fouten: fouten, ontbreekt: ontbreekt };
     }
 
+    // Vaste spatie tussen getal en eenheid. Bewust niet de smalle (U+202F): die is in Archivo 0,1 em breed en lijkt dan weggevallen.
+    var NB = String.fromCharCode(160);
     var helpers = {
         fmt: fmt, getal: getal, rond: rond, conv: conv, omhoogNaar: omhoogNaar, omlaagNaar: omlaagNaar, interp: interp,
         uit: function (label, w, e, o) { o = o || {}; return { label: label, w: w, e: e || '', dec: o.dec, hoofd: !!o.hoofd, opm: o.opm || '', kleur: o.kleur || '' }; },
-        f: function (n, dec, e) { return fmt(n, dec) + (e ? ' ' + e : ''); }
+        f: function (n, dec, e) { return fmt(n, dec) + (e ? NB + e : ''); }
     };
 
     function reken(id, ruw) {
