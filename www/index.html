@@ -353,7 +353,7 @@
             <!-- Stap 3: zone (auto-detectie + manueel zoeken) -->
             <div id="onderhoudStep3" style="display:none">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudBack(2)" style="padding:4px 8px;font-size:12px">← Terug</button>
+                    <button class="btn btn-outline btn-sm" onclick="app.onderhoudTerug()" style="padding:4px 8px;font-size:12px">← Terug</button>
                     <span id="onderhoudSizeLabel" style="font-size:13px;font-weight:500"></span>
                 </div>
 
@@ -385,6 +385,9 @@
 
             <!-- Resultaat + toevoegen knop -->
             <div id="onderhoudResult" style="display:none">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                    <button class="btn btn-outline btn-sm" id="onderhoudResultTerug" onclick="app.onderhoudTerug()" style="padding:4px 8px;font-size:12px">← Terug</button>
+                </div>
                 <div id="onderhoudResultInfo" style="padding:10px 12px;background:var(--qe-light);border-radius:8px;margin-bottom:8px;font-size:13px;border-left:3px solid var(--qe-green)"></div>
                 <button class="btn btn-primary btn-full btn-sm" onclick="app.onderhoudAddToMaterials()">✓ Toevoegen aan materialen</button>
             </div>

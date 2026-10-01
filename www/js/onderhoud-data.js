@@ -159,6 +159,15 @@ window.ONDERHOUD_DATA = {
             ]
         },
         {
+            // v413: zonneboiler (vraag Levi 1 okt 2026) — één vast artikel, geen zone of vermogen
+            key: 'zonneboiler',
+            label: 'Zonneboiler',
+            icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>',
+            sizes: [
+                { label: 'Controle zonnesysteem', single: true, articleId: 20485, price: 100 }
+            ]
+        },
+        {
             key: 'overig',
             label: 'Overig',
             icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M15.5 5.5a3.5 3.5 0 0 0-4.4 4.4l-5.3 5.3a1.5 1.5 0 1 0 2.1 2.1l5.3-5.3a3.5 3.5 0 0 0 4.4-4.4L15.2 9 13 8.8 12.8 6.6z"/></svg>',
@@ -184,6 +193,7 @@ window.ONDERHOUD_DATA = {
                 { id: 'g6', text: 'Expansievat druk gecontroleerd' },
                 { id: 'g7', text: 'Waterdruk installatie gecontroleerd' },
                 { id: 'g8', text: 'Rookgasanalyse uitgevoerd (CO, CO2, rendement)' },
+                { id: 'g11', text: 'Gasblok bijgeregeld of afgesteld' },   // v413 (vraag Levi); nieuwe id, de oude blijven
                 { id: 'g9', text: 'Veiligheidsklep gecontroleerd' },
                 { id: 'g10', text: 'Toestel opnieuw in bedrijf gesteld en getest' },
             ]
@@ -249,8 +259,13 @@ window.ONDERHOUD_DATA = {
         for (const [key, cl] of Object.entries(this.CHECKLISTS)) {
             if (cl.keywords.some(kw => s.includes(kw))) return key;
         }
-        // Fallback: als het woord "onderhoud" erin zit, gebruik gasketel als standaard
-        if (s.includes('onderhoud')) return 'gasketel';
+        // Fallback: als het woord "onderhoud" erin zit, gebruik gasketel als standaard.
+        // v413: niet voor een job over enkel een zonneboiler ("O-Zonneboiler … onderhoud" kreeg
+        // zo de gasketel-lijst); staat er ook gas in de titel, dan wel.
+        if (s.includes('onderhoud')) {
+            if (/zonne ?boiler|zonne ?systeem|zonnecollector/.test(s) && !/\bgas/.test(s)) return null;
+            return 'gasketel';
+        }
         return null;
     },
 

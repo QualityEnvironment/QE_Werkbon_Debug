@@ -4675,6 +4675,13 @@ const app = {
         if (!cat) return;
         this._ohCatIdx = catIdx;
 
+        // v413: één vast artikel (bv. Zonneboiler) → meteen het resultaat, zonder tussenstap
+        if (cat.sizes.length === 1 && cat.sizes[0].single) {
+            document.getElementById('onderhoudStep1').style.display = 'none';
+            this.onderhoudPickSize(0);
+            return;
+        }
+
         // Als er maar 1 size is en die is NIET single, skip stap 2
         if (cat.sizes.length === 1 && !cat.sizes[0].single) {
             this._ohSizeIdx = 0;
@@ -4707,13 +4714,14 @@ const app = {
             // Geen zone nodig — direct resultaat tonen
             this._ohArticle = {
                 id: size.articleId,
-                name: `Onderhoud ${cat.label} ${size.label}`,
+                // v413: categorie met één artikel → de artikelnaam zelf ("Controle zonnesysteem")
+                name: cat.sizes.length === 1 ? size.label : `Onderhoud ${cat.label} ${size.label}`,
                 salePrice: size.price,
                 unitPrice: size.price,
                 unit: 'stuk'
             };
             const info = document.getElementById('onderhoudResultInfo');
-            info.innerHTML = `<strong>${this.escapeHtml(this._ohArticle.name)}</strong>` +
+            info.innerHTML = `<strong id="onderhoudResultNaam">${this.escapeHtml(this._ohArticle.name)}</strong>` +
                 `<br><span class="monteur-hide">Prijs: <span id="onderhoudResultPrice">${size.price ? this.formatPrice(size.price) : '…'}</span></span>`;
             document.getElementById('onderhoudStep2').style.display = 'none';
             document.getElementById('onderhoudResult').style.display = '';
@@ -4802,7 +4810,7 @@ const app = {
         };
         const verpl = ONDERHOUD_DATA.ZONE_VERPLAATSING[zone] || '?';
         const info = document.getElementById('onderhoudResultInfo');
-        info.innerHTML = `<strong>${this.escapeHtml(this._ohArticle.name)}</strong>` +
+        info.innerHTML = `<strong id="onderhoudResultNaam">${this.escapeHtml(this._ohArticle.name)}</strong>` +
             `<br><span style="font-size:12px;color:var(--qe-grey)">Zone ${zone} — verplaatsing €${verpl}</span>` +
             `<br><span class="monteur-hide">Prijs: <span id="onderhoudResultPrice">${zoneData.price ? this.formatPrice(zoneData.price) : '…'}</span></span>`;
         document.getElementById('onderhoudStep3').style.display = 'none';
@@ -4817,6 +4825,25 @@ const app = {
         document.getElementById('onderhoudStep3').style.display = 'none';
         document.getElementById('onderhoudResult').style.display = 'none';
         this._ohArticle = null;
+    },
+
+    // v413: "← Terug" in stap 3 en in het resultaat → de stap die echt getoond werd.
+    // Een categorie met één keuze (Gaskachel, Zonneboiler) slaat stap 2 over: daar gaat
+    // Terug meteen naar stap 1 (vroeger toonde de Terug van stap 3 dan een lege stap 2).
+    onderhoudTerug() {
+        const cat = ONDERHOUD_DATA.CATEGORIES[this._ohCatIdx];
+        const size = cat ? cat.sizes[this._ohSizeIdx] : null;
+        const res = document.getElementById('onderhoudResult');
+        const inResultaat = !!(res && res.style.display !== 'none');
+        this._ohArticle = null;
+        this._ohPricePromise = null;
+        if (inResultaat && cat && size && !size.single) {
+            this._ohZone = null;
+            this._ohShowStep3(cat, size);
+            return;
+        }
+        if (cat && cat.sizes.length > 1) { this.onderhoudPickCat(this._ohCatIdx); return; }
+        this.onderhoudBack(1);
     },
 
     async onderhoudAddToMaterials() {
@@ -4874,6 +4901,9 @@ const app = {
             this._ohArticle.unitPrice = res.article.salePrice;
             // Robaws-naam is de waarheid (maakt verkeerde id-mappings zichtbaar)
             if (res.article.name) this._ohArticle.name = res.article.name;
+            // v413: de Robaws-naam ook op het scherm (zo staat er wat er toegevoegd wordt)
+            const naamEl = document.getElementById('onderhoudResultNaam');
+            if (naamEl && res.article.name) naamEl.textContent = res.article.name;
             if (el) el.textContent = this.formatPrice(res.article.salePrice);
         } else {
             this._ohLiveOk = false;
