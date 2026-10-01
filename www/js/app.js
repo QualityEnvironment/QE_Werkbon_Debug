@@ -14730,25 +14730,32 @@ const app = {
                     } else { log('PDF-download gaf niets terug'); }
                 } catch (e) { log('PDF-download MISLUKT: ' + ((e && e.message) || '?')); }
             } else { log('geen document aan deze factuur gekoppeld'); }
-            const uniq = (re) => Array.from(new Set((text.match(re) || []).map(m => m.toUpperCase().replace(/[\s-]/g, ''))));
+            // v414 (vraag Levi 1 okt): alleen nog EXACTE nummers, net als de
+            // automation in de Worker (v467). Een nummer = P of R + precies 6
+            // cijfers, zonder letter of cijfer ervoor of erna en zonder spatie
+            // ertussen, en het moet in Robaws letterlijk zo bestaan. De
+            // naamherkenning van v340 is weg: ze stelde o.a. "bjorn wintraecken"
+            // (P260060) voor bij elke bestelling van Bjorn, omdat zijn naam als
+            // besteller op de factuur staat. Meerdere nummers → elk een voorstel.
+            const nummers = (letter) => {
+                const re = letter === 'P' ? /(^|[^A-Za-z0-9])[Pp](\d{6})(?![A-Za-z0-9])/g : /(^|[^A-Za-z0-9])[Rr](\d{6})(?![A-Za-z0-9])/g;
+                const uit = []; let m;
+                while ((m = re.exec(text))) { const nr = letter + m[2]; if (!uit.includes(nr)) uit.push(nr); }
+                return uit.slice(0, 4);
+            };
             const suggestions = [];
             if (needProject) {
-                for (const c of uniq(/\bP\s?-?\s?\d{6}\b/gi)) {
+                for (const c of nummers('P')) {
                     const proj = await RobawsAPI.getProjectByLogicId(c);
-                    if (proj) { suggestions.push({ kind: 'project', id: proj.id, logicId: proj.logicId, name: proj.name }); break; }
+                    if (proj) suggestions.push({ kind: 'project', id: proj.id, logicId: proj.logicId, name: proj.name });
+                    else log('nummer ' + c + ' staat op de factuur maar bestaat niet als project');
                 }
-                // v340: geen P-nummer gevonden → PROJECTNAAM herkennen
-                if (!suggestions.some(s => s.kind === 'project')) {
-                    const hit = await this._matchProjectNaam(text);
-                    log(hit ? 'projectnaam herkend: "' + hit.name + '" (' + hit.logicId + ')'
-                            : 'geen projectnaam herkend in ' + text.length + ' tekens tekst');
-                    if (hit) suggestions.push({ kind: 'project', id: hit.id, logicId: hit.logicId, name: hit.name, via: 'naam' });
-                }
+                if (!suggestions.length) log('geen bestaand projectnummer (P + 6 cijfers) op de factuur');
             }
             if (needOrder) {
-                for (const c of uniq(/\bR\s?-?\s?\d{6}\b/gi)) {
+                for (const c of nummers('R')) {
                     const ord = await RobawsAPI.getSalesOrderByLogicId(c);
-                    if (ord) { suggestions.push({ kind: 'order', id: ord.id, logicId: ord.logicId, name: ord.name }); break; }
+                    if (ord) suggestions.push({ kind: 'order', id: ord.id, logicId: ord.logicId, name: ord.name });
                 }
             }
             if (suggestions.length) {
@@ -14759,45 +14766,12 @@ const app = {
                 const host = document.getElementById('factuurRefSuggest');
                 if (host && this._factuurInvoiceId === String(invoiceId)) {
                     host.innerHTML = '<div style="font-size:11.5px;color:var(--qe-grey);margin:-4px 0 12px;text-align:center">' +
-                        '🔍 Geen project of order herkend op de factuur</div>';
+                        '🔍 Geen projectnummer (P + 6 cijfers) of ordernummer (R + 6 cijfers) op de factuur</div>';
                 }
             }
         } catch (e) {
             log('scan-FOUT: ' + ((e && e.message) || e));
         }
-    },
-
-    /** v340: projectnaam herkennen in factuurtekst. Bewust streng —
-     *  boekhouding verdraagt geen gok: (a) de volledige genormaliseerde
-     *  naam komt voor als doorlopende tekst, of (b) álle betekenis-
-     *  woorden van de naam (≥4 tekens, geen stopwoord) staan erin.
-     *  Korte/vage namen (<10 tekens of <2 woorden) doen nooit mee.
-     *  Bij meerdere hits wint de langste (meest specifieke) naam. */
-    async _matchProjectNaam(ruweTekst) {
-        const norm = (s) => String(s || '').toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '')
-            .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
-        const STOP = new Set(['deel', 'fase', 'lot', 'blok', 'gebouw', 'nieuwbouw', 'renovatie',
-            'verbouwing', 'project', 'werf', 'school', 'kerk', 'straat', 'laan', 'plein']);
-        const tekst = ' ' + norm(ruweTekst) + ' ';
-        if (tekst.length < 12) return null;
-        let projecten = [];
-        try { projecten = await RobawsAPI.getAllProjectsLite(); } catch (_e) { return null; }
-        const hits = [];
-        for (const p of projecten) {
-            const n = norm(p.name);
-            if (n.length < 10) continue;
-            const woorden = n.split(' ').filter(w => w.length >= 4 && !STOP.has(w));
-            if (n.split(' ').length < 2) continue;
-            if (tekst.includes(' ' + n + ' ') || tekst.includes(n)) {
-                hits.push({ p, score: n.length + 100 });      // volledige naam = sterkst
-            } else if (woorden.length >= 2 && woorden.every(w => tekst.includes(w))) {
-                hits.push({ p, score: woorden.join('').length });
-            }
-        }
-        if (!hits.length) return null;
-        hits.sort((a, b) => b.score - a.score);
-        return hits[0].p;
     },
 
     _showRefSuggestion(invoiceId, suggestions) {
@@ -14808,11 +14782,8 @@ const app = {
         const rows = suggestions.map((s, i) => {
             const noun = s.kind === 'order' ? 'verkooporder' : 'project';
             const naam = (s.name || '').trim();
-            // v340: naam-herkenning heeft een eigen boodschap — er stond geen
-            // P-nummer op de factuur, de wérfnaam is herkend.
-            const kop = s.via === 'naam'
-                ? `📎 Projectnaam <b>${this.escapeHtml(naam)}</b> (${this.escapeHtml(s.logicId)}) herkend op de factuur.`
-                : `📎 Referentie <b>${this.escapeHtml(s.logicId)}</b> gevonden in de PDF${naam ? (' → ' + noun + ' <b>' + this.escapeHtml(naam) + '</b>') : ''}.`;
+            // v414: alleen nog exacte nummers (zie _suggestLinksFromPdf)
+            const kop = `📎 ${s.kind === 'order' ? 'Ordernummer' : 'Projectnummer'} <b>${this.escapeHtml(s.logicId)}</b> staat op de factuur${naam ? (' → ' + noun + ' <b>' + this.escapeHtml(naam) + '</b>') : ''}.`;
             return `<div style="font-size:12.5px;color:var(--ink,#1A237E);line-height:1.4${i ? ';margin-top:12px' : ''}">${kop}</div>
             <button class="btn btn-primary btn-sm btn-full" style="margin-top:8px" onclick="app.applyRefSuggestion(${i})">Koppel alle lijnen aan ${this.escapeHtml(s.logicId)}</button>`;
         }).join('');
