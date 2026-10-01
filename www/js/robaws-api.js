@@ -2906,32 +2906,138 @@ const RobawsAPI = {
         }
     },
 
-    // Document downloaden (retourneert { blobUrl, contentType })
-    // Gebruikt de Android native bridge (Java HTTP) om Robaws login redirect te omzeilen.
+    // Document downloaden (retourneert { blobUrl, contentType, blob })
+    // Eerst de Android native bridge (Java HTTP, oude bewezen route); v412: lukt die
+    // niet of bestaat ze niet, dan rechtstreeks ophalen met de sleutel (zie _docFetch).
     async getDocumentUrl(documentId) {
-        if (typeof QEBridge !== 'undefined' && QEBridge.downloadRobawsDocument) {
-            try {
-                const result = QEBridge.downloadRobawsDocument(
-                    String(documentId), this._authPair().key, this._authPair().secret, this.TENANT
-                );
-                if (result && result.length > 0) {
-                    // Format: "contentType|base64data"
-                    const pipeIdx = result.indexOf('|');
-                    const contentType = pipeIdx > 0 ? result.substring(0, pipeIdx) : 'application/octet-stream';
-                    const base64 = pipeIdx > 0 ? result.substring(pipeIdx + 1) : result;
-
-                    const binary = atob(base64);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    const blob = new Blob([bytes], { type: contentType });
-                    return { blobUrl: URL.createObjectURL(blob), contentType, blob };
-                }
-            } catch(e) {
-                console.warn('[RobawsAPI] Native download mislukt:', e);
-            }
+        try {
+            const r = this._docViaBrug(documentId);
+            if (r) return { blobUrl: URL.createObjectURL(r.blob), contentType: r.contentType, blob: r.blob };
+        } catch (e) {
+            console.warn('[RobawsAPI] Native download mislukt:', e);
         }
-
+        try {
+            const r = await this._docFetch(documentId, false);
+            return { blobUrl: URL.createObjectURL(r.blob), contentType: r.contentType, blob: r.blob };
+        } catch (e) {
+            console.warn('[RobawsAPI] Document ophalen mislukt:', e && e.message);
+        }
         throw new Error('Kon document niet downloaden');
+    },
+
+    // =============================================
+    // v412: AFBEELDINGEN EN BIJLAGEN VAN DE DAGPLANNING
+    // Gemeten 1 okt 2026 (alleen lezen, 2005 dagplanningen mei-okt):
+    //  - Een in de omschrijving (Detail) geplakte afbeelding staat er als
+    //    <img data-robaws-id="<uuid>" src="https://robaws.s3.eu-west-3.amazonaws.com/…?X-Amz-…">.
+    //    Robaws tekent die link BIJ ELKE LEZING opnieuw (X-Amz-Date = leesmoment) en hij
+    //    blijft 24 u geldig (X-Amz-Expires=86400). Zonder headers: 200 + de afbeelding.
+    //    MET een Authorization-header: 400 (S3 weigert twee aanmeldingen). data-robaws-id
+    //    is GEEN document-id (documents/<uuid> = 404).
+    //  - Bijlagen: planning-items/{id}/documents = kale array {id, name, contentType, size,
+    //    url, previewUrl, directory, …}. url = app.robaws.com/documents/{id}?inline=…,
+    //    previewUrl = …/documents/{id}/preview (verkleinde JPEG: 946 KB → 246 KB). Zonder
+    //    sleutel 302 naar /login, MET de Basic-sleutel 200 (ook met webview-headers).
+    //  - Robaws stuurt nergens Access-Control-Allow-Origin, ook de API niet: de app werkt
+    //    omdat de APK "universal access" vanaf file:// aanzet. Dezelfde fetch werkt dus hier.
+    // =============================================
+    DOC_WEB_BASIS: 'https://app.robaws.com/documents/',
+    _docBlobCache: {},
+    _docBlobVolgorde: [],
+    _DOC_CACHE_MAX: 30,
+    _DOC_CACHE_BYTES: 40 * 1024 * 1024,
+
+    /** Native brug (synchroon; blokkeert de webview tijdens het downloaden). null = geen brug of niets terug. */
+    _docViaBrug(documentId) {
+        if (typeof QEBridge === 'undefined' || !QEBridge.downloadRobawsDocument) return null;
+        const ap = this._authPair();
+        const result = QEBridge.downloadRobawsDocument(String(documentId), ap.key, ap.secret, this.TENANT);
+        if (!result || !result.length) return null;
+        // Formaat: "contentType|base64data"
+        const pipeIdx = result.indexOf('|');
+        const contentType = pipeIdx > 0 ? result.substring(0, pipeIdx) : 'application/octet-stream';
+        const base64 = pipeIdx > 0 ? result.substring(pipeIdx + 1) : result;
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return { blob: new Blob([bytes], { type: contentType }), contentType };
+    },
+
+    /** Asynchroon ophalen met de sleutel (bevriest het scherm niet). preview = verkleinde JPEG. */
+    async _docFetch(documentId, preview, timeoutMs) {
+        const ap = this._authPair();
+        const url = this.DOC_WEB_BASIS + encodeURIComponent(String(documentId)) + (preview ? '/preview' : '?inline=true');
+        const res = await this._fetchWithTimeout(url, {
+            headers: { 'Authorization': 'Basic ' + btoa(ap.key + ':' + ap.secret), 'X-Tenant': this.TENANT },
+        }, timeoutMs || (preview ? 20000 : 60000));
+        if (!res.ok) { const e = new Error('Robaws gaf HTTP ' + res.status); e.code = res.status; throw e; }
+        const ct = String((res.headers && res.headers.get && res.headers.get('content-type')) || '').split(';')[0].trim().toLowerCase();
+        // een doorverwijzing naar het aanmeldscherm komt als HTML terug
+        if (ct.indexOf('text/html') === 0) { const e = new Error('Robaws vroeg om aan te melden'); e.code = 'AANMELDEN'; throw e; }
+        const blob = await res.blob();
+        if (!blob || !blob.size) throw new Error('Leeg bestand');
+        return { blob, contentType: ct || blob.type || 'application/octet-stream' };
+    },
+
+    /**
+     * v412: bijlage als blob, met een kleine cache in het geheugen (30 stuks / 40 MB).
+     * opts.preview = verkleinde versie (duimnagel) — zonder terugval op de native brug,
+     * want die haalt altijd het volledige bestand en bevriest dan het scherm.
+     * Volledig bestand: eerst asynchroon, anders de native brug.
+     */
+    async documentBlob(documentId, opts) {
+        opts = opts || {};
+        const preview = !!opts.preview;
+        const sleutel = String(documentId) + (preview ? '|p' : '');
+        if (this._docBlobCache[sleutel]) return this._docBlobCache[sleutel];
+        let r = null, fout = null;
+        try { r = await this._docFetch(documentId, preview, opts.timeoutMs); } catch (e) { fout = e; }
+        if (!r && !preview) {
+            try { r = this._docViaBrug(documentId); } catch (e) { fout = fout || e; }
+        }
+        if (!r) throw (fout || new Error('Kon het bestand niet ophalen'));
+        this._docCacheZet(sleutel, r);
+        return r;
+    },
+    _docCacheZet(sleutel, r) {
+        this._docBlobCache[sleutel] = r;
+        this._docBlobVolgorde = this._docBlobVolgorde.filter(k => k !== sleutel).concat([sleutel]);
+        const grootte = (k) => (this._docBlobCache[k] && this._docBlobCache[k].blob && this._docBlobCache[k].blob.size) || 0;
+        let totaal = this._docBlobVolgorde.reduce((s, k) => s + grootte(k), 0);
+        while (this._docBlobVolgorde.length > 1 &&
+               (this._docBlobVolgorde.length > this._DOC_CACHE_MAX || totaal > this._DOC_CACHE_BYTES)) {
+            const weg = this._docBlobVolgorde.shift();
+            totaal -= grootte(weg);
+            delete this._docBlobCache[weg];
+        }
+    },
+
+    /** v412: is een getekende S3-link uit de omschrijving verlopen (of binnen margeMs)? Onbekend = false. */
+    s3LinkVerlopen(src, margeMs, nu) {
+        try {
+            const u = new URL(String(src || ''));
+            if (!/(^|\.)amazonaws\.com$/i.test(u.hostname)) return false;
+            const d = u.searchParams.get('X-Amz-Date') || '';
+            const exp = parseInt(u.searchParams.get('X-Amz-Expires') || '', 10);
+            const m = d.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+            if (!m || !(exp > 0)) return false;
+            const start = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+            return (nu || Date.now()) > start + exp * 1000 - (margeMs == null ? 120000 : margeMs);
+        } catch (_) { return false; }
+    },
+
+    /** v412: bestandsnaam uit de S3-link (response-content-disposition: filename*=UTF-8''Naamloos.png). */
+    s3Bestandsnaam(src) {
+        const schoon = (n) => String(n || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim().slice(0, 120);
+        try {
+            const u = new URL(String(src || ''));
+            const cd = u.searchParams.get('response-content-disposition') || '';
+            let m = cd.match(/filename\*\s*=\s*[^']*'[^']*'([^;]+)/i);
+            if (m) { let n = m[1].trim(); try { n = decodeURIComponent(n); } catch (_) {} return schoon(n); }
+            m = cd.match(/filename\s*=\s*"?([^";]+)"?/i);
+            if (m) return schoon(m[1]);
+        } catch (_) {}
+        return '';
     },
 
     // =============================================

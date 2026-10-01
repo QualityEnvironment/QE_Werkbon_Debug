@@ -1096,3 +1096,77 @@ body.a11y-cvd-palette {
 .prj-leiderbalk { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .prj-leiderkeuze { flex: 1; min-width: 0; }
 .prj-filterweg { white-space: nowrap; border-radius: 16px; flex-shrink: 0; }
+
+/* =========================================================
+   v412 · AFBEELDINGEN IN DE TAAKOMSCHRIJVING, BIJLAGEN, FOTOVIEWER
+   Geen vh-hoogtes (Marble-les: die klappen in de file://-webview in tot 0).
+   ========================================================= */
+.plan-description img { max-width: 100% !important; height: auto !important; border-radius: 8px; }
+.plan-description .oms-afb { position: relative; display: inline-block; max-width: 100%; margin: 6px 0; line-height: 0;
+    vertical-align: top; cursor: zoom-in; border-radius: 8px; -webkit-tap-highlight-color: transparent; }
+.plan-description .oms-afb img { display: block; margin: 0 !important; border: 1px solid var(--l1); background: var(--card); }
+.plan-description .oms-afb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.plan-description .oms-afb-lupe { position: absolute; right: 8px; bottom: 8px; width: 32px; height: 32px; border-radius: 50%;
+    background: rgba(38,51,75,.78); color: #fff; display: flex; align-items: center; justify-content: center; pointer-events: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.plan-description .oms-afb-mis { display: flex; align-items: center; gap: 10px; width: 100%; margin: 6px 0; padding: 12px 14px;
+    border: 1px dashed var(--b2); border-radius: 10px; background: var(--wash); color: var(--g2); font: 600 13px var(--font);
+    text-align: left; cursor: pointer; line-height: 1.35; }
+.plan-description .oms-afb-mis:disabled { opacity: .55; }
+.oms-afb-chip { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 8px; border-radius: 10px;
+    background: var(--wash); color: var(--g2); font-size: 12px; font-weight: 600; white-space: nowrap; vertical-align: 1px; }
+
+/* bijlagen van de dagplanning */
+#planDocumentsList .pd-alles { margin-bottom: 10px; }
+#planDocumentsList .pd-groep { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--g1);
+    margin: 4px 2px 8px; }
+#planDocumentsList .pd-rij { display: flex; gap: 12px; align-items: flex-start; padding: 12px; margin-bottom: 8px; }
+#planDocumentsList .pd-duim { width: 64px; height: 64px; flex-shrink: 0; border-radius: 10px; border: 1px solid var(--l1);
+    background: var(--wash); color: var(--g1); display: flex; align-items: center; justify-content: center; overflow: hidden;
+    padding: 0; cursor: pointer; }
+#planDocumentsList .pd-duim img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#planDocumentsList .pd-ico { width: 64px; height: 64px; flex-shrink: 0; border-radius: 10px; background: var(--wash); color: var(--g1);
+    display: flex; align-items: center; justify-content: center; }
+#planDocumentsList .pd-info { flex: 1; min-width: 0; }
+#planDocumentsList .pd-naam { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+#planDocumentsList .pd-meta { font-size: 12px; color: var(--g1); margin-top: 1px; }
+#planDocumentsList .pd-knoppen { display: flex; gap: 8px; margin-top: 8px; }
+#planDocumentsList .pd-knoppen .btn { flex: 1 1 0; min-width: 0; padding: 9px 8px; font-size: 13px; display: inline-flex;
+    align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+
+/* fotoviewer (volledig scherm, altijd donker) */
+#afbViewer { position: fixed; inset: 0; z-index: 100001; background: #101114; color: #fff; display: flex; flex-direction: column;
+    font-family: var(--font); }
+#afbViewer .av-kop { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #1b1b1b; flex-shrink: 0; }
+#afbViewer .av-titel { flex: 1; min-width: 0; font: 600 14px var(--font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#afbViewer .av-teller { font-size: 12.5px; color: rgba(255,255,255,.72); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+#afbViewer .av-knop { width: 40px; height: 40px; flex-shrink: 0; border: none; border-radius: 20px; background: rgba(255,255,255,.16);
+    color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+#afbViewer .av-knop:active { background: rgba(255,255,255,.28); }
+#afbViewer .av-midden { flex: 1; min-height: 0; position: relative; }
+#afbViewer .av-scroll { position: absolute; inset: 0; overflow: auto; display: flex; -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y; overscroll-behavior: contain; }
+#afbViewer .av-img { flex: 0 0 auto; margin: auto; display: block; max-width: none !important; max-height: none !important;
+    height: auto; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+#afbViewer .av-scroll.ingezoomd .av-img { cursor: grab; }
+#afbViewer .av-pijl { position: absolute; top: 50%; margin-top: -24px; width: 48px; height: 48px; border-radius: 24px;
+    background: rgba(0,0,0,.5); z-index: 2; }
+#afbViewer .av-links { left: 8px; }
+#afbViewer .av-rechts { right: 8px; }
+#afbViewer .av-status { margin: auto; padding: 24px; text-align: center; font-size: 14px; color: rgba(255,255,255,.86); line-height: 1.45; }
+#afbViewer .av-status small { color: rgba(255,255,255,.6); }
+#afbViewer .av-draai { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%; border: 3px solid rgba(255,255,255,.22);
+    border-top-color: var(--accent); animation: av-draai .9s linear infinite; }
+#afbViewer .av-badge { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); padding: 5px 12px; border-radius: 14px;
+    background: rgba(0,0,0,.6); color: rgba(255,255,255,.9); font-size: 12px; white-space: nowrap; pointer-events: none; z-index: 2; }
+#afbViewer .av-opnieuw { border: none; border-radius: 12px; padding: 11px 18px; background: rgba(255,255,255,.16); color: #fff;
+    font: 600 14px var(--font); cursor: pointer; }
+#afbViewer .av-voet { display: flex; gap: 10px; padding: 12px; background: #1b1b1b; flex-shrink: 0; }
+#afbViewer .av-voet button { flex: 1 1 0; min-width: 0; height: 48px; border: none; border-radius: 12px; font: 600 15px var(--font);
+    display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+#afbViewer .av-dl { background: var(--accent); color: #1b1b1b; }
+#afbViewer .av-dl:disabled { opacity: .55; }
+#afbViewer .av-sluit { background: rgba(255,255,255,.14); color: #fff; }
+@keyframes av-draai { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #afbViewer .av-draai { animation-duration: 2.4s; } }

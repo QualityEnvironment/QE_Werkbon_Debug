@@ -117,11 +117,13 @@
     { slug: 'wo-info', deel: 'Jouw werkdag', kick: 'De werkorder · tabblad 1', titel: 'De werkorder: Info', lead: 'Bovenin de werkorder staan 4 tabbladen: Info · Uren · Materiaal · Foto’s.', blokken: [
         { t: 'stap', n: 1, h: 'Op <b>Info</b> zie je de klant (adres, telefoon) en de <b>installatie</b> waar je voor komt.' },
         { t: 'stap', n: 2, h: 'Staat er een <b>taakomschrijving</b>? Lees die eerst — daar staat wat je moet doen.' },
+        { t: 'tip', h: 'Staan er <b>afbeeldingen</b> in de taakomschrijving of foto’s bij <b>Bestanden</b>? Tik erop om ze groot te bekijken: knijpen of dubbeltikken = inzoomen, vegen = volgende. Met <b>Downloaden</b> bewaar je ze in de map Downloads van je gsm.' },
         { t: 'stap', n: 3, h: 'Onderaan is een vak voor <b>opmerkingen</b>. Schrijf kort op wat je deed of wat de klant zei. Dat komt op de werkbon.' },
         { t: 'tip', h: 'Zie je een paarse knop <b>"Mee te nemen"</b>? Tik erop vóór je vertrekt — daar staat wat je moet meenemen naar deze klant.' },
         { t: 'faq', items: [
             ['Het adres of telefoonnummer klopt niet.', 'Bel het bureau — zij passen het aan in het systeem. Verander zelf niets op de bon.'],
             ['Er staat geen taakomschrijving.', 'Dan zie je aan het soort werk (Onderhoud, Herstelling…) wat de bedoeling is. Twijfel? Bel even.'],
+            ['Een afbeelding laadt niet.', 'Kijk of je internet hebt en tik op <b>Opnieuw proberen</b>. Lukt het nog niet? Vraag het bureel om de afbeelding ook als bestand bij de dagplanning te zetten.'],
             ['Wat schrijf ik in het opmerkingen-vak?', 'Kort en duidelijk: wat je deed, wat je zag, wat de klant vroeg. Bv.: "Ketel onderhouden, brander gereinigd. Klant vraagt offerte nieuwe thermostaat."'],
         ] },
     ] },

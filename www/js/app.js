@@ -174,6 +174,12 @@ const app = {
                     try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
                     return;
                 }
+                // 0a. v412: fotoviewer sluiten + pop compenseren
+                if (document.getElementById('afbViewer')) {
+                    this.sluitAfbViewer();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
                 // 0b. v406: Google-reviewscherm sluiten + pop compenseren
                 if (document.getElementById('reviewQrScherm')) {
                     this.sluitReviewQr();
@@ -2286,7 +2292,12 @@ const app = {
             'droplet': '<path d="M12 4c3 4 5 6.5 5 9a5 5 0 0 1-10 0c0-2.5 2-5 5-9z"/>',
             'bolt': '<path d="M13 3 5 13h6l-1 8 8-10h-6z"/>',
             'wind': '<path d="M3 9h10a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 14h13a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 11.5h7"/>',
-            'book': '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H19v-5"/><path d="M9 7.5h6"/>'
+            'book': '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v14H7.5A2.5 2.5 0 0 0 5 19.5z"/><path d="M5 19.5A2.5 2.5 0 0 0 7.5 22H19v-5"/><path d="M9 7.5h6"/>',
+            'eye': '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+            'zoom-in': '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/>',
+            'zoom-out': '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/>',
+            'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+            'chevron-right': '<path d="m9 18 6-6-6-6"/>'
         };
         return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
     },
@@ -2473,12 +2484,15 @@ const app = {
         }
         if (docRes && docRes.code === 200 && docRes.data) {
             const docs = Array.isArray(docRes.data) ? docRes.data : (docRes.data.items || []);
-            wo.documents = docs.map(d => ({
+            // v412: mappen (directory) horen niet in de lijst; previewUrl = verkleinde versie
+            wo.documents = docs.filter(d => d && !d.directory).map(d => ({
                 id: d.id,
                 name: d.name || 'Bestand',
-                contentType: d.contentType || '',
+                contentType: d.contentType || d.mimeType || '',
                 size: d.size || 0,
                 url: d.url || d.previewUrl || null,
+                previewUrl: d.previewUrl || null,
+                createdAt: d.createdAt || null,
             }));
         }
     },
@@ -2612,7 +2626,7 @@ const app = {
             ${planDescription ? `<div class="info-row">
                 <span class="info-icon">${this.icon('clipboard')}</span>
                 <span class="info-label">Omschrijving</span>
-                <span class="info-value">${planDescription.replace(/<[^>]*>/g, '') || '-'}</span>
+                <span class="info-value">${this._omsKorteTekst(planDescription)}</span>
             </div>` : ''}
 
             <!-- BTW altijd van klant + aanpas-knop direct eronder -->
@@ -2654,23 +2668,9 @@ const app = {
             ` : ''}
         `;
 
-        // Taakomschrijving tonen (detail van dagplanning — HTML uit Robaws)
-        const descSection = document.getElementById('planDescriptionSection');
-        const descCard = document.getElementById('planDescriptionCard');
-        if (planDescription) {
-            descCard.innerHTML = planDescription;
-            descSection.style.display = '';
-            // Inline afbeeldingen zijn niet bereikbaar via de API (403) — verberg ze netjes
-            descCard.querySelectorAll('img').forEach(img => {
-                const src = (img.getAttribute('src') || '').trim();
-                if (!src || img.hasAttribute('data-robaws-id')) {
-                    img.style.display = 'none';
-                }
-                img.onerror = () => { img.style.display = 'none'; };
-            });
-        } else {
-            descSection.style.display = 'none';
-        }
+        // Taakomschrijving tonen (detail van dagplanning — HTML uit Robaws).
+        // v412: geplakte afbeeldingen worden nu getoond (tik = vergroten/downloaden).
+        this._toonTaakomschrijving();
 
         // Planning line-items tonen (mee te nemen materialen — geen prijzen!)
         this._renderPlanLineItems();
@@ -5549,26 +5549,542 @@ const app = {
     },
 
     // Taakomschrijving fullscreen openen in apart scherm
-    openFullDescription() {
+    // v412: alleenVullen = enkel de inhoud hertekenen (na het vernieuwen van verlopen links)
+    openFullDescription(alleenVullen) {
         if (!this.currentWO) return;
         const desc = this.currentWO.description || '';
         if (!desc) return;
 
         const clientName = this.currentWO.client?.name || this.currentWO.summary || '';
-        this.navigate('screenFullDescription');
+        if (!alleenVullen) this.navigate('screenFullDescription');
         document.getElementById('fullDescSubtitle').textContent = clientName;
 
         const content = document.getElementById('fullDescContent');
-        content.innerHTML = desc;
+        // v412: afbeeldingen tonen (tik = vergroten/downloaden) i.p.v. verbergen
+        this._omsZet(content, desc, 'scherm');
+    },
 
-        // Verberg onlaadbare inline afbeeldingen
-        content.querySelectorAll('img').forEach(img => {
+    // =============================================
+    // v412: AFBEELDINGEN IN DE TAAKOMSCHRIJVING
+    // Een in de Detail van de dagplanning geplakte afbeelding staat in de omschrijving als
+    // getekende S3-link: 24 u geldig, bij elke lezing opnieuw getekend (gemeten 1 okt 2026,
+    // zie RobawsAPI.s3LinkVerlopen). Vroeger verborg de app ze (oude aanname: 403). Nu worden
+    // ze getoond; tik = fotoviewer (zoomen, downloaden). Is een link verlopen of laadt een
+    // afbeelding niet, dan leest de app de omschrijving één keer vers; lukt ook dat niet
+    // (geen internet), dan verschijnt een knop "tik om opnieuw te proberen".
+    // =============================================
+    _toonTaakomschrijving() {
+        const wo = this.currentWO;
+        const sec = document.getElementById('planDescriptionSection');
+        const card = document.getElementById('planDescriptionCard');
+        if (!sec || !card) return;
+        const desc = (wo && wo.description) || '';
+        if (!desc) { sec.style.display = 'none'; card.innerHTML = ''; return; }
+        this._omsZet(card, desc, 'kaart');
+        sec.style.display = '';
+    },
+
+    /** Omschrijving in een vak zetten: eerst in een <template> (inert, daar laadt niets) zodat een
+     *  cid:-afbeelding nooit opgevraagd wordt en "lazy" echt lui is; daarna pas in het scherm. */
+    _omsZet(container, desc, waar) {
+        if (!container) return;
+        const tpl = document.createElement('template');
+        if (!tpl.content) { container.innerHTML = desc; this._omsAfbeeldingen(container, waar); return; }
+        tpl.innerHTML = desc;
+        this._omsAfbeeldingen(tpl.content, waar);
+        container.innerHTML = '';
+        container.appendChild(tpl.content);
+    },
+
+    /** Korte tekst voor de info-rij "Omschrijving" + een chip met het aantal afbeeldingen. */
+    _omsKorteTekst(desc) {
+        const s = String(desc || '');
+        const tekst = s.replace(/<[^>]*>/g, '').trim();
+        // alleen afbeeldingen die kunnen laden (een cid:-afbeelding uit een geplakte mail valt weg)
+        const n = (s.match(/<img\b[^>]*?\bsrc\s*=\s*["']?\s*(?:https?:|data:image\/|blob:)/gi) || []).length;
+        const chip = n ? '<span class="oms-afb-chip">' + this.icon('image', { size: 13 }) + ' ' + n + (n === 1 ? ' afbeelding' : ' afbeeldingen') + '</span>' : '';
+        return (tekst || (n ? '' : '-')) + chip;
+    },
+
+    /** Afbeeldingen in een omschrijving klaarzetten: lijst voor de viewer, vergrootglas, foutafhandeling. */
+    _omsAfbeeldingen(container, waar) {
+        if (!container) return;
+        const wo = this.currentWO;
+        const woId = wo ? String(wo.id) : '';
+        const lijst = [];
+        let verlopen = false;
+        Array.from(container.querySelectorAll('img')).forEach((img) => {
             const src = (img.getAttribute('src') || '').trim();
-            if (!src || img.hasAttribute('data-robaws-id')) {
-                img.style.display = 'none';
-            }
-            img.onerror = () => { img.style.display = 'none'; };
+            // leeg, cid: (uit een geplakte mail) of iets anders dat nooit laadt → weg i.p.v. een kapot icoon
+            if (!/^(https?:|data:image\/|blob:)/i.test(src)) { img.remove(); return; }
+            const nr = lijst.length;
+            lijst.push({ soort: 'url', src, naam: this._omsAfbNaam(src, img, nr) });
+            img.removeAttribute('width');
+            img.removeAttribute('height');
+            img.setAttribute('loading', 'lazy');
+            img.setAttribute('decoding', 'async');
+            if (!img.getAttribute('alt')) img.setAttribute('alt', 'Afbeelding ' + (nr + 1) + ' uit de taakomschrijving');
+            const w = document.createElement('span');
+            w.className = 'oms-afb';
+            w.setAttribute('role', 'button');
+            w.setAttribute('tabindex', '0');
+            w.setAttribute('aria-label', 'Afbeelding ' + (nr + 1) + ' vergroten');
+            w.setAttribute('data-nr', String(nr));
+            img.parentNode.insertBefore(w, img);
+            w.appendChild(img);
+            const lupe = document.createElement('span');
+            lupe.className = 'oms-afb-lupe';
+            lupe.innerHTML = this.icon('zoom-in', { size: 17 });
+            w.appendChild(lupe);
+            const open = (e) => {
+                if (e) { e.preventDefault(); e.stopPropagation(); }   // niet ook de kaart openen
+                const l = (this._omsAfb && this._omsAfb.woId === woId) ? this._omsAfb.lijst : lijst;
+                this.openAfbViewer(l, nr, { bron: 'omschrijving' });
+            };
+            w.addEventListener('click', open);
+            w.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+            img.addEventListener('error', () => { this._omsAfbFout(w, woId); }, { once: true });
+            if (RobawsAPI.s3LinkVerlopen(src)) verlopen = true;
         });
+        this._omsAfb = { woId, lijst };
+        // link al (bijna) verlopen (bv. de app stond lang open)? meteen vers lezen
+        if (verlopen) this._omsVernieuw(woId, { stil: true });
+    },
+
+    _omsAfbNaam(src, img, nr) {
+        let naam = '';
+        try { naam = RobawsAPI.s3Bestandsnaam(src); } catch (_) {}
+        if (naam) return naam;
+        const alt = String((img && img.getAttribute('alt')) || '').replace(/[\\/:*?"<>|]+/g, '_').trim().slice(0, 60);
+        const ext = ((/^data:image\/(png|jpe?g|gif|webp)/i.exec(src) || [])[1] || 'png').toLowerCase().replace('jpeg', 'jpg');
+        return (alt || ('Afbeelding ' + (nr + 1))) + '.' + ext;
+    },
+
+    async _omsAfbFout(w, woId) {
+        // eerste fout bij deze werkbon: de omschrijving vers lezen (= vers getekende links)
+        if (await this._omsVernieuw(woId, { stil: true })) return;   // hertekend met nieuwe <img>'s
+        if (!w || !w.isConnected) return;
+        const knop = document.createElement('button');
+        knop.type = 'button';
+        knop.className = 'oms-afb-mis';
+        knop.innerHTML = this.icon('image', { size: 18 }) + '<span>Afbeelding niet geladen — tik om opnieuw te proberen</span>';
+        knop.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            knop.disabled = true;
+            const ok = await this._omsVernieuw(woId, { forceer: true });
+            if (!ok && knop.isConnected) {
+                knop.disabled = false;
+                this.toast('Nog altijd niet gelukt — heb je internet?', true);
+            }
+        });
+        w.replaceWith(knop);
+    },
+
+    /**
+     * Omschrijving van de geopende werkbon vers lezen (1 call) en opnieuw tekenen.
+     * Geeft true terug als er hertekend is. Automatisch hoogstens 1× per 2 min per werkbon
+     * (geen lus bij een afbeelding die echt kapot is); forceer = knop van de gebruiker.
+     */
+    async _omsVernieuw(woId, opts) {
+        opts = opts || {};
+        const wo = this.currentWO;
+        if (!wo || String(wo.id) !== String(woId)) return false;
+        this._omsVernieuwd = this._omsVernieuwd || {};
+        if (this._omsVernieuwBezig) return this._omsVernieuwBezig;
+        const nu = Date.now();
+        if (!opts.forceer && this._omsVernieuwd[woId] && nu - this._omsVernieuwd[woId] < 120000) return false;
+        this._omsVernieuwd[woId] = nu;
+        this._omsVernieuwBezig = (async () => {
+            try {
+                const res = await RobawsAPI.get('planning-items/' + woId, { bypassCache: true });
+                const desc = (res && res.code === 200 && res.data) ? (res.data.description || '') : null;
+                if (desc == null) return false;
+                if (!this.currentWO || String(this.currentWO.id) !== String(woId)) return false;
+                if (desc === (this.currentWO.description || '')) return false;
+                this.currentWO.description = desc;
+                this._toonTaakomschrijving();
+                if (this.currentScreen === 'screenFullDescription') this.openFullDescription(true);
+                return true;
+            } catch (e) {
+                if (!opts.stil) console.warn('[Omschrijving] vernieuwen mislukt:', e && e.message);
+                return false;
+            } finally {
+                this._omsVernieuwBezig = null;
+            }
+        })();
+        return this._omsVernieuwBezig;
+    },
+
+    // =============================================
+    // v412: FOTOVIEWER — afbeeldingen uit de taakomschrijving en bijlagen van de dagplanning.
+    // Volledig scherm zoals de pdf-viewer (v288): knijpen of dubbeltikken = zoomen, slepen =
+    // verschuiven, vegen of de pijlen = vorige/volgende, Downloaden = opslaan in Downloads.
+    // items: {soort:'url', src, naam} (getekende S3-link) of {soort:'doc', id, naam, contentType}.
+    // =============================================
+    openAfbViewer(items, start, opts) {
+        items = (items || []).filter(Boolean);
+        if (!items.length) return;
+        this.sluitAfbViewer();
+        const ov = document.createElement('div');
+        ov.id = 'afbViewer';
+        ov.setAttribute('data-overlay', '1');
+        ov.setAttribute('role', 'dialog');
+        ov.setAttribute('aria-modal', 'true');
+        ov.setAttribute('aria-label', 'Afbeelding bekijken');
+        const knop = (doe, label, ico, extra) => '<button type="button" class="av-knop' + (extra || '') + '" onclick="' + doe + '" aria-label="' + label + '" title="' + label + '">' + ico + '</button>';
+        ov.innerHTML =
+            '<div class="av-kop">' +
+                '<div class="av-titel" id="avTitel"></div>' +
+                '<div class="av-teller" id="avTeller"></div>' +
+                knop('app._afbZoomBy(1/1.6)', 'Uitzoomen', this.icon('zoom-out', { size: 20 })) +
+                knop('app._afbZoomBy(1.6)', 'Inzoomen', this.icon('zoom-in', { size: 20 })) +
+                knop('app.sluitAfbViewer()', 'Sluiten', this.icon('x', { size: 20 })) +
+            '</div>' +
+            '<div class="av-midden">' +
+                '<div class="av-scroll" id="avScroll"></div>' +
+                (items.length > 1
+                    ? knop('app.afbVorige()', 'Vorige afbeelding', this.icon('chevron-left', { size: 26 }), ' av-pijl av-links') +
+                      knop('app.afbVolgende()', 'Volgende afbeelding', this.icon('chevron-right', { size: 26 }), ' av-pijl av-rechts')
+                    : '') +
+            '</div>' +
+            '<div class="av-voet">' +
+                '<button type="button" class="av-dl" id="avDownload" onclick="app.afbDownload()">' + this.icon('download', { size: 18 }) + '<span>Downloaden</span></button>' +
+                '<button type="button" class="av-sluit" onclick="app.sluitAfbViewer()">Sluiten</button>' +
+            '</div>';
+        document.body.appendChild(ov);
+        this._afb = { items, i: 0, zoom: 1, basis: 0, nat: null, urls: {}, tok: 0, bron: (opts && opts.bron) || '' };
+        this._afbGebaren(document.getElementById('avScroll'));
+        if (!this._afbToetsen) {
+            this._afbToetsen = (e) => {
+                if (!document.getElementById('afbViewer')) return;
+                if (e.key === 'Escape') { e.preventDefault(); this.sluitAfbViewer(); }
+                else if (e.key === 'ArrowLeft') { e.preventDefault(); this.afbVorige(); }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); this.afbVolgende(); }
+            };
+            document.addEventListener('keydown', this._afbToetsen);
+        }
+        if (!this._afbResize) {
+            this._afbResize = () => { if (this._afb && document.getElementById('afbViewer')) this._afbPasAan(true); };
+            window.addEventListener('resize', this._afbResize);
+        }
+        this._afbToon(Math.max(0, Math.min(items.length - 1, start || 0)));
+    },
+
+    _afbToon(i) {
+        const a = this._afb;
+        if (!a) return;
+        const n = a.items.length;
+        a.i = ((i % n) + n) % n;
+        const it = a.items[a.i];
+        const tok = ++a.tok;
+        a.zoom = 1; a.basis = 0; a.nat = null;
+        const titel = document.getElementById('avTitel');
+        const teller = document.getElementById('avTeller');
+        if (titel) titel.textContent = it.naam || 'Afbeelding';
+        if (teller) teller.textContent = n > 1 ? (a.i + 1) + ' / ' + n : '';
+        const scroll = document.getElementById('avScroll');
+        if (!scroll) return;
+        scroll.classList.remove('ingezoomd');
+        scroll.scrollLeft = 0; scroll.scrollTop = 0;
+        const oudeBadge = document.querySelector('#afbViewer .av-badge');
+        if (oudeBadge) oudeBadge.remove();
+        // bijlage met een voorbeeld dat al geladen is: dat meteen tonen, het origineel volgt
+        const voorlopig = (it.soort === 'doc' && this._planDuim && this._planDuim.urls) ? this._planDuim.urls[String(it.id)] : null;
+        const img = new Image();
+        img.className = 'av-img';
+        img.alt = it.naam || 'Afbeelding';
+        img.draggable = false;
+        let geplaatst = false;
+        const plaats = () => {
+            if (this._afb !== a || a.tok !== tok) return;
+            a.nat = { w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+            if (!geplaatst) { scroll.innerHTML = ''; scroll.appendChild(img); geplaatst = true; this._afbPasAan(); }
+            else this._afbPasAan(true);
+        };
+        if (voorlopig) {
+            scroll.innerHTML = '';
+            img.onload = plaats;
+            img.src = voorlopig;
+            const badge = document.createElement('div');
+            badge.className = 'av-badge';
+            badge.textContent = 'Volledige versie laden…';
+            const midden = document.querySelector('#afbViewer .av-midden');
+            if (midden) midden.appendChild(badge);
+        } else {
+            scroll.innerHTML = '<div class="av-status"><div class="av-draai"></div><div>Afbeelding laden…</div></div>';
+        }
+        this._afbBron(it).then((src) => {
+            if (this._afb !== a || a.tok !== tok) return;
+            img.onload = () => {
+                plaats();
+                const b = document.querySelector('#afbViewer .av-badge');
+                if (b) b.remove();
+            };
+            img.onerror = () => this._afbFout(a, tok);
+            img.src = src;
+        }).catch((e) => this._afbFout(a, tok, e));
+    },
+
+    /** src voor de viewer: de S3-link zelf, of een object-URL van de bijlage (cache in RobawsAPI). */
+    async _afbBron(it) {
+        if (it.soort === 'url') return it.src;
+        const a = this._afb;
+        const k = String(it.id);
+        if (a && a.urls[k]) return a.urls[k];
+        const r = await RobawsAPI.documentBlob(it.id);
+        const url = URL.createObjectURL(r.blob);
+        if (this._afb === a && a) a.urls[k] = url;
+        else setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 2000);
+        return url;
+    },
+
+    async _afbFout(a, tok, e) {
+        if (this._afb !== a || a.tok !== tok) return;
+        const it = a.items[a.i];
+        // verlopen link uit de omschrijving: één keer vers lezen en opnieuw proberen
+        if (it && it.soort === 'url' && !it._vernieuwd && this.currentWO) {
+            it._vernieuwd = true;
+            const ok = await this._omsVernieuw(String(this.currentWO.id), { stil: true, forceer: true });
+            if (this._afb !== a || a.tok !== tok) return;
+            const nieuw = ok && this._omsAfb && this._omsAfb.lijst ? this._omsAfb.lijst[a.i] : null;
+            if (nieuw && nieuw.src) { it.src = nieuw.src; this._afbToon(a.i); return; }
+        }
+        // bijlage die de webview niet kan tonen (bv. HEIC): dan het voorbeeld van Robaws (JPEG)
+        if (it && it.soort === 'doc' && !it._viaVoorbeeld) {
+            it._viaVoorbeeld = true;
+            try {
+                const r = await RobawsAPI.documentBlob(it.id, { preview: true });
+                if (this._afb !== a || a.tok !== tok) return;
+                const k = String(it.id);
+                if (a.urls[k]) { try { URL.revokeObjectURL(a.urls[k]); } catch (_) {} }
+                a.urls[k] = URL.createObjectURL(r.blob);
+                this._afbToon(a.i);
+                return;
+            } catch (_) { /* dan de foutmelding */ }
+        }
+        const b = document.querySelector('#afbViewer .av-badge');
+        if (b) b.remove();
+        const scroll = document.getElementById('avScroll');
+        if (!scroll) return;
+        scroll.innerHTML = '<div class="av-status">' + this.icon('image', { size: 40, stroke: 1.5 }) +
+            '<div style="margin:10px 0 14px">Kon de afbeelding niet laden' +
+            (e && e.message ? '<br><small>' + this.escapeHtml(String(e.message)) + '</small>' : '') + '</div>' +
+            '<button type="button" class="av-opnieuw" onclick="app._afbOpnieuw()">Opnieuw proberen</button></div>';
+    },
+
+    _afbOpnieuw() {
+        const a = this._afb;
+        if (!a) return;
+        const it = a.items[a.i];
+        if (it) { it._vernieuwd = false; it._viaVoorbeeld = false; }
+        this._afbToon(a.i);
+    },
+
+    /** Afbeelding passend maken (hele afbeelding zichtbaar), of de zoom behouden na een draai. */
+    _afbPasAan(behoud) {
+        const a = this._afb;
+        const scroll = document.getElementById('avScroll');
+        if (!a || !scroll || !a.nat) return;
+        const img = scroll.querySelector('img.av-img');
+        if (!img) return;
+        const cw = scroll.clientWidth || 360;
+        const ch = scroll.clientHeight || 560;
+        const r = a.nat.w / a.nat.h;
+        a.basis = Math.max(40, Math.min(cw, ch * r));
+        if (!behoud) a.zoom = 1;
+        img.style.width = Math.round(a.basis * a.zoom) + 'px';
+        img.style.height = 'auto';
+        scroll.classList.toggle('ingezoomd', a.zoom > 1.02);
+    },
+
+    /** Zoomen naar z (1-5) met het punt (fx, fy) op het scherm vast; zonder punt = het midden. */
+    _afbZoomNaar(z, fx, fy) {
+        const a = this._afb;
+        const scroll = document.getElementById('avScroll');
+        if (!a || !scroll || !a.basis) return;
+        const img = scroll.querySelector('img.av-img');
+        if (!img) return;
+        z = Math.max(1, Math.min(5, z));
+        const sr = scroll.getBoundingClientRect();
+        if (fx == null || fy == null) { fx = sr.left + sr.width / 2; fy = sr.top + sr.height / 2; }
+        const r0 = img.getBoundingClientRect();
+        const relX = r0.width ? Math.max(0, Math.min(1, (fx - r0.left) / r0.width)) : 0.5;
+        const relY = r0.height ? Math.max(0, Math.min(1, (fy - r0.top) / r0.height)) : 0.5;
+        a.zoom = z;
+        img.style.width = Math.round(a.basis * z) + 'px';
+        scroll.classList.toggle('ingezoomd', z > 1.02);
+        const r1 = img.getBoundingClientRect();
+        scroll.scrollLeft += (r1.left + relX * r1.width) - fx;
+        scroll.scrollTop += (r1.top + relY * r1.height) - fy;
+    },
+
+    _afbZoomBy(f) {
+        const a = this._afb;
+        if (a) this._afbZoomNaar((a.zoom || 1) * f);
+    },
+
+    _afbGebaren(scroll) {
+        if (!scroll) return;
+        const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+        const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+        let startDist = 0, startZoom = 1, knijp = false;
+        let sx = 0, sy = 0, st = 0, bewogen = false;
+        let laatsteTik = 0, tikX = 0, tikY = 0;
+        scroll.addEventListener('touchstart', (e) => {
+            const a = this._afb;
+            if (!a) return;
+            if (e.touches.length === 2) {
+                knijp = true;
+                startDist = dist(e.touches);
+                startZoom = a.zoom || 1;
+            } else if (e.touches.length === 1) {
+                sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now(); bewogen = false;
+            }
+        }, { passive: true });
+        scroll.addEventListener('touchmove', (e) => {
+            if (!this._afb) return;
+            if (e.touches.length === 2 && startDist) {
+                e.preventDefault();
+                const m = mid(e.touches);
+                this._afbZoomNaar(startZoom * (dist(e.touches) / startDist), m.x, m.y);
+            } else if (e.touches.length === 1 &&
+                       (Math.abs(e.touches[0].clientX - sx) > 10 || Math.abs(e.touches[0].clientY - sy) > 10)) {
+                bewogen = true;
+            }
+        }, { passive: false });
+        scroll.addEventListener('touchend', (e) => {
+            const a = this._afb;
+            if (!a || e.touches.length) return;
+            if (knijp) { knijp = false; startDist = 0; laatsteTik = 0; return; }
+            const t = e.changedTouches && e.changedTouches[0];
+            if (!t) return;
+            const dx = t.clientX - sx, dy = t.clientY - sy;
+            // vegen = vorige/volgende (alleen als niet ingezoomd — ingezoomd = verschuiven)
+            if ((a.zoom || 1) <= 1.02 && a.items.length > 1 && Math.abs(dx) > 60 &&
+                Math.abs(dx) > 1.5 * Math.abs(dy) && Date.now() - st < 800) {
+                laatsteTik = 0;
+                if (dx < 0) this.afbVolgende(); else this.afbVorige();
+                return;
+            }
+            if (bewogen) { laatsteTik = 0; return; }
+            const nu = Date.now();
+            if (nu - laatsteTik < 320 && Math.hypot(t.clientX - tikX, t.clientY - tikY) < 40) {
+                this._afbLaatsteDubbel = nu;
+                laatsteTik = 0;
+                this._afbZoomNaar((a.zoom || 1) > 1.2 ? 1 : 2.5, t.clientX, t.clientY);
+            } else {
+                laatsteTik = nu; tikX = t.clientX; tikY = t.clientY;
+            }
+        }, { passive: true });
+        // muis (pc): dubbelklik = zoomen, Ctrl + wiel = zoomen
+        scroll.addEventListener('dblclick', (e) => {
+            const a = this._afb;
+            if (!a) return;
+            if (this._afbLaatsteDubbel && Date.now() - this._afbLaatsteDubbel < 800) return;   // al gedaan door de tik
+            e.preventDefault();
+            this._afbZoomNaar((a.zoom || 1) > 1.2 ? 1 : 2.5, e.clientX, e.clientY);
+        });
+        scroll.addEventListener('wheel', (e) => {
+            const a = this._afb;
+            if (!a || !e.ctrlKey) return;
+            e.preventDefault();
+            this._afbZoomNaar((a.zoom || 1) * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
+        }, { passive: false });
+    },
+
+    afbVorige() {
+        const a = this._afb;
+        if (a && a.items.length > 1) this._afbToon(a.i - 1);
+    },
+
+    afbVolgende() {
+        const a = this._afb;
+        if (a && a.items.length > 1) this._afbToon(a.i + 1);
+    },
+
+    async afbDownload() {
+        const a = this._afb;
+        if (!a || this._afbDlBezig) return;
+        const it = a.items[a.i];
+        if (!it) return;
+        this._afbDlBezig = true;
+        const knop = document.getElementById('avDownload');
+        if (knop) knop.disabled = true;
+        try {
+            await this._afbBewaar(it);
+        } finally {
+            this._afbDlBezig = false;
+            if (knop && knop.isConnected) knop.disabled = false;
+        }
+    },
+
+    /** Bestandsnaam voor Downloads: bij een afbeelding uit de omschrijving de dagplanning ervoor. */
+    _afbDownloadNaam(it) {
+        if (it.soort !== 'url') return it.naam || ('bestand_' + it.id);
+        const wo = this.currentWO;
+        const label = String((wo && (wo.summary || (wo.client && wo.client.name))) || 'Dagplanning')
+            .replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 40);
+        return label + ' - ' + (it.naam || 'afbeelding.png');
+    },
+
+    /** Echte beeldsoort uit de eerste bytes (S3 levert "image/*"); geeft {mime, ext}. */
+    async _afbSoort(blob, naam) {
+        const ext = (String(naam || '').match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+        const vanExt = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' };
+        try {
+            const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+            if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+            if (b[0] === 0xff && b[1] === 0xd8) return { mime: 'image/jpeg', ext: 'jpg' };
+            if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { mime: 'image/gif', ext: 'gif' };
+            if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) return { mime: 'image/webp', ext: 'webp' };
+        } catch (_) {}
+        if (ext && vanExt[ext.toLowerCase()]) return { mime: vanExt[ext.toLowerCase()], ext: ext.toLowerCase() };
+        const t = blob && blob.type && blob.type !== 'image/*' ? blob.type : 'image/png';
+        return { mime: t, ext: (t.split('/')[1] || 'png').replace('jpeg', 'jpg') };
+    },
+
+    async _afbBewaar(it) {
+        let naam = this._afbDownloadNaam(it);
+        try {
+            let blob, type;
+            if (it.soort === 'doc') {
+                const r = await RobawsAPI.documentBlob(it.id);
+                blob = r.blob;
+                type = r.contentType || it.contentType;
+            } else {
+                // getekende S3-link: GEEN sleutel meesturen (S3 weigert dan met 400)
+                const res = await fetch(it.src);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                blob = await res.blob();
+                const s = await this._afbSoort(blob, naam);
+                type = s.mime;
+                if (!/\.[a-z0-9]{2,5}$/i.test(naam)) naam += '.' + s.ext;
+            }
+            const native = typeof QEBridge !== 'undefined' && QEBridge.saveBase64File;
+            await this._saveBlobNative(blob, naam, type);
+            if (!native) this.toast('✓ Gedownload: ' + naam);
+            return true;
+        } catch (e) {
+            // getekende link en APK ≥ 1.245: Android laat hem zelf downloaden
+            if (it.soort === 'url' && window.QENative && QENative.beschikbaar && QENative.beschikbaar()) {
+                try {
+                    const r = await QENative.download(it.src, naam);
+                    if (r && r.ok) { this.toast('Download gestart: ' + naam); return true; }
+                } catch (_) {}
+            }
+            console.warn('[Fotoviewer] downloaden mislukt:', e);
+            this.toast('Downloaden mislukt: ' + ((e && e.message) || '?'), true);
+            return false;
+        }
+    },
+
+    sluitAfbViewer() {
+        const ov = document.getElementById('afbViewer');
+        if (ov) ov.remove();
+        const a = this._afb;
+        if (a && a.urls) Object.keys(a.urls).forEach((k) => { try { URL.revokeObjectURL(a.urls[k]); } catch (_) {} });
+        this._afb = null;
     },
 
     // Open apart scherm met alle planning items
@@ -5625,35 +6141,166 @@ const app = {
     },
 
     // Planning documenten/bestanden tonen
+    // v412: afbeeldingen krijgen een voorbeeldje + twee knoppen (Bekijken in de app / Downloaden);
+    // pdf's kan je ook in de app bekijken (pdf-viewer van v288); de rest = downloaden.
+    // Voorbeeldjes = /documents/{id}/preview (verkleinde JPEG van Robaws), asynchroon geladen.
     _renderPlanDocuments() {
         const section = document.getElementById('planDocumentsSection');
         const list = document.getElementById('planDocumentsList');
-        const docs = this.currentWO?.documents || [];
+        if (!section || !list) return;
+        const docs = (this.currentWO && this.currentWO.documents) || [];
+        const woId = this.currentWO ? String(this.currentWO.id) : '';
+        // voorbeeldjes van een vorige werkbon opruimen
+        if (this._planDuim && this._planDuim.woId !== woId) {
+            Object.keys(this._planDuim.urls).forEach((k) => { try { URL.revokeObjectURL(this._planDuim.urls[k]); } catch (_) {} });
+            this._planDuim = null;
+        }
+        if (!this._planDuim) this._planDuim = { woId, urls: {}, mislukt: 0, bezig: false };
+        this._planDuim.mislukt = 0;
 
         if (docs.length === 0) {
             section.style.display = 'none';
+            list.innerHTML = '';
             return;
         }
-
         section.style.display = '';
+        const afb = docs.filter((d) => this._isAfbDoc(d));
+        const rest = docs.filter((d) => !this._isAfbDoc(d));
+        const knop = (doe, ico, label, cls) => `<button type="button" class="btn ${cls} btn-sm" onclick="${doe}">${this.icon(ico, { size: 15 })}<span>${label}</span></button>`;
+        const meta = (d) => [this._docSoortLabel(d), d.size > 0 ? this._formatFileSize(d.size) : ''].filter(Boolean).join(' · ');
+        let h = '';
         // v181: knop om alle bestanden in 1 keer te downloaden (bij >1 bestand)
-        const bulkBtn = docs.length > 1
-            ? `<button class="btn btn-primary btn-sm btn-full" style="margin-bottom:8px" onclick="app.downloadAllPlanDocuments()">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Alle ${docs.length} bestanden downloaden</button>`
-            : '';
-        list.innerHTML = bulkBtn + docs.map(doc => {
-            const icon = this._getFileIcon(doc.contentType);
-            const sizeStr = doc.size > 0 ? this._formatFileSize(doc.size) : '';
-            return `
-                <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:8px;cursor:pointer"
-                     onclick="app.downloadPlanDocument('${doc.id}', '${this._escapeJsArg(doc.name)}')">
-                    <span style="font-size:24px">${icon}</span>
-                    <div style="flex:1;min-width:0">
-                        <div style="font-size:14px;font-weight:500;color:var(--qe-darkblue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${this.escapeHtml(doc.name)}</div>
-                        ${sizeStr ? `<div style="font-size:12px;color:var(--qe-grey)">${sizeStr}</div>` : ''}
+        if (docs.length > 1) {
+            h += `<button type="button" class="btn btn-outline btn-sm btn-full pd-alles" onclick="app.downloadAllPlanDocuments()">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Alle ${docs.length} bestanden downloaden</button>`;
+        }
+        if (afb.length) {
+            h += `<div class="pd-groep">${afb.length === 1 ? '1 afbeelding' : afb.length + ' afbeeldingen'}</div>`;
+            h += afb.map((d) => {
+                const id = this._escapeJsArg(String(d.id));
+                const url = this._planDuim.urls[String(d.id)];
+                return `<div class="card pd-rij">
+                    <button type="button" class="pd-duim" id="pdDuim_${this._domId(d.id)}" onclick="app.bekijkPlanDocument('${id}')" aria-label="${this.escapeHtml(d.name)} bekijken">${url ? `<img src="${url}" alt="">` : this.icon('image', { size: 22 })}</button>
+                    <div class="pd-info">
+                        <div class="pd-naam">${this.escapeHtml(d.name)}</div>
+                        <div class="pd-meta">${this.escapeHtml(meta(d))}</div>
+                        <div class="pd-knoppen">
+                            ${knop(`app.bekijkPlanDocument('${id}')`, 'eye', 'Bekijken', 'btn-primary')}
+                            ${knop(`app.downloadPlanDocument('${id}')`, 'download', 'Downloaden', 'btn-outline')}
+                        </div>
                     </div>
-                    <span style="color:var(--qe-purple)">${this.icon('download', { size: 20 })}</span>
                 </div>`;
-        }).join('');
+            }).join('');
+        }
+        if (rest.length) {
+            if (afb.length) h += `<div class="pd-groep">${rest.length === 1 ? 'Ander bestand' : 'Andere bestanden'}</div>`;
+            h += rest.map((d) => {
+                const id = this._escapeJsArg(String(d.id));
+                const pdf = this._isPdfDoc(d);
+                return `<div class="card pd-rij">
+                    <div class="pd-ico">${this._getFileIcon(d.contentType)}</div>
+                    <div class="pd-info">
+                        <div class="pd-naam">${this.escapeHtml(d.name)}</div>
+                        <div class="pd-meta">${this.escapeHtml(meta(d))}</div>
+                        <div class="pd-knoppen">
+                            ${pdf ? knop(`app.bekijkPlanDocument('${id}')`, 'eye', 'Bekijken', 'btn-primary') : ''}
+                            ${knop(`app.downloadPlanDocument('${id}')`, 'download', 'Downloaden', pdf ? 'btn-outline' : 'btn-primary')}
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        list.innerHTML = h;
+        this._planDuimenLaden(afb, woId);
+    },
+
+    _isAfbDoc(d) {
+        return /^image\//i.test((d && d.contentType) || '') || /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test((d && d.name) || '');
+    },
+
+    _isPdfDoc(d) {
+        return /pdf/i.test((d && d.contentType) || '') || /\.pdf$/i.test((d && d.name) || '');
+    },
+
+    _docSoortLabel(d) {
+        const ct = String((d && d.contentType) || '').toLowerCase();
+        if (ct.indexOf('pdf') >= 0) return 'PDF';
+        if (/word|msword|wordprocessing/.test(ct)) return 'Word';
+        if (/sheet|excel/.test(ct)) return 'Excel';
+        const ext = (String((d && d.name) || '').match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+        if (ext) return ext.toUpperCase().replace('JPEG', 'JPG');
+        if (ct.indexOf('image/') === 0) return ct.slice(6).toUpperCase().replace('JPEG', 'JPG');
+        return '';
+    },
+
+    _domId(x) {
+        return String(x == null ? '' : x).replace(/[^a-zA-Z0-9_-]/g, '_');
+    },
+
+    /** Voorbeeldjes één voor één laden; na 2 mislukkingen op rij stoppen (dan blijft het icoon). */
+    async _planDuimenLaden(afb, woId) {
+        const pd = this._planDuim;
+        if (!pd || pd.woId !== woId || pd.bezig) return;
+        pd.bezig = true;
+        try {
+            for (const d of afb) {
+                if (this._planDuim !== pd) return;
+                const k = String(d.id);
+                if (pd.urls[k]) { this._planDuimZet(d, pd.urls[k]); continue; }
+                if (pd.mislukt >= 2) return;
+                try {
+                    const r = await RobawsAPI.documentBlob(d.id, { preview: true });
+                    if (this._planDuim !== pd) return;
+                    pd.urls[k] = URL.createObjectURL(r.blob);
+                    pd.mislukt = 0;
+                    this._planDuimZet(d, pd.urls[k]);
+                } catch (e) {
+                    pd.mislukt++;
+                    console.warn('[Bestanden] voorbeeld mislukt voor', d && d.name, e && e.message);
+                }
+            }
+        } finally {
+            pd.bezig = false;
+        }
+    },
+
+    _planDuimZet(d, url) {
+        const el = document.getElementById('pdDuim_' + this._domId(d.id));
+        if (!el || el.querySelector('img')) return;
+        const img = document.createElement('img');
+        img.alt = '';
+        img.onerror = () => { el.innerHTML = this.icon('image', { size: 22 }); };
+        img.src = url;
+        el.innerHTML = '';
+        el.appendChild(img);
+    },
+
+    /** v412: bijlage bekijken — afbeelding = fotoviewer, pdf = pdf-viewer, anders downloaden. */
+    bekijkPlanDocument(docId) {
+        const docs = (this.currentWO && this.currentWO.documents) || [];
+        const d = docs.find((x) => String(x.id) === String(docId));
+        if (!d) return;
+        if (this._isAfbDoc(d)) {
+            const afb = docs.filter((x) => this._isAfbDoc(x));
+            const items = afb.map((x) => ({ soort: 'doc', id: x.id, naam: x.name, contentType: x.contentType, size: x.size }));
+            this.openAfbViewer(items, afb.indexOf(d), { bron: 'bestanden' });
+            return;
+        }
+        if (this._isPdfDoc(d)) { this._bekijkPlanPdf(d); return; }
+        this.downloadPlanDocument(d.id, d.name);
+    },
+
+    async _bekijkPlanPdf(d) {
+        this._openPdfOverlay(d.name || 'Document');
+        const l = document.getElementById('pdfLoading');
+        if (l) l.textContent = 'Document laden…';
+        try {
+            const r = await RobawsAPI.documentBlob(d.id);
+            if (!document.getElementById('pdfFullscreen')) return;   // intussen gesloten
+            await this._renderPdfIntoOverlay({ blob: r.blob, contentType: r.contentType || 'application/pdf', blobUrl: null });
+        } catch (e) {
+            this._closePdfFullscreen();
+            this.toast('Openen mislukt: ' + ((e && e.message) || '?'), true);
+        }
     },
 
     _getFileIcon(contentType) {
@@ -5671,41 +6318,23 @@ const app = {
         return (bytes / 1048576).toFixed(1) + ' MB';
     },
 
+    // v412: Downloaden = opslaan in Downloads (bekijken gaat via bekijkPlanDocument).
     async downloadPlanDocument(docId, fileName) {
-        this.toast('Bestand ophalen...');
+        const d = ((this.currentWO && this.currentWO.documents) || []).find((x) => String(x.id) === String(docId)) || {};
+        const naam = fileName || d.name || ('bestand_' + docId);
+        if (this._pdDlBezig) return;
+        this._pdDlBezig = true;
+        this.toast('Bestand ophalen…');
         try {
-            // Download via Android native bridge (Java HTTP, geen browser redirect)
-            const result = await RobawsAPI.getDocumentUrl(docId);
-            const { blobUrl, contentType, blob } = result;
-
-            if (contentType.includes('image')) {
-                this.showModal(`
-                    <div style="text-align:center">
-                        <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
-                        <img src="${blobUrl}" style="max-width:100%;max-height:70vh;border-radius:8px" />
-                        <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this._escapeJsArg(fileName)}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
-                    </div>
-                `);
-            } else if (contentType.includes('pdf')) {
-                this.showModal(`
-                    <div style="text-align:center">
-                        <h3 style="margin-bottom:12px">${this.escapeHtml(fileName)}</h3>
-                        <iframe src="${blobUrl}" style="width:100%;height:70vh;border:none;border-radius:8px"></iframe>
-                        <br><br>
-                        <button class="btn btn-primary" onclick="app._saveBlobToDevice('${docId}', '${this._escapeJsArg(fileName)}')">${this.icon('download', { size: 16, style: 'vertical-align:-3px' })} Opslaan</button>
-                    </div>
-                `);
-            } else {
-                // Overige bestanden: direct opslaan naar Downloads via native bridge
-                await this._saveBlobNative(blob, fileName, contentType);
-                URL.revokeObjectURL(blobUrl);
-                return;
-            }
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-        } catch(e) {
+            const r = await RobawsAPI.documentBlob(docId);
+            const native = typeof QEBridge !== 'undefined' && QEBridge.saveBase64File;
+            await this._saveBlobNative(r.blob, naam, r.contentType || d.contentType || 'application/octet-stream');
+            if (!native) this.toast('✓ Gedownload: ' + naam);
+        } catch (e) {
             console.warn('Document download mislukt:', e);
-            this.toast('Downloaden mislukt: ' + e.message, true);
+            this.toast('Downloaden mislukt: ' + ((e && e.message) || '?'), true);
+        } finally {
+            this._pdDlBezig = false;
         }
     },
 
@@ -5759,9 +6388,8 @@ const app = {
         this.toast(docs.length + ' bestanden downloaden…');
         for (const doc of docs) {
             try {
-                const result = await RobawsAPI.getDocumentUrl(doc.id);
+                const result = await RobawsAPI.documentBlob(doc.id);   // v412: asynchroon, gedeelde cache
                 await this._saveBlobNative(result.blob, doc.name || ('bestand_' + doc.id), result.contentType);
-                try { URL.revokeObjectURL(result.blobUrl); } catch(_) {}
                 ok++;
             } catch (e) {
                 console.warn('[PlanDocs] download faalde voor', doc && doc.name, e && e.message);
