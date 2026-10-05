@@ -404,6 +404,7 @@ const RobawsAPI = {
         else localStorage.removeItem('qe_app_tools');
         if (j && Array.isArray(j.tools)) localStorage.setItem('qe_app_tools_bekend', JSON.stringify(j.tools.map(t => t.key)));
         if (j && j.gasConfig) this.gasConfigZet(j.gasConfig);   // v403
+        if (j && Object.prototype.hasOwnProperty.call(j, 'wwvTag')) this.wwvTagZet(j.wwvTag);   // v417
         // alleen een Worker die de logistiek-keuze kent (v436) mag die bijwerken
         if (j && j.logistiek && j.logistiek.personen) {
             const l = j.logistiek.personen[em];
@@ -3438,6 +3439,7 @@ const RobawsAPI = {
                         this._zetMijnLogistiek(wj.mijnLogistiek || null, emailLower);
                     } catch (_e) {}
                 }
+                if (wres.ok && wj && Object.prototype.hasOwnProperty.call(wj, 'wwvTag')) this.wwvTagZet(wj.wwvTag);   // v417
                 if (wres.ok && wj.taakOntvangers) {
                     try { localStorage.setItem('qe_taak_ontvangers', JSON.stringify(wj.taakOntvangers)); } catch (_e) {}
                     this._taakOntvangersToepassen(wj.taakOntvangers);
@@ -7791,6 +7793,129 @@ const RobawsAPI = {
     leesUitklokOpmerkingen(remark) {
         return String(remark || '').split(/\r?\n/)
             .map(r => this.leesUitklokOpmerking(r)).filter(Boolean);
+    },
+
+
+    // =============================================
+    // v417 (beslissing Levi 5 okt 2026): WOON-WERKVERKEER-TAG
+    // Woon-werkverkeer telt alleen als de dag OP HET BUREAU eindigt. Bij die
+    // laatste tik (uitklokken op het bureau, of de woon-werkverkeer-tag na het
+    // uitklokken op de werf) schrijft de app een regel in de klok-werkbon:
+    //   "woon-werk: fiets — tag Woon-werkverkeer — <kaartlink | GPS niet beschikbaar> — 16:55"
+    // en bij elke uitklok met berekende kilometers een regel "km: …".
+    // Zelfde vorm als woonWerkUit in de Worker — wijzig je ze, dan beide.
+    // Het tag-nummer staat in de Worker-kluis (niet in Robaws: een veld op
+    // fiche 1 dat met "NFC " begint, leest een oudere app als camionet).
+    // =============================================
+    WWV_TAG_SLEUTEL: 'qe_wwv_tag',
+    WOONWERK_VERVOER: { fiets: 'Fiets', auto: 'Auto', ov: 'Openbaar vervoer' },
+    wwvTag() {
+        try { return localStorage.getItem(this.WWV_TAG_SLEUTEL) || null; } catch (_e) { return null; }
+    },
+    wwvTagZet(tag) {
+        try {
+            const s = tag ? String(tag).trim().toLowerCase() : '';
+            if (s) localStorage.setItem(this.WWV_TAG_SLEUTEL, s);
+            else localStorage.removeItem(this.WWV_TAG_SLEUTEL);
+        } catch (_e) {}
+    },
+    /** Tag-nummer bewaren in de Worker-kluis — alleen met een persoonlijke
+     *  sleutel (bureel, Tag beheer). Leeg = wissen. Geeft het bewaarde nummer. */
+    async wwvTagOpslaan(tagId) {
+        let cred = null;
+        try { cred = JSON.parse(localStorage.getItem('qe_api_cred') || 'null'); } catch (_e) {}
+        if (!cred || !cred.key || !cred.secret) throw new Error('Alleen met een persoonlijke sleutel (bureel)');
+        const u = this.getLoggedInUser();
+        const res = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/bel-api/app-wwv-tag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-App-Key': cred.key + ':' + cred.secret },
+            body: JSON.stringify({ tag: tagId ? String(tagId) : '', door: (u && u.name) || '' }),
+        }, 10000);
+        let j = null;
+        try { j = await res.json(); } catch (_e) {}
+        if (!res.ok || !j || !j.ok) throw new Error((j && j.error) || ('Opslaan mislukte (' + res.status + ')'));
+        this.wwvTagZet(j.wwvTag);
+        return j.wwvTag || null;
+    },
+    _wwStreep() { return ' ' + String.fromCharCode(8212) + ' '; },
+    _wwSchoon(x) {
+        return String(x == null ? '' : x).replace(/[\r\n]+/g, ' ').split(String.fromCharCode(8212)).join('-').trim();
+    },
+    /** "woon-werk: <fiets|auto|ov> — <bron> — <kaartlink | GPS niet beschikbaar> — HH:MM" */
+    woonWerkRegel(vervoer, bron, gpsTekst, hhmm) {
+        if (!this.WOONWERK_VERVOER[vervoer]) return '';
+        const S = this._wwStreep();
+        const uur = /^\d{1,2}:\d{2}$/.test(String(hhmm || '')) ? String(hhmm) : '';
+        return 'woon-werk: ' + vervoer + S + (this._wwSchoon(bron) || 'app') + S
+            + (this._wwSchoon(gpsTekst) || 'GPS niet beschikbaar') + S + uur;
+    },
+    /** De geldende woon-werk-regel van een klok-werkbon (de laatste telt,
+     *  "geen" haalt weg) → { vervoer, bron, tijd } of null. */
+    leesWoonWerk(remark) {
+        let uit = null;
+        for (const regel of String(remark || '').split(/\r?\n/)) {
+            const m = regel.match(/^\s*woon-werk\s*:\s*(.+?)\s*$/i);
+            if (!m) continue;
+            const delen = m[1].split(String.fromCharCode(8212)).map(x => x.trim());
+            const v = String(delen[0] || '').toLowerCase();
+            if (/^geen/.test(v)) { uit = null; continue; }
+            const vervoer = /^fiets/.test(v) ? 'fiets' : /^(ov|openbaar)/.test(v) ? 'ov' : /^auto/.test(v) ? 'auto' : null;
+            if (!vervoer) continue;
+            const bronTxt = String(delen[1] || '');
+            const bron = /bureel/i.test(bronTxt) ? 'bureel' : /uitgeklokt/i.test(bronTxt) ? 'bureau' : /tag/i.test(bronTxt) ? 'tag' : 'ander';
+            const tijd = delen.slice(2).find(d => /^\d{1,2}:\d{2}$/.test(d)) || null;
+            uit = { vervoer: vervoer, bron: bron, tijd: tijd };
+        }
+        return uit;
+    },
+    /** "km: heen 14 (bureau → X) · terug 9 (X → thuis)" — of "km: niet berekend (reden)". */
+    kmRegel(km) {
+        if (!km || !km.ok) return 'km: niet berekend (' + this._wwSchoon((km && km.fout) || 'onbekend').slice(0, 120) + ')';
+        const plek = (p) => this._wwSchoon(p).slice(0, 90);
+        return 'km: heen ' + km.heen + ' (' + plek(km.vanLabel) + ' → ' + plek(km.eersteWerf) + ')'
+            + ' · terug ' + km.terug + ' (' + plek(km.laatsteWerf) + ' → ' + plek(km.naarLabel) + ')';
+    },
+    /** Regels toevoegen aan een klok-werkbon (die er al exact staan niet opnieuw)
+     *  + het vinkje Fietsvergoeding. Vers GET vóór de full-replace-PUT, logicId
+     *  mee (v323) met één herkansing zonder bij 400/422; 423 = vergrendeld. */
+    async woonWerkRegistreren(workOrderId, opts) {
+        const o = opts || {};
+        const getRes = await this.get('work-orders/' + workOrderId, { bypassCache: true });
+        if (getRes.code !== 200 || !getRes.data) throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
+        const wo = getRes.data;
+        const dicht = () => { const e = new Error('Deze dag is al nagekeken en vergrendeld door het bureel'); e.code = 423; return e; };
+        if (wo.lockedAt) throw dicht();
+        const bestaand = String(wo.remark || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const erbij = (o.regels || []).map(r => String(r || '').trim()).filter(r => r && bestaand.indexOf(r) < 0);
+        if (erbij.length) {
+            const oud = String(wo.remark || '').trim();
+            wo.remark = oud ? (oud + '\n' + erbij.join('\n')) : erbij.join('\n');
+        }
+        wo.extraFields = wo.extraFields || {};
+        if (o.fiets === true || o.fiets === false) {
+            wo.extraFields['Fietsvergoeding'] = { type: 'CHECKBOX', group: 'Tijdsregistratie', booleanValue: !!o.fiets };
+        }
+        let putRes = await this.put('work-orders/' + workOrderId, wo);
+        if (putRes.code === 400 || putRes.code === 422) {
+            const zonder = { ...wo };
+            delete zonder.logicId;
+            putRes = await this.put('work-orders/' + workOrderId, zonder);
+        }
+        if (putRes.code === 423) throw dicht();
+        if (putRes.code !== 200 && putRes.code !== 201 && putRes.code !== 204) throw new Error('Opslaan mislukte (' + putRes.code + ')');
+        return putRes;
+    },
+    /** Kilometerregels (commute entries) van een werkbon, vers gelezen. */
+    async getCommuteEntries(workOrderId) {
+        const r = await this.get('work-orders/' + workOrderId + '?include=commuteEntries', { bypassCache: true });
+        if (r.code !== 200 || !r.data) throw new Error('kilometers lezen faalde (' + r.code + ')');
+        return r.data.commuteEntries || [];
+    },
+    /** Eén kilometerregel bijwerken (merge-patch, live bewezen in Worker v361). */
+    async updateCommuteEntry(workOrderId, ceId, velden) {
+        const res = await this.patchMerge('work-orders/' + workOrderId + '/commute-entries/' + ceId, velden || {});
+        if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('kilometers bijwerken faalde (' + res.code + ')');
+        return true;
     },
 
     /**

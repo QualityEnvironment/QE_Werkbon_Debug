@@ -287,21 +287,23 @@
     ] },
 
     /* ══ DEEL: NAKIJKEN & RECHTZETTEN ══ */
-    { slug: 'uitklokken', deel: 'Nakijken & rechtzetten', kick: 'Einde van de dag', titel: 'Uitklokken + kilometers', lead: 'Scan de tag. Vul je kilometers in. Bevestig. In die volgorde.', scherm: 'screenClock', blokken: [
+    { slug: 'uitklokken', deel: 'Nakijken & rechtzetten', kick: 'Einde van de dag', titel: 'Uitklokken + kilometers', lead: 'Scan de tag. Kijk je kilometers na. Bevestig. In die volgorde.', scherm: 'screenClock', blokken: [
         { t: 'stap', n: 1, h: 'Houd je telefoon <b>tegen de NFC-tag</b>, net zoals ’s morgens.' },
-        { t: 'stap', n: 2, h: 'De app vraagt je <b>kilometers</b>: heen en terug. Vul ze in.' },
-        { t: 'stap', n: 3, h: 'Kies je <b>mobiliteit</b>: chauffeur (alleen of met passagiers) of passagier.' },
+        { t: 'stap', n: 2, h: 'De app toont je <b>kilometers</b>, heen en terug. Die rekent de app zelf uit: je hoeft niets in te vullen.' },
+        { t: 'stap', n: 3, h: 'Kies je <b>mobiliteit</b>: chauffeur (alleen of met passagiers) of passagier. Klok je uit <b>aan het bureau</b>, dan kies je ook hoe je vandaag naar het werk kwam: <b>fiets, auto of openbaar vervoer</b>.' },
         { t: 'stap', n: 4, h: 'Iets bijzonders vandaag? Schrijf het in <b>"Opmerking voor het bureel"</b>, bv. <i>vroeger begonnen om de file voor te zijn, afgesproken met de projectleider</i>. Het bureel ziet het meteen bij het nakijken van je uren. Niets te melden? Laat het vak leeg.' },
         { t: 'stap', n: 5, h: 'Tik op <b>"Uitklokken bevestigen"</b>. Nu pas ben je uitgeklokt. Tik je op "Annuleren"? Dan blijf je gewoon ingeklokt.' },
         { t: 'stap', n: 6, h: 'Daarna zie je het <b>"Dag afgerond"-scherm</b> met je uren en kilometers. Dit scherm = alles is binnen. Op vrijdag krijg je het weekend-scherm, mét muziekje.' },
         { t: 'letop', h: '<b>Steek je telefoon pas weg als je het eindscherm zag.</b> Dan weet je zeker dat je uitgeklokt bent én je kilometers binnen zijn.' },
+        { t: 'tip', h: '<b>Met de camionet terug naar het bureau en dan met je eigen vervoer naar huis?</b> Scan na het uitklokken op de werf de <b>woon-werkverkeer-tag</b> aan het bureau (naast de bureau-tag en de L&amp;L-tag). De app rekent je terugrit opnieuw uit en vraagt hoe je naar het werk kwam. Zonder die scan telt er die dag geen woon-werkverkeer. Sluit je de dag af met <b>laden en lossen</b> aan het bureau? Dan vraagt de app het bij die tweede L&amp;L-scan en hoef je de woon-werkverkeer-tag niet te scannen.' },
         { t: 'faq', items: [
             ['Ik ben vroeger begonnen omdat het zo afgesproken was.', 'Zet het bij het uitklokken in het vak "Opmerking voor het bureel" (met wie het afgesproken was). Dan staat het bij je uren en hoeft niemand het te onthouden. Begon je duidelijk vroeger dan je startuur, dan herinnert de app je er zelf aan.'],
             ['Ik ben vergeten uit te klokken.', 'De app merkt dat de volgende ochtend en helpt je de dag netjes af te sluiten. Klopt de tijd niet? Vraag een aanpassing aan.'],
-            ['Ik weet mijn kilometers niet precies.', 'Kijk op de teller van de camionet, of schat eerlijk. Zelfde rit als altijd? Dan weet je het getal zo.'],
-            ['Ik reed rechtstreeks van de werf naar huis.', 'Vink dan het vakje "Rechtstreeks van werf naar thuis gereden" aan op het kilometer-scherm.'],
-            ['Ik was passagier, moet ik ook km invullen?', 'Vul de rit in en kies "Passagier" bij mobiliteit. Dan klopt alles voor de administratie.'],
-            ['Ik moet ’s avonds nog laden voor morgen.', 'Dat is L&L (laden & lossen): scan de aparte L&L-tag ná je gewone uitklok. Bij de tweede scan kies je de werf waar die uren bij horen (vandaag, of met de pijl een vorige dag). Die uren komen er netjes bij.'],
+            ['Mijn kilometers kloppen niet.', 'De app rekent de rit uit met je dagplanning: vanaf het bureau of van thuis naar je eerste werf, en van je laatste werf terug. Moest je een omweg maken? Zet het in "Opmerking voor het bureel". Alleen het bureel kan kilometers aanpassen.'],
+            ['Ik reed rechtstreeks van de werf naar huis.', 'Dat weet de app al: klok je uit op de werf en scan je daarna geen woon-werkverkeer-tag, dan rekent ze je terugrit naar huis.'],
+            ['Ik was passagier.', 'Kies "Passagier" bij mobiliteit. De kilometers rekent de app uit.'],
+            ['Ik vergat de woon-werkverkeer-tag te scannen.', 'Dan telt er die dag geen woon-werkverkeer. Vraag het bureel om het toe te voegen.'],
+            ['Ik moet ’s avonds nog laden voor morgen.', 'Dat is L&L (laden & lossen): scan de aparte L&L-tag ná je gewone uitklok. Bij de tweede scan kies je de werf waar die uren bij horen (vandaag, of met de pijl een vorige dag). Die uren komen er netjes bij. Klokte je al uit op de werf? Dan vraagt de app daarna ook hoe je naar het werk kwam (fiets, auto of openbaar vervoer).'],
         ] },
     ] },
 
@@ -507,7 +509,7 @@
             '<b>Bij de klant</b> — tik op de kaart, timer aan.',
             '<b>Invullen</b> — uren, materiaal en foto’s. Meteen, niet straks.',
             '<b>Versturen</b> — overzicht nakijken → "Werkbon versturen" → vinkje.',
-            '<b>Uitklokken</b> — tag scannen → kilometers → "Uitklokken bevestigen" → "Dag afgerond".',
+            '<b>Uitklokken</b> — tag scannen → kilometers nakijken → "Uitklokken bevestigen" → "Dag afgerond". Met eigen vervoer naar huis vanaf het bureau? Woon-werkverkeer-tag scannen (niet nodig als je laden en lossen afsluit).',
             '<b>Foutje?</b> — Klaar = correctie · Klok = uren-aanpassing.',
             '<b>Twijfel?</b> — ⓘ-knop of deze handleiding, of bel Levi/Vince.',
         ] },
@@ -519,7 +521,7 @@
             '<b>Nakijken</b> — werkbon samen met de klant overlopen.',
             '<b>Tekenen &amp; versturen</b> — betaalmethode kiezen → klant tekent → versturen.',
             '<b>Betalen</b> — QR eerst; anders Bancontact, cash of overschrijving. Check "Betaald".',
-            '<b>Uitklokken</b> — tag scannen → kilometers → bevestigen → "Dag afgerond".',
+            '<b>Uitklokken</b> — tag scannen → kilometers nakijken → bevestigen → "Dag afgerond". Met eigen vervoer naar huis vanaf het bureau? Woon-werkverkeer-tag scannen (niet nodig als je laden en lossen afsluit).',
             '<b>Twijfel?</b> — ⓘ-knop of deze handleiding, of bel Levi/Vince.',
         ] },
     ] },

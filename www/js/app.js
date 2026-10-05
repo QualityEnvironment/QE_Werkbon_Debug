@@ -19066,6 +19066,12 @@ const app = {
     /** Google Routes API (v2). Returns:
      *   { km: <number> }                op succes
      *   { km: null, error: <string> }   op fout (exacte fout-tekst voor debug) */
+    _routePlek(p) {
+        if (p && typeof p === 'object' && p.lat != null && p.lng != null) {
+            return { location: { latLng: { latitude: Number(p.lat), longitude: Number(p.lng) } } };
+        }
+        return { address: String(p) };
+    },
     async _googleDistanceKm(origin, destination) {
         if (!origin || !destination) return { km: null, error: 'origin/destination leeg' };
         try {
@@ -19076,9 +19082,10 @@ const app = {
                     'X-Goog-Api-Key': this.GOOGLE_MAPS_API_KEY,
                     'X-Goog-FieldMask': 'routes.distanceMeters',
                 },
+                // v417: een plek is een adres (tekst) of een GPS-punt { lat, lng }
                 body: JSON.stringify({
-                    origin: { address: origin },
-                    destination: { address: destination },
+                    origin: this._routePlek(origin),
+                    destination: this._routePlek(destination),
                     travelMode: 'DRIVE',
                     routingPreference: 'TRAFFIC_UNAWARE',
                 }),
@@ -19175,6 +19182,109 @@ const app = {
     },
     _uitklokOpmWis(workOrderId, employeeId) {
         try { localStorage.removeItem(this._uitklokOpmSleutel(workOrderId, employeeId)); } catch (_) {}
+    },
+
+    // =====================================================================
+    // v417 (beslissing Levi 5 okt 2026): KILOMETERS BEREKEND + WOON-WERKVERKEER
+    // De werknemer tikt geen kilometers meer in. De app berekent ze uit de tikken:
+    //   heen  = (bureau of thuis) → eerste werf van de dagplanning
+    //   terug = laatste werf → (bureau of thuis)
+    // Begin = de eerste inklok van de dag: op het bureau (bureau-tag, of camionet
+    // binnen 500 m) = bureau, anders thuis = de plek van die inklok (GPS), met als
+    // terugval het adres op de werknemersfiche. Einde = bureau (uitklokken op het
+    // bureau, of later de woon-werkverkeer-tag) of thuis. Tussenliggende werven
+    // tellen niet (uurloon onderweg) — zelfde regel als vroeger.
+    // =====================================================================
+    async _kmVandaag(employeeId, opts) {
+        const o = opts || {};
+        const werven = await this._fetchTodayWerfAddresses(employeeId);
+        if (!werven || !werven.length) {
+            return { ok: false, geenWerf: true, heen: 0, terug: 0, fout: 'geen werf in de dagplanning vandaag' };
+        }
+        const B = this.QE_OFFICE_ADDRESS;
+        let thuisAdres;   // undefined = nog niet opgezocht
+        const thuis = async () => {
+            if (o.startGps && !o.startBureau) return o.startGps;   // dezelfde plek als 's morgens
+            if (thuisAdres === undefined) {
+                try { thuisAdres = (await this._fetchEmployeeAddress(employeeId)) || null; } catch (_) { thuisAdres = null; }
+            }
+            return thuisAdres;
+        };
+        const van = o.startBureau ? B : await thuis();
+        const naar = o.eindeBureau ? B : await thuis();
+        if (!van || !naar) return { ok: false, heen: 0, terug: 0, fout: 'geen adres op je werknemersfiche' };
+        const eerste = werven[0], laatste = werven[werven.length - 1];
+        const [h, t] = await Promise.all([this._googleDistanceKm(van, eerste), this._googleDistanceKm(laatste, naar)]);
+        if (!h || typeof h.km !== 'number' || !t || typeof t.km !== 'number') {
+            console.warn('[KM] berekening mislukt:', (h && h.error) || '', (t && t.error) || '');
+            return { ok: false, heen: 0, terug: 0, fout: 'de route kon niet berekend worden' };
+        }
+        return {
+            ok: true, heen: h.km, terug: t.km, eersteWerf: eerste, laatsteWerf: laatste,
+            vanLabel: o.startBureau ? 'bureau' : 'thuis', naarLabel: o.eindeBureau ? 'bureau' : 'thuis',
+        };
+    },
+
+    /** v417: lijnicoon (fiets / auto / ov / vink / slot), zelfde tekening als de schermvoorbeelden. */
+    _wwvIcoon(soort, px) {
+        const p = {
+            fiets: '<circle cx="5.5" cy="16.5" r="3.5"/><circle cx="18.5" cy="16.5" r="3.5"/><path d="M5.5 16.5 9.5 9h6l3 7.5M9.5 9 12 16.5h-6.5M15.5 9 14 6h-2.5M8 6.5h3"/>',
+            auto: '<path d="M3.5 15.5V12l2-5.2A1.6 1.6 0 0 1 7 5.8h10a1.6 1.6 0 0 1 1.5 1L20.5 12v3.5a1 1 0 0 1-1 1h-1.5M3.5 15.5a1 1 0 0 0 1 1H6M9.5 16.5h5M3.5 12h17"/><circle cx="7.8" cy="16.5" r="1.8"/><circle cx="16.2" cy="16.5" r="1.8"/>',
+            ov: '<rect x="5.5" y="3.5" width="13" height="14" rx="3"/><path d="M5.5 10.5h13M9 17.5l-2 3M15 17.5l2 3M9.5 6.5h5"/><circle cx="9" cy="14" r=".9"/><circle cx="15" cy="14" r=".9"/>',
+            vink: '<polyline points="5 12.5 10 17.5 19 7"/>',
+            slot: '<rect x="5.5" y="10.5" width="13" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>',
+        }[soort] || '';
+        const n = px || 24;
+        return '<svg width="' + n + '" height="' + n + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="'
+            + (soort === 'vink' ? '2.2' : '1.7') + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
+    },
+
+    /** v417 — ontwerp B (keuze Levi 5 okt): na het scannen van de woon-werkverkeer-tag, of bij het
+     *  afsluiten van laden en lossen na het uitklokken (opts.kop = 'Laden en lossen klaar').
+     *  Vinkje "Terug op het bureau" + uur + de herrekende terugrit, daarna één tik op
+     *  fiets / auto / openbaar vervoer. Resolve: 'fiets' | 'auto' | 'ov', of null (Niet nu). */
+    promptWoonWerk(opts) {
+        const o = opts || {};
+        return new Promise((resolve) => {
+            let m = document.getElementById('wwvPrompt');
+            if (m) m.remove();
+            m = document.createElement('div');
+            m.id = 'wwvPrompt';
+            m.setAttribute('role', 'dialog');
+            m.setAttribute('aria-label', 'Woon-werkverkeer');
+            m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:var(--bg,#F4F2ED);overflow-y:auto;-webkit-overflow-scrolling:touch;animation:mbSheet 0.35s cubic-bezier(0.22,1,0.36,1)';
+            const knop = (v, label) => '<button type="button" data-vervoer="' + v + '" style="display:flex;flex-direction:column;align-items:center;gap:8px;width:96px;background:none;border:none;padding:0;cursor:pointer;font:500 14px var(--font,inherit);color:var(--ink,#26334B)">'
+                + '<span style="width:84px;height:84px;border-radius:50%;background:var(--card,#FDFCFA);border:1px solid var(--cb,#E9E6DE);box-shadow:var(--shadow-md,0 2px 10px rgba(38,51,75,0.05));display:flex;align-items:center;justify-content:center;color:var(--ink,#26334B)">'
+                + this._wwvIcoon(v, 38) + '</span><span style="text-align:center;line-height:1.25">' + label + '</span></button>';
+            m.innerHTML = '<div style="max-width:420px;margin:0 auto;padding:64px 24px 28px;text-align:center;box-sizing:border-box;min-height:100%;display:flex;flex-direction:column">'
+                + '<div style="width:78px;height:78px;border-radius:50%;background:var(--gwash,#EDF3EE);color:var(--green2,#3E7A54);margin:0 auto;display:flex;align-items:center;justify-content:center">' + this._wwvIcoon('vink', 40) + '</div>'
+                + '<div style="font:600 11px var(--font,inherit);letter-spacing:1.4px;text-transform:uppercase;color:var(--g1,#85847C);margin-top:20px">' + this.escapeHtml(o.kop || 'Terug op het bureau') + '</div>'
+                + '<div style="font:400 30px var(--font,inherit);letter-spacing:-0.8px;color:var(--ink,#26334B);margin-top:6px">' + this.escapeHtml(o.tijd || '') + '</div>'
+                + (o.kmTekst ? '<div style="font:400 14px/1.45 var(--font,inherit);color:var(--g2,#5F5E56);margin-top:6px">' + this.escapeHtml(o.kmTekst) + '</div>' : '')
+                + '<div style="height:1px;background:var(--l1,#E4E1D9);margin:30px 10px 0"></div>'
+                + '<div style="font:500 18px var(--font,inherit);color:var(--ink,#26334B);margin-top:26px">Hoe ben je vandaag naar het werk gekomen?</div>'
+                + '<div style="display:flex;justify-content:center;gap:16px;margin-top:22px">'
+                + knop('fiets', 'Fiets') + knop('auto', 'Auto') + knop('ov', 'Openbaar vervoer') + '</div>'
+                + '<div style="flex:1;min-height:28px"></div>'
+                + '<button type="button" id="wwvNietNu" style="background:none;border:none;color:var(--g2,#5F5E56);font:500 14px var(--font,inherit);padding:14px;cursor:pointer">Niet nu</button>'
+                + '</div>';
+            document.body.appendChild(m);
+            let klaar = false;
+            const sluit = (v) => {
+                if (klaar) return;
+                klaar = true;
+                try { m.remove(); } catch (_) {}
+                resolve(v);
+            };
+            m.querySelectorAll('button[data-vervoer]').forEach((b) => {
+                b.addEventListener('click', () => {
+                    try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('success'); } catch (_) {}
+                    sluit(b.getAttribute('data-vervoer'));
+                });
+            });
+            const nn = document.getElementById('wwvNietNu');
+            if (nn) nn.addEventListener('click', () => sluit(null));
+        });
     },
 
     // ============================================================
@@ -19389,163 +19499,101 @@ const app = {
     },
 
     /**
-     * v83: Vraag de monteur om kilometers heen/terug in te geven na uitklokken,
-     * en post die als commute-entry op de werkbon. Modal — kan niet weggeklikt
-     * worden zonder iets in te vullen (0 is een geldige waarde).
-     * v119: bij open auto-fill via Google Maps Distance Matrix.
-     * v394: + OPMERKING VOOR HET BUREEL (vraag Levi). Resolvet nu
-     * { bevestigd: true, opmerking } i.p.v. true; annuleren blijft false.
-     * opts.hint (uit QEClock._uitklokHint) = geheugensteun bij een duidelijke
-     * afwijking (vroeger begonnen): leeg vak → één keer extra vragen, nog eens
-     * tikken = uitklokken zonder opmerking. Het klad blijft bewaard tot de
-     * uitklok gelukt is (localStorage qe_uitklok_opm_<wo>_<emp>, 12 u).
+     * UITKLOK-BEVESTIGING (v272) — sinds v417 ZONDER IN TE VULLEN KILOMETERS
+     * (beslissing Levi 5 okt 2026: "ze mogen niet meer zelf kilometers ingeven of
+     * aanpassen"). "Uitklokken bevestigen" = de berekende kilometers boeken →
+     * resolve({ bevestigd: true, opmerking, extraRegels }) → clock.js klokt uit en
+     * zet extraRegels (km-regel, woon-werk-regel) in dezelfde afsluit-PUT.
+     * ✕ of "Annuleren" = resolve(false) = niet uitklokken (de sessie loopt door).
+     * - Kilometers: _kmVandaag (heen vanaf het bureau of thuis, terug naar het
+     *   bureau of thuis). De werknemer kiest alleen nog chauffeur of passagier.
+     *   Eén kilometerregel per werknemer per dag: staat er al één (eerste uitklok,
+     *   of een halfgelukte poging — v324-vlag), dan wordt er niets geboekt.
+     *   Lukt de berekening niet, dan wordt er niets geboekt (het bureel vult aan).
+     * - Uitklokken OP HET BUREAU (bureau-tag, of camionet binnen 500 m) = de dag
+     *   eindigt op het bureau: de vervoervraag (fiets / auto / openbaar vervoer)
+     *   is verplicht en er gaat een woon-werk-regel mee.
+     * - v394: OPMERKING VOOR HET BUREEL + geheugensteun (opts.hint): leeg vak →
+     *   één keer extra vragen, nog eens tikken = uitklokken zonder opmerking. Het
+     *   klad blijft bewaard tot de uitklok gelukt is (qe_uitklok_opm_<wo>_<emp>, 12 u).
+     * opts: { hint, tag, gps ({ lat, lng, tekst }), session }.
      */
     async promptKilometers(workOrderId, employeeId, opts) {
         const kmOpts = opts || {};
         const hint = (kmOpts.hint && kmOpts.hint.tekst) ? kmOpts.hint : null;
+        const tag = kmOpts.tag || null;
+        const gpsUit = kmOpts.gps || null;
+        const Q = (typeof QEClock !== 'undefined') ? QEClock : null;
+        const eindeBureau = !!tag && (tag.type === 'bureau'
+            || (tag.type === 'camionet' && !!gpsUit && !!Q && Q._bijBureau(gpsUit.lat, gpsUit.lng) === true));
+        const self = this;
+        const esc = (s) => self.escapeHtml(String(s == null ? '' : s));
+        const cap = (s) => { const x = String(s || ''); return x ? x.charAt(0).toUpperCase() + x.slice(1) : x; };
         return new Promise((resolve) => {
-            // Bouw modal — v95: mobility-keuze + woonwerk-fiets checkbox
             let m = document.getElementById('kmPromptModal');
             if (m) m.remove();
             m = document.createElement('div');
             m.id = 'kmPromptModal';
-            // v272: VOLLEDIG scherm i.p.v. bottom-sheet — de sheet verdween
-            // achter het numerieke toetsenbord (v96-les opnieuw geleerd).
-            // Dit formulier is nu ook de UITKLOK-BEVESTIGING: "Uitklokken
-            // bevestigen" = km opslaan → resolve(true) → clock.js klokt uit;
-            // ✕ of "Annuleren" = resolve(false) → géén uitklok.
             m.style.cssText = 'position:fixed;inset:0;z-index:99998;background:var(--bg,var(--qe-white,#fff));display:flex;animation:mbSheet 0.35s cubic-bezier(0.22,1,0.36,1)';
-            m.innerHTML = `
-                <div style="display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box">
-                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:18px 20px 4px">
-                        <div style="flex:1;min-width:0">
-                            <div style="font:400 22px var(--font,inherit);letter-spacing:-0.5px;color:var(--ink,var(--qe-darkblue,#001E45))">Kilometers vandaag</div>
-                            <div style="font-size:13px;color:var(--g2,var(--qe-grey,#666));margin-top:3px">Vul je kilometers in en bevestig — dan word je uitgeklokt.</div>
-                        </div>
-                        <button id="kmPromptClose" type="button" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--b1,#ddd);background:none;color:var(--g2,var(--qe-grey,#666));font-size:15px;cursor:pointer;flex-shrink:0">✕</button>
-                    </div>
-                    <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 20px 20px">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-                        <div>
-                            <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Heen (km)</label>
-                            <input id="kmHeenInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:12px;font-size:17px;border:1px solid var(--b1);border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
-                        </div>
-                        <div>
-                            <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Terug (km)</label>
-                            <input id="kmTerugInput" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                style="width:100%;padding:12px;font-size:17px;border:1px solid var(--b1);border-radius:10px;text-align:center;font-weight:600;box-sizing:border-box">
-                        </div>
-                    </div>
-
-                    <label style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Mobiliteit</label>
-                    <div id="kmMobilityRadio" style="display:grid;gap:6px;margin-bottom:14px">
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
-                            <input type="radio" name="kmMobility" value="-3" checked style="margin:0">
- <span> Chauffeur zonder passagiers</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
-                            <input type="radio" name="kmMobility" value="-1" style="margin:0">
- <span> Chauffeur (met passagiers)</span>
-                        </label>
-                        <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px">
-                            <input type="radio" name="kmMobility" value="-2" style="margin:0">
- <span> Passagier</span>
-                        </label>
-                    </div>
-
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:var(--awash)">
-                        <input id="kmFietsInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
- <span> Woonwerk-verkeer met de <strong>fiets</strong></span>
-                    </label>
-
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:8px;background:var(--gwash)">
-                        <input id="kmDirectThuisWerfInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
- <span> Rechtstreeks van <strong>thuis naar werf</strong> gereden</span>
-                    </label>
-
-                    <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;margin-bottom:14px;background:var(--gwash)">
-                        <input id="kmDirectWerfThuisInput" type="checkbox" style="margin:0;width:20px;height:20px;cursor:pointer">
- <span> Rechtstreeks van <strong>werf naar thuis</strong> gereden</span>
-                    </label>
-
-                    <!-- v131: knop om rit te splitsen in 2 mobiliteits-segmenten -->
-                    <button id="kmSplitToggle" type="button"
-                            style="width:100%;padding:11px;background:#fff;color:var(--ink);border:1px dashed var(--b2);border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:14px">
- Rit splitsen (deel met andere mobiliteit)
-                    </button>
-
-                    <div id="kmSplitSection" style="display:none;border:1px solid var(--b1);border-radius:12px;padding:14px;margin-bottom:14px;background:var(--wash)">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
- <div style="font-size:13px;font-weight:700;color:var(--ink)"> Tweede rit-segment</div>
-                            <button id="kmSplitRemove" type="button" style="background:none;border:none;color:var(--red2);cursor:pointer;font-size:13px;font-weight:600;padding:0">✕ verwijder</button>
-                        </div>
-                        <div style="font-size:11px;color:var(--g3);margin-bottom:10px;line-height:1.4">
-                            Vul hier de km in die je in een <strong>andere</strong> mobiliteit aflegde (bv. solo-deel voordat je iemand oppikte). De hoofd-keuze hierboven geldt voor de rest.
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-                            <div>
-                                <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:3px">Heen (km)</label>
-                                <input id="kmHeen2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                    style="width:100%;padding:10px;font-size:15px;border:1px solid var(--b1);border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
-                            </div>
-                            <div>
-                                <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:3px">Terug (km)</label>
-                                <input id="kmTerug2Input" type="number" inputmode="numeric" min="0" step="1" value="0"
-                                    style="width:100%;padding:10px;font-size:15px;border:1px solid var(--b1);border-radius:8px;text-align:center;font-weight:600;box-sizing:border-box">
-                            </div>
-                        </div>
-                        <label style="font-size:11px;color:var(--g1);display:block;margin-bottom:4px">Mobiliteit voor dit segment</label>
-                        <div id="kmMobility2Radio" style="display:grid;gap:5px">
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
-                                <input type="radio" name="kmMobility2" value="-3" checked style="margin:0">
- <span> Chauffeur zonder passagiers</span>
-                            </label>
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
-                                <input type="radio" name="kmMobility2" value="-1" style="margin:0">
- <span> Chauffeur (met passagiers)</span>
-                            </label>
-                            <label style="display:flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--b1);border-radius:8px;cursor:pointer;font-size:13px;background:var(--card)">
-                                <input type="radio" name="kmMobility2" value="-2" style="margin:0">
- <span> Passagier</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- v394: opmerking voor het bureel — komt bij de tijdsregistratie -->
-                    <div id="kmOpmBlok" style="margin-bottom:14px">
-                        <div id="kmOpmHint" style="display:none;margin-bottom:8px;padding:10px 12px;border-radius:10px;background:var(--awash2);border:1px solid var(--aborder2,var(--aborder));color:var(--amber2);font-size:12.5px;line-height:1.45">
-                            <div id="kmOpmHintTekst" style="font-weight:700"></div>
-                            <div id="kmOpmHintVraag" style="margin-top:3px"></div>
-                        </div>
-                        <label for="kmOpmInput" style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Opmerking voor het bureel <span style="font-weight:400">(niet verplicht)</span></label>
-                        <textarea id="kmOpmInput" rows="3" maxlength="500" placeholder="Bv. vroeger begonnen om de file voor te zijn, afgesproken met de projectleider"
-                            style="width:100%;box-sizing:border-box;padding:11px 12px;min-height:74px;resize:vertical;border:1px solid var(--b1);border-radius:10px;background:var(--card);color:var(--ink);font:400 14px var(--font,inherit);line-height:1.4"></textarea>
-                        <div style="font-size:11.5px;color:var(--g2);margin-top:4px;line-height:1.4">Komt bij je tijdsregistratie. Het bureel ziet het meteen bij het nakijken van je uren.</div>
-                    </div>
-
-                    <button id="kmPromptSubmit" style="width:100%;padding:16px;background:var(--btn);color:var(--btnfg);border:none;border-radius:2px;font:600 14px var(--font);cursor:pointer">
-                        Uitklokken bevestigen
-                    </button>
-                    <div id="kmPromptError" style="font-size:11px;color:var(--amber2);background:var(--awash2);border:1px solid var(--aborder);border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>
-                    <button id="kmPromptCancel" type="button" style="width:100%;margin-top:10px;padding:12px;border:none;background:none;color:var(--g1,var(--qe-grey,#888));font-size:13px;font-weight:500;cursor:pointer">Annuleren — nog niet uitklokken</button>
-                    </div>
-                </div>`;
+            const radio = (v, label, aan) => '<label style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--b1);border-radius:10px;cursor:pointer;font-size:14px;background:var(--card)">'
+                + '<input type="radio" name="kmMobility" value="' + v + '"' + (aan ? ' checked' : '') + ' style="margin:0;width:18px;height:18px"> <span>' + label + '</span></label>';
+            const chip = (v, label) => '<button type="button" data-vervoer="' + v + '" aria-pressed="false" style="display:flex;align-items:center;justify-content:center;gap:7px;padding:12px 4px;border:1px solid var(--b1);border-radius:10px;font:500 14px var(--font,inherit);background:var(--card);color:var(--ink);cursor:pointer">'
+                + self._wwvIcoon(v, 22) + '<span>' + label + '</span></button>';
+            m.innerHTML = '<div style="display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box">'
+                + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:18px 20px 4px">'
+                +   '<div style="flex:1;min-width:0">'
+                +     '<div style="font:400 22px var(--font,inherit);letter-spacing:-0.5px;color:var(--ink,var(--qe-darkblue,#001E45))">Uitklokken</div>'
+                +     '<div style="font-size:13px;color:var(--g2,var(--qe-grey,#666));margin-top:3px">'
+                +       (eindeBureau ? 'Je bent op het bureau. Je kilometers worden berekend.' : 'Je kilometers worden berekend. Je hoeft niets in te vullen.') + '</div>'
+                +   '</div>'
+                +   '<button id="kmPromptClose" type="button" aria-label="Sluiten, niet uitklokken" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--b1,#ddd);background:none;color:var(--g2,var(--qe-grey,#666));font-size:15px;cursor:pointer;flex-shrink:0">✕</button>'
+                + '</div>'
+                + '<div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 20px 20px">'
+                +   '<div id="kmKaart" style="background:var(--card);border:1px solid var(--cb);border-radius:14px;box-shadow:var(--shadow-md);padding:4px 16px">'
+                +     '<div style="padding:16px 0;font-size:14px;color:var(--g2)">Kilometers berekenen…</div>'
+                +   '</div>'
+                +   '<div id="kmSlot" style="display:none;margin-top:8px;align-items:center;gap:5px;font:500 11.5px var(--font,inherit);color:var(--g1)">'
+                +     self._wwvIcoon('slot', 14) + '<span>Berekend door de app · aanpassen kan alleen het bureel</span></div>'
+                +   (eindeBureau
+                    ? '<div id="kmVervoerBlok" style="margin-top:16px">'
+                      + '<div style="font:500 12px var(--font,inherit);color:var(--g1);margin-bottom:8px">Hoe ben je vandaag naar het werk gekomen?</div>'
+                      + '<div id="kmVervoer" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
+                      + chip('fiets', 'Fiets') + chip('auto', 'Auto') + chip('ov', 'OV') + '</div></div>'
+                    : '')
+                +   '<div id="kmMobBlok" style="display:none;margin-top:16px">'
+                +     '<div style="font:500 12px var(--font,inherit);color:var(--g1);margin-bottom:8px">' + (eindeBureau ? 'Hoe reed je naar de werf?' : 'Hoe reed je?') + '</div>'
+                +     '<div id="kmMobilityRadio" style="display:grid;gap:8px">'
+                +       radio('-3', 'Chauffeur zonder passagiers', true) + radio('-1', 'Chauffeur met passagiers', false) + radio('-2', 'Passagier', false)
+                +     '</div>'
+                +   '</div>'
+                +   '<div id="kmOpmBlok" style="margin:16px 0 14px">'
+                +     '<div id="kmOpmHint" style="display:none;margin-bottom:8px;padding:10px 12px;border-radius:10px;background:var(--awash2);border:1px solid var(--aborder2,var(--aborder));color:var(--amber2);font-size:12.5px;line-height:1.45">'
+                +       '<div id="kmOpmHintTekst" style="font-weight:700"></div>'
+                +       '<div id="kmOpmHintVraag" style="margin-top:3px"></div>'
+                +     '</div>'
+                +     '<label for="kmOpmInput" style="font-size:12px;color:var(--g1);display:block;margin-bottom:4px">Opmerking voor het bureel <span style="font-weight:400">(niet verplicht)</span></label>'
+                +     '<textarea id="kmOpmInput" rows="3" maxlength="500" placeholder="Bv. vroeger begonnen om de file voor te zijn, afgesproken met de projectleider"'
+                +       ' style="width:100%;box-sizing:border-box;padding:11px 12px;min-height:74px;resize:vertical;border:1px solid var(--b1);border-radius:10px;background:var(--card);color:var(--ink);font:400 14px var(--font,inherit);line-height:1.4"></textarea>'
+                +     '<div style="font-size:11.5px;color:var(--g2);margin-top:4px;line-height:1.4">Komt bij je tijdsregistratie. Het bureel ziet het meteen bij het nakijken van je uren.</div>'
+                +   '</div>'
+                +   '<button id="kmPromptSubmit" style="width:100%;padding:16px;background:var(--btn);color:var(--btnfg);border:none;border-radius:12px;font:600 15px var(--font);cursor:pointer">Uitklokken bevestigen</button>'
+                +   '<div id="kmPromptError" style="font-size:12px;color:var(--amber2);background:var(--awash2);border:1px solid var(--aborder);border-radius:8px;padding:8px;margin-top:8px;text-align:left;display:none;word-wrap:break-word;max-height:120px;overflow-y:auto;line-height:1.4"></div>'
+                +   '<button id="kmPromptCancel" type="button" style="width:100%;margin-top:10px;padding:12px;border:none;background:none;color:var(--g1,var(--qe-grey,#888));font-size:13px;font-weight:500;cursor:pointer">Annuleren — nog niet uitklokken</button>'
+                + '</div>'
+                + '</div>';
             document.body.appendChild(m);
 
-            const heenEl = document.getElementById('kmHeenInput');
-            const terugEl = document.getElementById('kmTerugInput');
-            const fietsEl = document.getElementById('kmFietsInput');
-            const directTWEl = document.getElementById('kmDirectThuisWerfInput');
-            const directWTEl = document.getElementById('kmDirectWerfThuisInput');
             const errEl = document.getElementById('kmPromptError');
             const btn = document.getElementById('kmPromptSubmit');
+            const kaartEl = document.getElementById('kmKaart');
+            const mobBlokEl = document.getElementById('kmMobBlok');
+            const slotEl = document.getElementById('kmSlot');
             // v394: opmerking voor het bureel + geheugensteun
             const opmEl = document.getElementById('kmOpmInput');
             const opmBlokEl = document.getElementById('kmOpmBlok');
             const opmHintEl = document.getElementById('kmOpmHint');
             const opmHintVraagEl = document.getElementById('kmOpmHintVraag');
-            const opmSleutel = this._uitklokOpmSleutel(workOrderId, employeeId);
+            const opmSleutel = self._uitklokOpmSleutel(workOrderId, employeeId);
             let opmGevraagd = false;
             const knopTekst = () => (opmGevraagd && opmEl && !opmEl.value.trim())
                 ? 'Uitklokken zonder opmerking' : 'Uitklokken bevestigen';
@@ -19563,136 +19611,94 @@ const app = {
             if (opmEl) {
                 opmEl.addEventListener('input', () => {
                     try {
-                        const t = opmEl.value;
-                        if (t.trim()) localStorage.setItem(opmSleutel, JSON.stringify({ t: t, ts: Date.now() }));
+                        const tx = opmEl.value;
+                        if (tx.trim()) localStorage.setItem(opmSleutel, JSON.stringify({ t: tx, ts: Date.now() }));
                         else localStorage.removeItem(opmSleutel);
                     } catch (_) {}
                     if (!btn.disabled) btn.textContent = knopTekst();
                 });
             }
-            // v131: split-rit elementen
-            const splitToggleEl = document.getElementById('kmSplitToggle');
-            const splitSectionEl = document.getElementById('kmSplitSection');
-            const splitRemoveEl = document.getElementById('kmSplitRemove');
-            const heen2El = document.getElementById('kmHeen2Input');
-            const terug2El = document.getElementById('kmTerug2Input');
-            const openSplit = () => {
-                splitSectionEl.style.display = 'block';
-                splitToggleEl.style.display = 'none';
-            };
-            const closeSplit = () => {
-                splitSectionEl.style.display = 'none';
-                splitToggleEl.style.display = 'block';
-                heen2El.value = '0';
-                terug2El.value = '0';
-            };
-            if (splitToggleEl) splitToggleEl.addEventListener('click', openSplit);
-            if (splitRemoveEl) splitRemoveEl.addEventListener('click', closeSplit);
 
-            // v272: geen autofocus meer — het numerieke toetsenbord schoof het
-            // formulier meteen weg; de auto-berekening vult de velden toch in.
+            // v417: vervoer (alleen bij uitklokken op het bureau) — verplicht, niets vooraf aangeduid
+            let vervoer = null;
+            const chips = m.querySelectorAll('#kmVervoer button[data-vervoer]');
+            chips.forEach((b) => {
+                b.addEventListener('click', () => {
+                    vervoer = b.getAttribute('data-vervoer');
+                    chips.forEach((x) => {
+                        const aan = x === b;
+                        x.setAttribute('aria-pressed', aan ? 'true' : 'false');
+                        x.style.borderColor = aan ? 'var(--ink)' : 'var(--b1)';
+                        x.style.boxShadow = aan ? '0 0 0 1px var(--ink) inset' : 'none';
+                    });
+                    if (errEl.getAttribute('data-soort') === 'vervoer') { errEl.style.display = 'none'; errEl.removeAttribute('data-soort'); }
+                });
+            });
 
-            // ============================================================
-            // v119: Auto-bereken km via Google Maps Distance Matrix.
-            //  - Loopt bij open van de modal (na 250ms zodat user de modal ziet)
-            //  - Loopt opnieuw bij elke checkbox-wijziging (fiets / directTW / directWT)
-            //  - Tijdens berekening: inputs disabled + opacity:0.5 + placeholder "..."
-            //  - Als google iets teruggeeft → veld vullen
-            //  - User kan altijd nog handmatig overschrijven (na de async call)
-            // ============================================================
-            let _kmCalcSeq = 0;
-            const self = this;
-            const recalcKm = async () => {
-                const seq = ++_kmCalcSeq;
-                const opts = {
-                    directThuisWerf: !!(directTWEl && directTWEl.checked),
-                    directWerfThuis: !!(directWTEl && directWTEl.checked),
-                };
-                // Loading state
-                try {
-                    heenEl.disabled = true;
-                    terugEl.disabled = true;
-                    heenEl.style.opacity = '0.5';
-                    terugEl.style.opacity = '0.5';
-                    heenEl.value = '...';
-                    terugEl.value = '...';
-                    errEl.style.display = 'none';
-                } catch(_) {}
-                let result = null;
-                let thrownMsg = null;
-                try {
-                    result = await self._autoCalcKilometers(employeeId, opts);
-                } catch (e) {
-                    thrownMsg = e && e.message || String(e);
-                    console.warn('[KM] auto-calc faalde:', thrownMsg);
-                }
-                // Race-check: alleen toepassen als deze call de meest recente is
-                if (seq !== _kmCalcSeq) return;
-                try {
-                    heenEl.disabled = false;
-                    terugEl.disabled = false;
-                    heenEl.style.opacity = '1';
-                    terugEl.style.opacity = '1';
-                } catch(_) {}
-                if (result) {
-                    heenEl.value = String(result.heen);
-                    terugEl.value = String(result.terug);
-                    console.log('[KM] auto-fill:', result);
-                    if (result.error) {
-                        errEl.textContent = '' + result.error + ' — vul handmatig in.';
-                        errEl.style.color = '#e65100';
-                        errEl.style.display = 'block';
-                    } else if (result.warning) {
-                        errEl.textContent = '' + result.warning;
-                        errEl.style.color = '#0277bd';
-                        errEl.style.display = 'block';
-                    }
-                } else {
-                    heenEl.value = '0';
-                    terugEl.value = '0';
-                    if (thrownMsg) {
-                        errEl.textContent = 'Auto-km mislukt ('+ thrownMsg + ') — vul handmatig in.';
-                        errEl.style.color = '#e65100';
-                        errEl.style.display = 'block';
-                    }
-                }
-            };
-            // v324: km al gepost bij een eerdere (halfgelukte) uitklok-poging?
-            // Het formulier blijft dé uitklok-bevestiging (v272) en moet dus
-            // gewoon verschijnen, maar de commute-POST wordt dan overgeslagen —
-            // anders kreeg de werknemer dubbele km-vergoeding bij elke retry.
-            // 30 min venster: een retry gebeurt binnen minuten; een échte
-            // tweede uitklok (extra blok) later op de dag boekt weer normaal.
+            // v324: kilometers al geboekt bij een eerdere (halfgelukte) uitklok-poging?
             const kmFlagKey = 'qe_km_posted_' + workOrderId + '_' + employeeId;
             let kmAlGepost = false;
             try {
                 const ts = Date.parse(localStorage.getItem(kmFlagKey) || '');
                 kmAlGepost = isFinite(ts) && (Date.now() - ts) >= 0 && (Date.now() - ts) < 30 * 60 * 1000;
             } catch (_) {}
-            if (kmAlGepost) {
+
+            // v417: berekening op de achtergrond — het scherm staat er meteen
+            const rij = (titel, sub, km) => '<div style="display:flex;align-items:center;gap:12px;padding:13px 0;border-top:1px solid var(--l1)">'
+                + '<div style="flex:1;min-width:0"><div style="font:500 15px var(--font,inherit);color:var(--ink)">' + esc(titel) + '</div>'
+                + '<div style="font:400 13px/1.35 var(--font,inherit);color:var(--g1);margin-top:2px">' + esc(sub) + '</div></div>'
+                + '<div style="font:500 22px var(--font,inherit);letter-spacing:-0.4px;color:var(--ink);white-space:nowrap">' + esc(km) + '<small style="font:400 13px var(--font,inherit);color:var(--g1);margin-left:2px">km</small></div></div>';
+            const tekstRij = (titel, sub) => '<div style="padding:14px 0"><div style="font:500 15px var(--font,inherit);color:var(--ink)">' + esc(titel) + '</div>'
+                + (sub ? '<div style="font:400 13px/1.4 var(--font,inherit);color:var(--g1);margin-top:2px">' + esc(sub) + '</div>' : '') + '</div>';
+            const toon = (k) => {
+                if (!kaartEl) return;
+                if (k.al) {
+                    kaartEl.innerHTML = tekstRij('Kilometers van vandaag staan al geboekt', 'Bij je eerste uitklok van vandaag.');
+                } else if (k.km && k.km.ok) {
+                    kaartEl.innerHTML = rij('Heen', cap(k.km.vanLabel) + ' → ' + k.km.eersteWerf, k.km.heen)
+                        + rij('Terug', k.km.laatsteWerf + ' → ' + k.km.naarLabel
+                            + (eindeBureau ? '' : ' · wordt herrekend als je aan het bureau laden en lossen afsluit of de woon-werkverkeer-tag scant'), k.km.terug);
+                    const eersteRij = kaartEl.firstElementChild;
+                    if (eersteRij) eersteRij.style.borderTop = 'none';
+                } else if (k.km && k.km.geenWerf) {
+                    kaartEl.innerHTML = tekstRij('Geen werf in je dagplanning vandaag', 'Er worden geen werfkilometers geboekt.');
+                } else {
+                    kaartEl.innerHTML = tekstRij('Kilometers niet berekend', ((k.km && k.km.fout) ? cap(k.km.fout) + '. ' : '') + 'Het bureel vult ze aan.');
+                }
+                const metKm = !k.al && k.km && k.km.ok;
+                if (mobBlokEl) mobBlokEl.style.display = metKm ? '' : 'none';
+                if (slotEl) slotEl.style.display = metKm ? 'flex' : 'none';
+                if (!btn.disabled) btn.textContent = knopTekst();
+            };
+            const kmBelofte = (async () => {
                 try {
-                    heenEl.disabled = true;
-                    terugEl.disabled = true;
-                    heenEl.style.opacity = '0.5';
-                    terugEl.style.opacity = '0.5';
-                    errEl.textContent = 'Kilometers zijn al opgeslagen bij de vorige poging — bevestigen rondt alleen de uitklok af.';
-                    errEl.style.color = '#0277bd';
-                    errEl.style.display = 'block';
-                } catch (_) {}
-            } else {
-                // Initial calc - bij open
-                setTimeout(() => { recalcKm(); }, 250);
-            }
-            // Re-calc bij thuis-werf vinkjes (fiets-vinkje heeft geen invloed meer)
-            if (directTWEl) directTWEl.addEventListener('change', recalcKm);
-            if (directWTEl) directWTEl.addEventListener('change', recalcKm);
+                    // de werkbon in één lees: de eerste inklok (opmerking) én de kilometers die er al staan
+                    const r = await RobawsAPI.get('work-orders/' + workOrderId + '?include=commuteEntries', { bypassCache: true });
+                    const wo = (r && r.code === 200 && r.data) ? r.data : null;
+                    const al = !!(wo && (wo.commuteEntries || []).some((c) => String(c.employeeId || '') === String(employeeId)));
+                    if (al || kmAlGepost) return { al: true };
+                    const s = kmOpts.session || {};
+                    const ei = (Q && wo) ? Q._eersteInklok(wo.remark) : null;
+                    const start = ei || (s.tagType ? { soort: s.tagType, lat: s.gpsLat, lng: s.gpsLng } : null);
+                    const startBureau = !!(Q && start && Q._startOpBureau(start));
+                    const km = await self._kmVandaag(employeeId, {
+                        startBureau: startBureau,
+                        startGps: (!startBureau && start && start.lat != null) ? { lat: start.lat, lng: start.lng } : null,
+                        eindeBureau: eindeBureau,
+                    });
+                    return { al: false, km: km };
+                } catch (e) {
+                    return { al: false, km: { ok: false, heen: 0, terug: 0, fout: (e && e.message) || 'onbekend' } };
+                }
+            })();
+            const kmMetLimiet = Promise.race([kmBelofte, new Promise((r) => setTimeout(() => r({ al: false,
+                km: { ok: false, heen: 0, terug: 0, fout: 'de berekening duurde te lang' } }), 15000))]);
+            let kmUitslag = null;
+            kmMetLimiet.then((k) => { kmUitslag = k; toon(k); });
 
             const submit = async () => {
-                // v251: re-entry-guard — btn.disabled blokkeerde alleen kliks,
-                // maar Enter op het km-veld riep submit() rechtstreeks aan;
-                // twee keer Enter op traag 4G gaf dubbele commute-entries
-                // (dubbele km-vergoeding).
-                if (this._kmSubmitBusy) return;
+                // v251: re-entry-guard — twee keer tikken op traag 4G gaf dubbele kilometerregels
+                if (self._kmSubmitBusy) return;
                 // v394: vroeger begonnen en niets ingevuld? Eén keer vragen —
                 // vóór er iets geschreven wordt. Nog eens tikken = zonder opmerking.
                 const opmerking = opmEl ? opmEl.value.trim() : '';
@@ -19707,136 +19713,69 @@ const app = {
                     try { opmEl.focus({ preventScroll: true }); } catch (_) {}
                     return;
                 }
-                this._kmSubmitBusy = true;
-                const heen = Math.max(0, Math.round(parseFloat(heenEl.value) || 0));
-                const terug = Math.max(0, Math.round(parseFloat(terugEl.value) || 0));
-                const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
-                const mobilityTypeId = mobRadio ? parseInt(mobRadio.value, 10) : -3;
-                const fiets = !!(fietsEl && fietsEl.checked);
-                const directThuisWerf = !!(directTWEl && directTWEl.checked);
-                const directWerfThuis = !!(directWTEl && directWTEl.checked);
-
-                // v131: detecteer split-rit (2e mobility-blok)
-                const splitOpen = splitSectionEl && splitSectionEl.style.display !== 'none';
-                const heen2 = splitOpen ? Math.max(0, Math.round(parseFloat(heen2El.value) || 0)) : 0;
-                const terug2 = splitOpen ? Math.max(0, Math.round(parseFloat(terug2El.value) || 0)) : 0;
-                const mob2Radio = document.querySelector('input[name="kmMobility2"]:checked');
-                const mobility2TypeId = mob2Radio ? parseInt(mob2Radio.value, 10) : -3;
-                const hasSplit = splitOpen && (heen2 > 0 || terug2 > 0);
-
+                if (eindeBureau && !vervoer) {
+                    errEl.textContent = 'Kies hoe je vandaag naar het werk gekomen bent.';
+                    errEl.setAttribute('data-soort', 'vervoer');
+                    errEl.style.display = 'block';
+                    try { document.getElementById('kmVervoerBlok').scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+                    return;
+                }
+                self._kmSubmitBusy = true;
                 btn.disabled = true;
-                btn.textContent = 'Bevestigen…';
+                btn.textContent = kmUitslag ? 'Bevestigen…' : 'Kilometers berekenen…';
                 errEl.style.display = 'none';
+                errEl.removeAttribute('data-soort');
                 if (opmEl) opmEl.readOnly = true;
-
                 try {
-                    if (kmAlGepost) {
-                        // v324: km stonden al in Robaws (eerdere poging) — niets
-                        // dubbel boeken, formulier dient enkel als bevestiging.
-                        console.log('[App] km al gepost voor deze werkbon — POST overgeslagen');
-                    } else {
-                    // Stap 1: commute-entry voor de hoofd-rit
-                    const r = await RobawsAPI.addCommuteEntry({
-                        workOrderId,
-                        employeeId,
-                        distance: heen,
-                        returnDistance: terug,
-                        mobilityTypeId: mobilityTypeId,
-                    });
-                    if (r.code !== 200 && r.code !== 201) {
-                        throw new Error('Robaws (' + r.code + ')');
-                    }
-                    // v324: vlag direct na de hoofd-POST — mislukt hierna nog
-                    // iets (split/afsluiten), dan boekt een retry niet dubbel.
-                    try { localStorage.setItem(kmFlagKey, new Date().toISOString()); } catch (_) {}
-
-                    // v131: stap 1b — tweede commute-entry indien split aangevinkt
-                    if (hasSplit) {
-                        const r2 = await RobawsAPI.addCommuteEntry({
-                            workOrderId,
-                            employeeId,
-                            distance: heen2,
-                            returnDistance: terug2,
-                            mobilityTypeId: mobility2TypeId,
+                    const k = await kmMetLimiet;
+                    btn.textContent = 'Bevestigen…';
+                    const regels = [];
+                    const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
+                    const mobilityTypeId = mobRadio ? parseInt(mobRadio.value, 10) : -3;
+                    if (k.al) {
+                        console.log('[App] kilometers van vandaag stonden al geboekt — geen tweede regel');
+                    } else if (k.km && k.km.ok) {
+                        const r = await RobawsAPI.addCommuteEntry({
+                            workOrderId, employeeId,
+                            distance: k.km.heen, returnDistance: k.km.terug, mobilityTypeId: mobilityTypeId,
                         });
-                        if (r2.code !== 200 && r2.code !== 201) {
-                            throw new Error('Robaws split (' + r2.code + ')');
-                        }
-                        console.log('[App] split commute-entry gepost:', { heen2, terug2, mobility2TypeId });
+                        if (r.code !== 200 && r.code !== 201) throw new Error('Robaws (' + r.code + ')');
+                        // v324: vlag direct na de POST — mislukt de uitklok hierna, dan boekt een retry niet dubbel
+                        try { localStorage.setItem(kmFlagKey, new Date().toISOString()); } catch (_) {}
+                        regels.push(RobawsAPI.kmRegel(k.km));
+                    } else {
+                        regels.push((k.km && k.km.geenWerf) ? 'km: geen werf vandaag' : RobawsAPI.kmRegel(k.km));
                     }
-                    }
-
-                    // Stap 2: checkboxes (Fietsvergoeding + Rechtstreeks routes) → set
-                    // extraFields op de werkbon. Alleen aanraken als minstens één checked
-                    // is, en alle 3 in één PUT (anders 3 round-trips).
-                    if (fiets || directThuisWerf || directWerfThuis) {
-                        try {
-                            // v251: vers GET vóór full-replace-PUT (valkuil)
-                            const woFull = await RobawsAPI.get(`work-orders/${workOrderId}`, { bypassCache: true });
-                            if (woFull.code === 200 && woFull.data) {
-                                woFull.data.extraFields = woFull.data.extraFields || {};
-                                if (fiets) {
-                                    woFull.data.extraFields['Fietsvergoeding'] = {
-                                        type: 'CHECKBOX',
-                                        group: 'Tijdsregistratie',
-                                        booleanValue: true,
-                                    };
-                                }
-                                if (directThuisWerf) {
-                                    woFull.data.extraFields['Rechtstreeks - Thuis / Werf'] = {
-                                        type: 'CHECKBOX',
-                                        group: 'Tijdsregistratie',
-                                        booleanValue: true,
-                                    };
-                                }
-                                if (directWerfThuis) {
-                                    woFull.data.extraFields['Rechtstreeks - Werf / Thuis'] = {
-                                        type: 'CHECKBOX',
-                                        group: 'Tijdsregistratie',
-                                        booleanValue: true,
-                                    };
-                                }
-                                await RobawsAPI.put(`work-orders/${workOrderId}`, woFull.data);
-                                console.log('[App] Tijdsregistratie checkboxes aangevinkt:',
-                                    {fiets, directThuisWerf, directWerfThuis}, 'op werkbon', workOrderId);
-                            }
-                        } catch (eFiets) {
-                            console.warn('[App] Tijdsregistratie checkboxes update faalde (niet kritiek):',
-                                eFiets && eFiets.message);
+                    if (eindeBureau) {
+                        let uur = '';
+                        try { uur = Q ? Q._localTime(await Q._getNow()) : ''; } catch (_) {}
+                        regels.push(RobawsAPI.woonWerkRegel(vervoer, 'uitgeklokt op het bureau', gpsUit && gpsUit.tekst, uur));
+                        if (vervoer === 'fiets') {
+                            try { await RobawsAPI.woonWerkRegistreren(workOrderId, { regels: [], fiets: true }); }
+                            catch (eF) { console.warn('[App] Fietsvergoeding aanvinken faalde (niet kritiek):', eF && eF.message); }
                         }
                     }
-
-                    // Succes → modal weg
                     m.remove();
-                    const tags = [];
- if (fiets) tags.push('');
- if (directThuisWerf) tags.push('→');
- if (directWerfThuis) tags.push('→');
- if (hasSplit) tags.push('');
-                    const tagTxt = tags.length ? ' · ' + tags.join(' ') : '';
-                    const totaalKm = (heen + terug) + (hasSplit ? (heen2 + terug2) : 0);
-                    this.toast(kmAlGepost
-                        ? 'Uitklokken bevestigd — kilometers stonden al opgeslagen'
-                        : 'Kilometers opgeslagen: ' + totaalKm + ' km' + tagTxt);
-                    // v394: de opmerking gaat mee in de afsluiting (clock.js)
-                    resolve({ bevestigd: true, opmerking: opmerking });
+                    const kmTxt = (!k.al && k.km && k.km.ok) ? (k.km.heen + k.km.terug) + ' km' : '';
+                    self.toast(eindeBureau
+                        ? 'Uitklokken bevestigd' + (kmTxt ? ' · ' + kmTxt : '') + ' · ' + RobawsAPI.WOONWERK_VERVOER[vervoer]
+                        : (kmTxt ? 'Kilometers opgeslagen: ' + kmTxt : 'Uitklokken bevestigd'));
+                    resolve({ bevestigd: true, opmerking: opmerking, extraRegels: regels });
                 } catch (e) {
-                    console.warn('[App] km POST faalde:', e && e.message);
-                    errEl.textContent = 'Opslaan mislukt: ' + (e && e.message || '?');
+                    console.warn('[App] kilometers boeken faalde:', e && e.message);
+                    errEl.textContent = 'Opslaan mislukt: ' + ((e && e.message) || '?');
                     errEl.style.display = 'block';
                     btn.disabled = false;
                     if (opmEl) opmEl.readOnly = false;
                     btn.textContent = knopTekst();
                 } finally {
-                    this._kmSubmitBusy = false;  // v251
+                    self._kmSubmitBusy = false;
                 }
             };
             btn.addEventListener('click', submit);
-            terugEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-            heenEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') terugEl.focus(); });
             // v272: ✕ of "Annuleren" = sluiten ZONDER uitklok — clock.js krijgt
             // resolve(false) en laat de sessie gewoon doorlopen.
-            const cancelKm = () => { try { m.remove(); } catch(_) {} resolve(false); };
+            const cancelKm = () => { try { m.remove(); } catch (_) {} resolve(false); };
             const kmCloseBtn = document.getElementById('kmPromptClose');
             if (kmCloseBtn) kmCloseBtn.addEventListener('click', cancelKm);
             const kmCancelBtn = document.getElementById('kmPromptCancel');
