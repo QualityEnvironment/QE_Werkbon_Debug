@@ -1170,3 +1170,42 @@ body.a11y-cvd-palette {
 #afbViewer .av-sluit { background: rgba(255,255,255,.14); color: #fff; }
 @keyframes av-draai { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { #afbViewer .av-draai { animation-duration: 2.4s; } }
+
+/* =========================================================
+   v415 · PIN MET STERRETJES + PROFIEL WISSELEN
+   ========================================================= */
+/* Lettertype "QE PIN" (1,9 KB, gemaakt met tools/pin/bouw-pinfont.js): elk cijfer wordt als een
+   sterretje getekend. De waarde van het veld blijft gewoon cijfers (de code leest .value zoals
+   altijd); cursor, wissen en het cijfertoetsenbord werken zoals vroeger. Letters (de tekst "PIN"
+   in een leeg veld) staan niet in dit lettertype en vallen terug op Archivo. */
+@font-face {
+    font-family: 'QE PIN';
+    src: url(data:font/otf;base64,T1RUTwAJAIAAAwAQQ0ZGIC7UNCIAAARgAAAC509TLzJpaWOdAAABAAAAAGBjbWFwAUYBuwAAA8QAAAB8aGVhZC9UILoAAACcAAAANmhoZWEDcgGcAAAA1AAAACRobXR4GqQAAAAAB0gAAAAsbWF4cAALUAAAAAD4AAAABm5hbWWtQR7KAAABYAAAAmRwb3N0AAMAAAAABEAAAAAgAAEAAAABAAC+YXsYXw889QADA+gAAAAA5ujuowAAAADm6O6jAEwAWgIgAjoAAAADAAIAAAAAAAAAAQAAA3D/JAAAAmwAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAsAAFAAAAsAAAADAmwB9AAFAAACigK7AAAAjAKKArsAAAHfADEBAgAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAABYWFhYAEAAMAA5A3D/JAAAAjoAWgAAAAEAAAAAAbgCOgAAAAAAAAAAACIBngABAAAAAAAAAAEAAgABAAAAAAABAAYAAAABAAAAAAACAAcAEgABAAAAAAADABAAlgABAAAAAAAEAA4AJwABAAAAAAAFAAsAdQABAAAAAAAGAAwAUQABAAAAAAAHAAEAAgABAAAAAAAIAAEAAgABAAAAAAAJAAEAAgABAAAAAAAKAAEAAgABAAAAAAALAAEAAgABAAAAAAAMAAEAAgABAAAAAAANAAEAAgABAAAAAAAOAAEAAgABAAAAAAAQAAYAAAABAAAAAAARAAcAEgADAAEECQAAAAIACgADAAEECQABAAwABgADAAEECQACAA4AGQADAAEECQADACAApgADAAEECQAEABwANQADAAEECQAFABYAgAADAAEECQAGABgAXQADAAEECQAHAAIACgADAAEECQAIAAIACgADAAEECQAJAAIACgADAAEECQAKAAIACgADAAEECQALAAIACgADAAEECQAMAAIACgADAAEECQANAAIACgADAAEECQAOAAIACgADAAEECQAQAAwABgADAAEECQARAA4AGVFFIFBJTgBRAEUAIABQAEkATlJlZ3VsYXIAUgBlAGcAdQBsAGEAclFFIFBJTiBSZWd1bGFyAFEARQAgAFAASQBOACAAUgBlAGcAdQBsAGEAclFFUElOUmVndWxhcgBRAEUAUABJAE4AUgBlAGcAdQBsAGEAclZlcnNpb24gMC4xAFYAZQByAHMAaQBvAG4AIAAwAC4AMSA6UUUgUElOIFJlZ3VsYXIAIAA6AFEARQAgAFAASQBOACAAUgBlAGcAdQBsAGEAcgAAAAEAAwABAAAADAAEAHAAAAAYABAAAwAIAAAAMAAxADIAMwA0ADUANgA3ADgAOf//AAAAAAAwADEAMgAzADQANQA2ADcAOAA5//8AAP/R/9H/0f/R/9H/0f/R/9H/0f/RAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEABAEAAQEBDVFFUElOUmVndWxhcgABAQEn+BsA+BwC+B0D+B4Ei+X6BPkABR0AAACiDx0AAAC3EYsdAAAC5xIADgEBDBogJysuMTY6PkFGS09WZXJzaW9uIDAuMVFFIFBJTiBSZWd1bGFyUUUgUElOUmVndWxhcnplcm9vbmV0d290aHJlZWZvdXJmaXZlc2l4c2V2ZW5laWdodG5pbmUAAAABiwGMAY0BjgGPAZABkQGSAZMBlAALAgABAAQAOQBuAKMA2AENAUIBdwGsAeECFvkADvkA95b4zhWL/HQF84sFi/h0BfcWQBX8NPuEBb8xBfg094QF/GiLFfg0+4QFv+UF/DT3hAUO+QD3lvjOFYv8dAXziwWL+HQF9xZAFfw0+4QFvzEF+DT3hAX8aIsV+DT7hAW/5QX8NPeEBQ75APeW+M4Vi/x0BfOLBYv4dAX3FkAV/DT7hAW/MQX4NPeEBfxoixX4NPuEBb/lBfw094QFDvkA95b4zhWL/HQF84sFi/h0BfcWQBX8NPuEBb8xBfg094QF/GiLFfg0+4QFv+UF/DT3hAUO+QD3lvjOFYv8dAXziwWL+HQF9xZAFfw0+4QFvzEF+DT3hAX8aIsV+DT7hAW/5QX8NPeEBQ75APeW+M4Vi/x0BfOLBYv4dAX3FkAV/DT7hAW/MQX4NPeEBfxoixX4NPuEBb/lBfw094QFDvkA95b4zhWL/HQF84sFi/h0BfcWQBX8NPuEBb8xBfg094QF/GiLFfg0+4QFv+UF/DT3hAUO+QD3lvjOFYv8dAXziwWL+HQF9xZAFfw0+4QFvzEF+DT3hAX8aIsV+DT7hAW/5QX8NPeEBQ75APeW+M4Vi/x0BfOLBYv4dAX3FkAV/DT7hAW/MQX4NPeEBfxoixX4NPuEBb/lBfw094QFDvkA95b4zhWL/HQF84sFi/h0BfcWQBX8NPuEBb8xBfg094QF/GiLFfg0+4QFv+UF/DT3hAUOAAJsAAACbAAAAmwAAAJsAAACbAAAAmwAAAJsAAACbAAAAmwAAAJsAAACbAAA) format('opentype');
+    font-display: block;
+}
+.pin-mask { font-family: 'QE PIN', var(--font) !important; }
+
+/* Balk "Je werkt als …" onder de kop, zolang de beheerder als iemand anders werkt */
+#wisselBalk {
+    position: fixed; left: 0; right: 0; top: calc(var(--header-h) + var(--safe-top)); z-index: 99;
+    height: 44px; box-sizing: border-box; padding: 0 10px 0 16px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: #26334B; color: #FFFFFF; font: 500 13px var(--font);
+    border-bottom: 2px solid var(--accent);
+}
+#wisselBalk .wb-tekst { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#wisselBalk b { font-weight: 700; }
+#wisselBalk .wb-knop {
+    flex-shrink: 0; border: none; border-radius: 2px; cursor: pointer;
+    background: var(--accent); color: #26334B; font: 600 12.5px var(--font); padding: 8px 12px;
+}
+#wisselBalk .wb-knop:disabled { opacity: 0.7; }
+body.wissel-actief { padding-top: calc(var(--header-h) + var(--safe-top) + 44px) !important; }
+body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 44px); }
+.wissel-chip {
+    flex-shrink: 0; font: 600 11px var(--font); letter-spacing: 0.3px; color: var(--g1);
+    border: 1px solid var(--b1); border-radius: 999px; padding: 3px 9px;
+}
+.wissel-chip-nu { color: #26334B; background: var(--accent); border-color: var(--accent); }
+.mb-prow.wissel-rij-uit { cursor: default; }
+#screenWissel > .section-header { display: none; }   /* de Marble-kop draagt de titel al */

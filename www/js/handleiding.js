@@ -53,7 +53,7 @@
             ['Ik ben mijn PIN vergeten.', 'Bel Levi. Hij zet je PIN terug op nul. Daarna kies je bij het inloggen gewoon een nieuwe.'],
             ['Er staat "e-mailadres niet gevonden".', 'Kijk of je alles juist typte (geen spatie, geen hoofdletters nodig). Lukt het nog niet? Bel Levi — dan zet hij je account goed.'],
             ['Ik heb een nieuwe telefoon.', 'App erop (laat Levi helpen), inloggen met je e-mail en je PIN — klaar. Al je gegevens staan veilig op kantoor, niet op je oude telefoon.'],
-            ['Kan iemand anders op mijn account?', 'Niet zonder jouw PIN. Geef je PIN dus aan niemand door.'],
+            ['Kan iemand anders op mijn account?', 'Niet zonder jouw PIN. Alleen de beheerder van de app (Levi) kan de app bekijken zoals jij hem ziet, bijvoorbeeld om je te helpen; dat wordt bijgehouden. Je PIN staat onleesbaar opgeslagen: niemand kan hem opzoeken, ook kantoor niet. Geef hem dus aan niemand door.'],
         ] },
     ] },
 

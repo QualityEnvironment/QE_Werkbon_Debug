@@ -418,18 +418,22 @@ const app = {
             document.getElementById('loginPinConfirm').value = '';
             document.getElementById('loginPinError').textContent = '';
 
+            // v415: het Marble-aanmeldscherm heeft geen #loginCardTitle meer. Die regel gooide een fout,
+            // waardoor bij "PIN instellen" (eerste aanmelding of na een PIN-reset) het tweede veld nooit
+            // verscheen en aanmelden vastliep op "PINs komen niet overeen". Elk element is nu optioneel.
+            const _zet = (id, t) => { const el = document.getElementById(id); if (el) el.textContent = t; };
             if (this._loginNeedsPinSetup) {
-                document.getElementById('loginCardTitle').textContent = 'PIN instellen';
-                document.getElementById('loginPinSubtitle').textContent = 'Eerste keer inloggen — kies een PIN (4–6 cijfers):';
-                document.getElementById('loginPinLabel').textContent = 'Nieuwe PIN';
+                _zet('loginCardTitle', 'PIN instellen');
+                _zet('loginPinSubtitle', 'Eerste keer inloggen — kies een PIN (4–6 cijfers):');
+                _zet('loginPinLabel', 'Nieuwe PIN');
                 document.getElementById('loginPinConfirmGroup').style.display = 'block';
-                document.getElementById('loginPinBtn').textContent = 'PIN instellen & inloggen';
+                _zet('loginPinBtn', 'PIN instellen & inloggen →');
             } else {
-                document.getElementById('loginCardTitle').textContent = 'Inloggen';
-                document.getElementById('loginPinSubtitle').textContent = 'Voer je PIN in';
-                document.getElementById('loginPinLabel').textContent = 'PIN';
+                _zet('loginCardTitle', 'Inloggen');
+                _zet('loginPinSubtitle', 'Voer je PIN in');
+                _zet('loginPinLabel', 'PIN (4–6 cijfers)');
                 document.getElementById('loginPinConfirmGroup').style.display = 'none';
-                document.getElementById('loginPinBtn').textContent = 'Inloggen';
+                _zet('loginPinBtn', 'Inloggen →');
             }
             setTimeout(() => document.getElementById('loginPin').focus(), 50);
         } catch (e) {
@@ -444,7 +448,8 @@ const app = {
     loginBack() {
         document.getElementById('loginStepPin').style.display = 'none';
         document.getElementById('loginStepEmail').style.display = 'block';
-        document.getElementById('loginCardTitle').textContent = 'Inloggen';
+        const _t = document.getElementById('loginCardTitle');   // v415: bestaat niet in het Marble-scherm
+        if (_t) _t.textContent = 'Inloggen';
     },
 
     async loginSubmitPin() {
@@ -500,7 +505,7 @@ const app = {
             errorEl.textContent = this._friendlyError(e);
         } finally {
             btn.disabled = false;
-            btn.textContent = this._loginNeedsPinSetup ? 'PIN instellen & inloggen' : 'Inloggen';
+            btn.textContent = this._loginNeedsPinSetup ? 'PIN instellen & inloggen →' : 'Inloggen →';
         }
     },
 
@@ -512,6 +517,8 @@ const app = {
         // zonder de fetch te awaiten en zonder user-gebonden localStorage
         // te wissen. Daardoor lekte woData/favorites/pending payments
         // van de vorige user naar de volgende op hetzelfde toestel.
+        // v415: tijdens een profielwissel eerst de eigen stand terugzetten — afmelden geldt dan voor jezelf
+        try { if (RobawsAPI.wisselStand()) RobawsAPI._wisselHerstel(); } catch (_e) {}
         try { await fetch('api/auth.php?action=logout'); } catch(e) {}
         try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', '', ''); } catch(_e) {}
         // v315: persoonlijke API-key wissen (volgende gebruiker krijgt zijn eigen key bij login)
@@ -540,6 +547,8 @@ const app = {
                 'qe_timer',                 // lopende timer (v205-fix: was 'qe_timer_state')
                 'qe_mollie_pending',        // v205: in-flight Mollie-context vorige user
                 'qe_active_role_override',  // v117: test-rolwissel uit profiel
+                'qe_sessie',                // v415: ondertekend bewijs van de aanmelding (PIN-beheer, profiel wisselen)
+                'qe_beheer_terug',          // v415: opzijgezette eigen stand tijdens een profielwissel
             ];
             const wipePrefixes = [
                 'planItem_',                // checkbox-state per werkbon
@@ -637,6 +646,7 @@ const app = {
         document.getElementById('loginScreen').classList.add('hidden');
         const roleLabel = this.currentUser.roleName || (this.isMonteur() ? 'Monteur' : 'Technieker');
         document.getElementById('headerUser').textContent = `${this.currentUser.name} — ${roleLabel}`;
+        try { this._wisselBalkTekenen(); } catch (_e) {}   // v415: profielwissel zichtbaar maken
         // Body-class zetten zodat CSS elementen kan verbergen voor monteurs
         document.body.classList.toggle('monteur-mode', this.isMonteur());
         document.body.classList.toggle('technieker-mode', !this.isMonteur());
@@ -850,6 +860,9 @@ const app = {
             const toeRow = document.getElementById('pgRowAppRechten');
             if (toeRow) toeRow.style.display = _isBureel ? '' : 'none';
         }
+        // v415: profiel wisselen — alleen de beheerder (de Worker beslist; dit is alleen het scherm)
+        const wisselGroep = document.getElementById('pgSectionWissel');
+        if (wisselGroep) wisselGroep.style.display = RobawsAPI.isBeheerder() ? '' : 'none';
 
         this.navigate('screenProfile');
     },
@@ -1896,6 +1909,7 @@ const app = {
             screenFactuurDetail: 'Factuur',  // v283
             screenAdmin: 'Beheer',  // v233
             screenUrenAnalyse: 'Uren-analyse',  // v247
+            screenWissel: 'Wissel van profiel',  // v415
         };
         document.getElementById('headerTitle').textContent = titles[screenId] || '';
 
@@ -1916,6 +1930,7 @@ const app = {
         if (screenId === 'screenProfile') { try { this.loadDefaultTerminalPicker(); } catch (_) {} }
         if (screenId === 'screenClock') this.onNavigateToClock();
         if (screenId === 'screenAdmin') this.loadAdmin();
+        if (screenId === 'screenWissel') this.loadWissel();   // v415
         if (screenId === 'screenUrenAnalyse') this.onNavigateToUrenAnalyse();
         if (screenId === 'screenAanvragen') this.openAanvragenTab();  // v278
         if (screenId === 'screenGoedkeuren') this.loadGoedkeuren();  // v278
@@ -13347,6 +13362,7 @@ const app = {
         list.innerHTML = '<div class="spinner"></div>';
         try {
             const emps = await RobawsAPI.adminListEmployees();
+            this._adminPinKluisTekenen();   // v415
             this._adminEmps = {};
             if (!emps.length) { list.innerHTML = '<p class="text-grey text-sm text-center">Geen werknemers gevonden</p>'; return; }
             list.innerHTML = emps.map(e => {
@@ -13356,7 +13372,10 @@ const app = {
                 const statusBadge = e.stopgezet
                     ? '<span style="color:var(--qe-red);font-weight:600">stopgezet</span>'
                     : '<span style="color:var(--qe-green);font-weight:600">actief</span>';
-                const pinBadge = e.hasPin ? '' : ' · <span style="color:var(--qe-orange)">geen PIN</span>';
+                // v415: met de PIN-kluis ook tonen wie nog een leesbare PIN in Robaws heeft
+                const _kluisOk = !!(RobawsAPI._pinKluisStand && RobawsAPI._pinKluisStand.ok);
+                const pinBadge = !e.hasPin ? ' · <span style="color:var(--qe-orange)">geen PIN</span>'
+                    : ((_kluisOk && e.pinLeesbaar) ? ' · <span style="color:var(--qe-orange)">PIN nog leesbaar in Robaws</span>' : '');
                 return `
                 <div class="card" style="padding:10px 12px;margin-bottom:8px">
                     <div style="min-width:0">
@@ -13377,11 +13396,50 @@ const app = {
         }
     },
 
+    /** v415: kaart boven de werknemerslijst — staan alle PIN's in de beveiligde opslag? */
+    _adminPinKluisTekenen() {
+        const box = document.getElementById('adminPinKluis');
+        if (!box) return;
+        const st = RobawsAPI._pinKluisStand;
+        const kaart = (inner) => '<div class="card" style="margin-bottom:12px;padding:12px 14px;font-size:13px;line-height:1.45">' + inner + '</div>';
+        if (!st) { box.innerHTML = ''; return; }   // oude Worker of nog niet opnieuw aangemeld
+        if (!st.ok) { box.innerHTML = kaart('<span style="color:var(--qe-orange)">PIN-status niet op te halen:</span> ' + this.escapeHtml(st.fout || '?')); return; }
+        if (!st.leesbaar) {
+            box.innerHTML = kaart('<b style="color:var(--qe-green)">&#10003; PIN\'s beveiligd.</b> Alle PIN\'s staan onleesbaar in de beveiligde opslag; in Robaws is geen PIN meer leesbaar.');
+            return;
+        }
+        box.innerHTML = kaart('<div style="margin-bottom:8px"><b>' + st.leesbaar + (st.leesbaar === 1 ? ' PIN staat' : ' PIN\'s staan') + ' nog leesbaar in Robaws.</b> '
+            + 'Bij de volgende aanmelding verhuist elke PIN vanzelf naar de beveiligde opslag; met deze knop gebeurt het nu voor iedereen.</div>'
+            + '<button class="btn btn-primary btn-sm" id="adminPinVerhuisKnop" onclick="app.adminPinVerhuis()">Nu beveiligen</button>');
+    },
+    async adminPinVerhuis() {
+        if (!this._adminGuard()) return;
+        this._adminBusy = true;
+        const knop = document.getElementById('adminPinVerhuisKnop');
+        if (knop) { knop.disabled = true; knop.textContent = 'Bezig…'; }
+        try {
+            const tot = await RobawsAPI.pinVerhuisAlles((t) => { if (knop) knop.textContent = 'Bezig… ' + (t.verhuisd + t.opgeruimd) + ' klaar'; });
+            if (tot.fouten && tot.fouten.length) this.toast('Klaar, maar ' + tot.fouten.length + ' fiche(s) lukten niet — probeer opnieuw', true);
+            else this.toast('Alle PIN\'s staan nu in de beveiligde opslag', false);
+        } catch (err) {
+            this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true);
+        } finally {
+            this._adminBusy = false;
+        }
+        this.loadAdmin();
+    },
+
     async adminResetPin(empId) {
         if (!this._adminGuard()) return;
         const e = this._adminEmps[empId];
         if (!e) return;
-        if (!confirm('PIN van ' + e.name + ' resetten? Hij stelt bij de volgende login zelf een nieuwe in.')) return;
+        // v415: je eigen PIN als beheerder kies je daarna niet in de app (de Worker eist hem uit Robaws)
+        const _sess = RobawsAPI.sessieLees();
+        const _zelf = !!(_sess && _sess.beheerder && String(e.email || '').toLowerCase() === String(_sess.email || '').toLowerCase());
+        const _vraag = _zelf
+            ? 'Je eigen PIN resetten? Als beheerder kies je daarna GEEN nieuwe PIN in de app: zet hem eerst in Robaws (veld Pincode op je fiche) en meld je daarmee aan.'
+            : 'PIN van ' + e.name + ' resetten? Bij de volgende aanmelding kiest die persoon zelf een nieuwe PIN.';
+        if (!confirm(_vraag)) return;
         this._adminBusy = true;
         try {
             await RobawsAPI.adminResetPin(empId);
@@ -13389,6 +13447,157 @@ const app = {
             this.loadAdmin();
         } catch (err) { this.toast('Mislukt: ' + ((err && err.message) || 'fout'), true); }
         finally { this._adminBusy = false; }
+    },
+
+    // ================================================================
+    // v415: PROFIEL WISSELEN (alleen de beheerder — de Worker controleert het)
+    // Je ziet en gebruikt de app als de gekozen werknemer, zonder PIN en zonder diens
+    // persoonlijke sleutel. De eigen stand staat veilig opzij (RobawsAPI.wisselNaar);
+    // "Terug" zet alles exact terug. Elke wissel staat in het logboek van de Worker.
+    // ================================================================
+    async loadWissel() {
+        const box = document.getElementById('wisselLijst');
+        const logBox = document.getElementById('wisselLog');
+        if (!box) return;
+        if (!RobawsAPI.isBeheerder()) { box.innerHTML = '<p class="text-grey text-sm text-center">Alleen voor de beheerder.</p>'; return; }
+        const zoek = document.getElementById('wisselZoek');
+        if (zoek) zoek.value = '';
+        box.innerHTML = '<div class="spinner"></div>';
+        if (logBox) logBox.innerHTML = '';
+        let lijst = [];
+        try { lijst = await RobawsAPI.getActiveEmployees({ force: true }); } catch (_e) {}
+        this._wisselLijst = (lijst || []).filter(e => e && e.employeeId != null);
+        this._wisselRender('');
+        try {
+            const log = await RobawsAPI.wisselLog();
+            if (logBox && log.length) {
+                const tijd = (iso) => { try { return new Date(iso).toLocaleString('nl-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch (_e) { return ''; } };
+                logBox.innerHTML = '<div style="font-size:11.5px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:var(--g1);margin:0 2px 8px">Laatste wissels</div>'
+                    + '<div class="card" style="padding:4px 14px">' + log.slice(0, 8).map((x, i, a) =>
+                        '<div style="display:flex;gap:10px;padding:9px 0;font-size:13px;' + (i < a.length - 1 ? 'border-bottom:1px solid var(--l1)' : '') + '">'
+                        + '<span style="color:var(--g1);flex-shrink:0;min-width:92px">' + this.escapeHtml(tijd(x.t)) + '</span>'
+                        + '<span style="min-width:0">' + (x.actie === 'terug' ? 'Terug van ' : 'Naar ') + '<b>' + this.escapeHtml(x.naam || ('#' + (x.id || '?'))) + '</b></span></div>').join('') + '</div>';
+            }
+        } catch (_e) {}
+    },
+    _wisselRender(q) {
+        const box = document.getElementById('wisselLijst');
+        if (!box) return;
+        const st = RobawsAPI.wisselStand();
+        const nu = this.currentUser || {};
+        const echtEmail = String(st ? st.echt.email : nu.email || '').toLowerCase();
+        const nuEmail = String(nu.email || '').toLowerCase();
+        const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+        const woorden = norm(q).split(/\s+/).filter(Boolean);
+        const rolNaam = { monteur: 'Monteur', technieker: 'Technieker', bureel: 'Bureel' };
+        let items = (this._wisselLijst || []).slice();
+        if (woorden.length) items = items.filter(e => { const t = norm(e.name + ' ' + e.email + ' ' + (rolNaam[e.role] || '')); return woorden.every(w => t.indexOf(w) >= 0); });
+        const metMail = items.filter(e => e.email);
+        const zonder = items.filter(e => !e.email);
+        let html = '';
+        if (st) {
+            html += '<div class="card mb-prowcard" style="margin-bottom:12px;padding:4px 18px"><div class="mb-prow" style="border-bottom:none" onclick="app.wisselTerug()">'
+                + '<div style="flex:1;min-width:0"><div class="mb-prow-t">Terug naar jezelf</div><div class="mb-prow-s">' + this.escapeHtml(st.echt.naam || st.echt.email) + ' · je eigen gegevens komen terug</div></div>'
+                + '<span class="mb-prow-arrow">→</span></div></div>';
+        }
+        if (!metMail.length) {
+            html += '<p class="text-grey text-sm text-center" style="margin:18px 0">' + (woorden.length ? 'Niemand gevonden.' : 'Geen werknemers gevonden.') + '</p>';
+        } else {
+            html += '<div class="card mb-prowcard" style="padding:4px 18px">' + metMail.map((e, i) => {
+                const email = String(e.email).toLowerCase();
+                const ikZelf = email === echtEmail;
+                const actief = !!st && email === nuEmail;
+                const sub = (rolNaam[e.role] || '') + ' · ' + e.email;
+                const chip = ikZelf ? '<span class="wissel-chip">jij</span>' : (actief ? '<span class="wissel-chip wissel-chip-nu">nu actief</span>' : '<span class="mb-prow-arrow">→</span>');
+                const klik = (ikZelf || actief) ? '' : ' onclick="app.wisselKies(\'' + this._escapeJsArg(String(e.employeeId)) + '\')"';
+                return '<div class="mb-prow' + ((ikZelf || actief) ? ' wissel-rij-uit' : '') + '"' + klik + (i === metMail.length - 1 ? ' style="border-bottom:none"' : '') + '>'
+                    + '<div style="flex:1;min-width:0"><div class="mb-prow-t">' + this.escapeHtml(e.name) + '</div>'
+                    + '<div class="mb-prow-s" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + this.escapeHtml(sub) + '</div></div>' + chip + '</div>';
+            }).join('') + '</div>';
+        }
+        if (zonder.length) {
+            html += '<div style="font-size:12px;color:var(--g1);line-height:1.45;margin:10px 4px 0">Zonder e-mailadres op de fiche (wisselen kan niet): '
+                + zonder.map(e => this.escapeHtml(e.name)).join(', ') + '</div>';
+        }
+        box.innerHTML = html;
+    },
+    wisselKies(empId) {
+        if (!RobawsAPI.isBeheerder()) { this.toast('Alleen voor de beheerder', true); return; }
+        const e = (this._wisselLijst || []).find(x => String(x.employeeId) === String(empId));
+        if (!e) return;
+        const naam = this.escapeHtml(e.name);
+        const voornaam = this.escapeHtml(String(e.name || '').split(' ')[0] || e.name);
+        this.showModal(
+            '<div style="font-size:16px;font-weight:600;margin-bottom:6px">Wisselen naar ' + naam + '?</div>' +
+            '<div style="font-size:13px;color:var(--g1);line-height:1.5;margin-bottom:12px">Je ziet de app zoals ' + naam + ' hem ziet: planning, klok, uren en werkbonnen. '
+            + 'Alles wat je doet, gebeurt op naam van ' + voornaam + '. Goedkeuren en mailen op naam van ' + voornaam + ' kan niet.<br><br>'
+            + 'Terug naar jezelf met de balk bovenaan, zonder PIN. Je eigen gegevens blijven veilig bewaard.</div>' +
+            '<div id="wisselFout" style="color:var(--red2,#c0392b);font-size:13px;min-height:16px;margin-bottom:8px"></div>' +
+            '<div style="display:flex;gap:8px">' +
+                '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>' +
+                '<button class="btn btn-primary btn-full" id="wisselKnop" onclick="app._wisselDoe(\'' + this._escapeJsArg(String(empId)) + '\')">Wisselen</button></div>'
+        );
+    },
+    async _wisselDoe(empId) {
+        if (this._wisselBezig) return;
+        this._wisselBezig = true;
+        const knop = document.getElementById('wisselKnop');
+        const fout = document.getElementById('wisselFout');
+        if (knop) { knop.disabled = true; knop.textContent = 'Even geduld…'; }
+        try {
+            await RobawsAPI.wisselNaar(empId);
+            location.reload();
+        } catch (err) {
+            this._wisselBezig = false;
+            if (knop) { knop.disabled = false; knop.textContent = 'Wisselen'; }
+            if (fout) fout.textContent = (err && err.message) || 'Wisselen mislukt';
+        }
+    },
+    /** Staat er nog niet-verstuurd werk van het gewisselde profiel op dit toestel? */
+    _wisselOpenWerk() {
+        try {
+            if (localStorage.getItem('qe_timer') || localStorage.getItem('qe_timer_pending_block')) return true;
+            const wd = this.woData || {};
+            return Object.keys(wd).some(k => {
+                const d = wd[k] || {};
+                return (d.hours && d.hours.length) || (d.materials && d.materials.length) || (d.photos && d.photos.length) || String(d.notes || '').trim();
+            });
+        } catch (_e) { return false; }
+    },
+    async wisselTerug() {
+        if (this._wisselBezig) return;
+        if (!RobawsAPI.wisselStand()) { this._wisselBalkTekenen(); return; }
+        if (this._wisselOpenWerk()) {
+            const wie = (this.currentUser && this.currentUser.name) || 'deze werknemer';
+            if (!confirm('Er staat nog werk dat je als ' + wie + ' niet verstuurde (timer of werkbon). Dat verdwijnt van dit toestel als je teruggaat. Toch terug?')) return;
+        }
+        this._wisselBezig = true;
+        const knop = document.querySelector('#wisselBalk .wb-knop');
+        if (knop) { knop.disabled = true; knop.textContent = 'Even geduld…'; }
+        try { await RobawsAPI.wisselTerug(); } catch (_e) {}
+        location.reload();
+    },
+    /** Balk onder de kop zolang je als iemand anders werkt. */
+    _wisselBalkTekenen() {
+        let st = null;
+        try { st = RobawsAPI.wisselStand(); } catch (_e) {}
+        const u = this.currentUser;
+        let el = document.getElementById('wisselBalk');
+        if (!st || !u || !u.wissel) {
+            if (el) el.remove();
+            document.body.classList.remove('wissel-actief');
+            return;
+        }
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'wisselBalk';
+            el.setAttribute('role', 'status');
+            document.body.appendChild(el);
+        }
+        const voornaam = String(st.echt.naam || st.echt.email || '').split(/[ @]/)[0] || 'jezelf';
+        el.innerHTML = '<span class="wb-tekst">Je werkt als <b>' + this.escapeHtml(u.name) + '</b></span>'
+            + '<button type="button" class="wb-knop" onclick="app.wisselTerug()">Terug naar ' + this.escapeHtml(voornaam) + '</button>';
+        document.body.classList.add('wissel-actief');
     },
 
     async adminToggleStatus(empId) {
@@ -13448,7 +13657,7 @@ const app = {
             '<div class="form-group"><label>Achternaam</label><input class="form-input" id="adminNewLast"></div>' +
             '<div class="form-group"><label>E-mail</label><input class="form-input" id="adminNewEmail" type="email" placeholder="naam@qe.be"></div>' +
             '<div class="form-group"><label>Rol</label><select class="form-input" id="adminNewRole"><option value="monteur">Monteur</option><option value="technieker">Technieker</option><option value="bureel">Bureel</option></select></div>' +
-            '<div class="form-group"><label>PIN (optioneel, 4–6 cijfers)</label><input class="form-input" id="adminNewPin" inputmode="numeric" maxlength="6" placeholder="leeg = bij 1e login"></div>' +
+            '<div class="form-group"><label>PIN (optioneel, 4–6 cijfers)</label><input class="form-input pin-mask" id="adminNewPin" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="leeg = bij 1e login"></div>' +
             '<div style="display:flex;gap:8px;margin-top:8px">' +
                 '<button class="btn btn-outline btn-full" onclick="app.closeModal()">Annuleren</button>' +
                 '<button class="btn btn-primary btn-full" onclick="app.submitAdminCreate()">Aanmaken</button></div>'
@@ -13468,7 +13677,8 @@ const app = {
         this._adminBusy = true;
         try {
             const created = await RobawsAPI.adminCreateEmployee({ firstName, lastName, email, role, pin });
-            this.toast('Werknemerfiche aangemaakt', false);
+            if (created && created.pinFout) this.toast('Fiche aangemaakt, maar de PIN kon niet gezet worden: ' + created.pinFout, true);
+            else this.toast('Werknemerfiche aangemaakt', false);
             this.loadAdmin();
             // (v308 / 1.x v303) meteen door naar de controle-checklist zodat
             // bureel ziet wat er nog ontbreekt (login-koppeling in Robaws-web).
@@ -13551,7 +13761,7 @@ const app = {
         html += row(c.user.ok, 'Login-gebruiker gekoppeld', this.escapeHtml(c.user.value || ''),
             c.user.ok ? '' : '<div style="font-size:12px;color:var(--qe-grey);margin-top:6px;line-height:1.45">De app kan dit niet zelf (Robaws staat het niet toe via de API). Maak in <b>Robaws-web &#8594; Instellingen &#8594; Gebruikers</b> een gebruiker aan (of open de bestaande) en kies bij <b>Werknemer</b> deze fiche. Kom daarna terug en tik &quot;Opnieuw controleren&quot;.</div>');
         html += row(c.pin.ok, 'PIN', c.pin.ok ? 'ingesteld' : 'nog geen — kiest werknemer bij 1e login',
-            c.pin.ok ? '' : fixWrap('<input class="form-input" id="obPin" inputmode="numeric" maxlength="6" placeholder="nu al zetten (optioneel)" style="flex:1">' +
+            c.pin.ok ? '' : fixWrap('<input class="form-input pin-mask" id="obPin" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="nu al zetten (optioneel)" style="flex:1">' +
                 '<button class="btn btn-outline btn-sm" onclick="app.adminOnboardFixPin(\'' + idArg + '\')">Zet</button>'), !c.pin.ok);
         // v315: eigen API-key in de Worker-kluis (alleen tonen als de Worker de check kent)
         if (c.apiKey && c.apiKey.known) {
@@ -13593,7 +13803,7 @@ const app = {
     adminOnboardFixPin(empId) {
         const pin = ((document.getElementById('obPin') || {}).value || '').trim();
         if (!/^\d{4,6}$/.test(pin)) { this.toast('PIN = 4 tot 6 cijfers', true); return; }
-        this._adminOnboardFix(empId, () => RobawsAPI._savePinToRobaws(empId, pin), 'PIN gezet');
+        this._adminOnboardFix(empId, () => RobawsAPI.adminSetPin(empId, pin), 'PIN gezet');   // v415: via de PIN-kluis
     },
 
     async loadClockAdmin() {

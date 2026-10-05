@@ -269,21 +269,22 @@ const APIBridge = {
                     }
                     const hasPin = !!pinVal;
                     console.log('[APIBridge] check-email:', email, 'hasPin:', hasPin, 'extraFields keys:', Object.keys(ef));
-                    return this.jsonResponse({ known: true, hasPin });
+                    // v415: sinds de PIN-kluis (Worker v471) staat de PIN niet meer in Robaws: zonder
+                    // antwoord van de Worker is "geen PIN" niet te weten → gewoon om de PIN vragen.
+                    // Een nieuwe PIN kiezen kan alleen met de Worker (zie RobawsAPI.login).
+                    return this.jsonResponse({ known: true, hasPin: true });
                 }
             } catch(e) {
                 // Robaws onbereikbaar → fallback naar lokale mapping + lokale PIN cache
                 const knownLocal = !!RobawsAPI.EMPLOYEES[email];
                 if (knownLocal) {
-                    const hasLocalPin = await RobawsAPI.hasPin(email);
-                    return this.jsonResponse({ known: true, hasPin: hasLocalPin });
+                    return this.jsonResponse({ known: true, hasPin: true });   // v415: zie hierboven
                 }
             }
             // Laatste fallback: lokale mapping
             const knownLocal = !!RobawsAPI.EMPLOYEES[email];
             if (knownLocal) {
-                const hasLocalPin = await RobawsAPI.hasPin(email);
-                return this.jsonResponse({ known: true, hasPin: hasLocalPin });
+                return this.jsonResponse({ known: true, hasPin: true });   // v415: zie hierboven
             }
             return this.jsonResponse({ known: false }, 200);
         }
@@ -604,6 +605,15 @@ const APIBridge = {
                 return this.jsonResponse({ success: false, queued: false, error: 'Ongeldige werkbon-payload' }, 400);
             }
             const key = String(body.planningItemId) + '|' + (body.date || '');
+            // v415: wie de werkbon maakte, reist mee in de wachtrij — een latere profielwissel
+            // op dit toestel mag hem bij het versturen niet op een andere naam zetten.
+            try {
+                const u = RobawsAPI.getLoggedInUser();
+                if (u) {
+                    if (!body.employeeId) body.employeeId = u.robawsEmployeeId;
+                    if (!body.userId && u.robawsUserId) body.userId = u.robawsUserId;
+                }
+            } catch (_) {}
             // Dedup: zelfde planning-item + datum → nieuwste versie wint
             const filtered = this._readWerkbonQueue().filter(e => e.key !== key);
             const entry = { key, queuedAt: Date.now(), attempts: 0, lastError: null, payload: body };

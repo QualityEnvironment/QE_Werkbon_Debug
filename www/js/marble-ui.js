@@ -61,7 +61,8 @@
         screenMaterieelDetail:{ sub: 'Reserveren & beschikbaarheid', title: 'Materieel' },
         screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' },
         screenHandleiding: { sub: 'Alles over de app · typ om te zoeken', title: 'Handleiding' },
-        screenRegelboek:   { sub: 'Welke uren tellen en welke niet', title: 'Regelboek uren' }   // v399
+        screenRegelboek:   { sub: 'Welke uren tellen en welke niet', title: 'Regelboek uren' },   // v399
+        screenWissel:      { sub: 'Alleen voor de beheerder', title: 'Wissel van profiel' }   // v415
         /* screenHandleidingH: hoofdstuk rendert zijn eigen Marble-kop */
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
@@ -334,9 +335,15 @@
             ['App bijwerken', 'Controleer op updates; bureel ziet hier ook het API-tegoed van vandaag. Uitloggen staat helemaal onderaan.', '#pgHeadApp']
         ] },
         screenAdmin: { name: 'BEHEER', steps: [
-            ['Werknemers', 'Per werknemer zie je rol en status. PIN reset stuurt een nieuwe PIN, Rol wisselt de app-flow, Stopzet deactiveert de login.'],
+            ['Werknemers', 'Per werknemer zie je rol en status. PIN reset: de werknemer kiest bij de volgende aanmelding zelf een nieuwe PIN. Rol wisselt de app-flow, Stopzet deactiveert de login.'],
+            ['PIN-kluis', 'PIN\'s staan niet meer leesbaar in Robaws maar onleesbaar in de beveiligde opslag van QE. Staat er nog een leesbare PIN in Robaws, dan zie je dat bovenaan en verhuis je ze met één knop.', '#adminPinKluis'],
             ['✓ Controleren', 'De wizard checkt e-mail, status, rol, login-koppeling en PIN van een werknemer — en repareert met één tik wat kan. "+ Nieuw" maakt een fiche en opent meteen die checklist.'],
             ['Robaws', 'Alles wordt live in Robaws bewaard. Alleen de login-gebruiker zelf maak je in Robaws-web aan (Instellingen → Gebruikers, veld "Werknemer" = de fiche).']
+        ] },
+        screenWissel: { name: 'PROFIEL WISSELEN', steps: [
+            ['Werknemer kiezen', 'Tik een werknemer aan: je ziet de app zoals die persoon hem ziet (planning, klok, uren, werkbonnen), zonder PIN.', '#wisselLijst'],
+            ['Terug naar jezelf', 'De donkere balk bovenaan blijft staan zolang je als iemand anders werkt. Eén tik en je bent terug, met al je eigen gegevens.'],
+            ['Alleen jij', 'De server controleert dat alleen de beheerder kan wisselen. Goedkeuren en mailen op naam van een ander kan niet, en elke wissel staat in het logboek onderaan.', '#wisselLog']
         ] },
         screenHandleiding: { name: 'HANDLEIDING', steps: [
             ['Zoeken', 'Typ twee letters of meer — je zoekt meteen door alle hoofdstukken, stappen, vragen en de woordenlijst. Tik een resultaat om er rechtstreeks naartoe te springen.', '#hlZoekInput'],
