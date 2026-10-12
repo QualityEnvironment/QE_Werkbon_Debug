@@ -912,15 +912,16 @@
         </div>
     </div>
 
+    <!-- v427: Materiaal eerst, Verlof achteraan (vraag Levi 12 okt 2026) -->
     <div class="mb-subtabs" id="aanvraagSubtabs">
-        <button class="mb-subtab active" data-atab="verlof" onclick="app.setAanvraagTab('verlof')">Verlof</button>
-        <button class="mb-subtab" data-atab="materiaal" onclick="app.setAanvraagTab('materiaal')">Materiaal</button>
+        <button class="mb-subtab active" data-atab="materiaal" onclick="app.setAanvraagTab('materiaal')">Materiaal</button>
         <button class="mb-subtab" data-atab="materieel" onclick="app.setAanvraagTab('materieel')">Materieel</button>
         <button class="mb-subtab" data-atab="budget" onclick="app.setAanvraagTab('budget')">Budget</button>
+        <button class="mb-subtab" data-atab="verlof" onclick="app.setAanvraagTab('verlof')">Verlof</button>
     </div>
 
     <!-- VERLOF -->
-    <div class="aanvraag-panel" id="aanvraagVerlof">
+    <div class="aanvraag-panel" id="aanvraagVerlof" style="display:none">
         <div id="verlofBudgetBox" style="margin-bottom:14px"></div>
         <div class="card" style="margin-bottom:16px;padding:16px">
             <div style="font-size:13px;color:var(--g1);margin-bottom:14px;line-height:1.55">
@@ -940,7 +941,7 @@
     </div>
 
     <!-- MATERIAAL — bestellen met een mandje (v425; vervangt het tekstformulier van v329) -->
-    <div class="aanvraag-panel" id="aanvraagMateriaal" style="display:none">
+    <div class="aanvraag-panel" id="aanvraagMateriaal">
         <div class="card" style="padding:16px;margin-bottom:16px">
             <div style="font-size:15px;font-weight:600;margin-bottom:4px">Materiaal nodig?</div>
             <p style="font-size:13px;color:var(--g1);margin:0 0 14px;line-height:1.55">Kies de artikels in de webshop, voor een werf of voor de stock. Het bureel kijkt je bestelling na en bestelt bij de leverancier.</p>

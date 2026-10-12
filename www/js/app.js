@@ -2662,6 +2662,14 @@ const app = {
      */
     async refreshCurrentScreen() {
         const screen = this.currentScreen;
+        // v427: kwam er toch een "verversen" binnen terwijl er een venster openstaat of iets niet bovenaan staat (een veeg
+        // die begon vóór de www de schakelaar kon omzetten), dan niets herladen onder het venster: alleen het rondje stoppen.
+        const ptr = (typeof this._ptrBeoordeel === 'function') ? this._ptrBeoordeel() : { mag: true };
+        if (!ptr.mag) {
+            console.log('[Refresh] Overgeslagen (' + ptr.reden + '):', screen);
+            try { if (window.QEBridge && typeof QEBridge.refreshDone === 'function') QEBridge.refreshDone(); } catch (_) {}
+            return;
+        }
         console.log('[Refresh] Refresh huidig scherm:', screen);
         try {
             switch (screen) {
@@ -5517,7 +5525,14 @@ const app = {
             g.frame.style.opacity = '1';
             const laad = g.ov.querySelector('#gsmLaad');
             if (laad) laad.remove();
-            try { g.frame.contentWindow.postMessage({ bron: 'qe-app', type: 'start', v: 1, sessie: s.token, doel: g.doel, ctx: g.ctx }, g.origin); } catch (_) {}
+            // v426: kan = wat de app nog voor de webshop doet ('open' = een document zoals de technische fiche in de browser openen)
+            try { g.frame.contentWindow.postMessage({ bron: 'qe-app', type: 'start', v: 1, kan: ['open'], sessie: s.token, doel: g.doel, ctx: g.ctx }, g.origin); } catch (_) {}
+            return;
+        }
+        // v426: een document van een artikel (technische fiche) openen in de browser van het toestel; de webshop blijft open
+        if (d.type === 'open') {
+            const u = String(d.url || '');
+            if (/^https:\/\/[^\s"'<>]{4,600}$/.test(u)) this._ciawOpen(u);
             return;
         }
         if (d.type === 'stand') g.n = Number(d.n) || 0;
@@ -16224,14 +16239,14 @@ const app = {
     // v278: AANVRAGEN-tab (hub: Verlof / Materiaal / Materieel) +
     // verlofsaldo + chat op een aanvraag + goedkeur-hub (Verlof/Facturen).
     // ============================================================
-    _aanvraagTab: 'verlof',
+    _aanvraagTab: 'materiaal',   // v427: Materiaal eerst, Verlof achteraan (vraag Levi 12 okt 2026)
     openAanvragenTab() {
         const u = RobawsAPI.getLoggedInUser();
         const card = document.getElementById('aanvraagGoedkeurenCard');
         const isBureel = u && u.role === 'bureel';
         if (card) card.style.display = isBureel ? 'block' : 'none';
         if (isBureel) this._refreshAanvraagGoedkeurCount();
-        this.setAanvraagTab(this._aanvraagTab || 'verlof');
+        this.setAanvraagTab(this._aanvraagTab || 'materiaal');
     },
 
     setAanvraagTab(tab) {
@@ -22732,8 +22747,41 @@ const app = {
 
     // v292: pull-to-refresh (native SwipeRefreshLayout) uitzetten zodra er een
     // pop-up/overlay openstaat — anders triggert omhoog scrollen in een modal een
-    // ongewilde app-refresh. Een MutationObserver houdt de status bij, dus dit
-    // werkt voor ELKE overlay (modal, PDF-viewer, Marble-loader/succes, …).
+    // ongewilde app-refresh.
+    // v427: HERSCHREVEN (melding Levi 12 okt 2026: "Heel vaak als je naar beneden hebt gescrolt en je wil terug naar
+    // boven scrollen, scrolt hij niet maar refresht hij."). De APK (SwipeRefreshLayout 1.1.0 rond de WebView) kijkt
+    // alleen of de PAGINA bovenaan staat. Twee gevolgen:
+    //  1) een venster over het hele scherm (km-formulier, uren verdelen, gasfles, webshop, ...) of een lijst die zelf
+    //     scrolt, ziet hij niet: stond de pagina eronder bovenaan, dan werd elke veeg naar beneden "verversen" in
+    //     plaats van scrollen. De lijst van v292 kende maar een paar vensters (1 van de ±30 eigen vensters).
+    //  2) begon een veeg lager op de pagina en kwam ze tijdens die veeg bovenaan, dan rekende hij met het beginpunt van
+    //     een VORIGE veeg (dat vergeet hij niet) en kon hij midden in de veeg toch beginnen te trekken.
+    // Daarom beslist de www VOORAF en zet ze de schakelaar van de APK (QEBridge.setPullToRefreshEnabled, APK >= 1.243):
+    //  - UIT, meteen: zodra er een groot vast vlak midden op het scherm ligt, of de pagina of een zichtbare lijst niet
+    //    bovenaan staat;
+    //  - weer AAN: alleen als niemand het scherm aanraakt, alles bovenaan staat en het 250 ms rustig bleef, nooit midden
+    //    in een veeg. Verversen kan dus alleen nog met een NIEUWE veeg die bovenaan begint (zoals in Chrome).
+    _PTR_RUST_MS: 250,
+    _ptrPaginaTop() {
+        const se = document.scrollingElement || document.documentElement;
+        return Math.max((se && se.scrollTop) || 0, window.pageYOffset || 0);
+    },
+    // Hoort el bij een vast vlak dat een groot deel van het scherm bedekt (venster, sheet, laadscherm)? De kop, de
+    // menubalk onderaan, een melding en de +-knop zijn ook vast, maar klein: die tellen niet.
+    _ptrInVastVlak(el) {
+        const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+        for (let i = 0; el && el.nodeType === 1 && i < 80; i++, el = el.parentElement) {
+            if (el === document.body || el === document.documentElement) return false;
+            let cs = null;
+            try { cs = getComputedStyle(el); } catch (_e) { return false; }
+            if (cs && cs.position === 'fixed') {
+                const r = el.getBoundingClientRect();
+                if (r.height >= vh * 0.4 && r.width >= vw * 0.6) return true;
+            }
+        }
+        return false;
+    },
+    // Staat er een venster open? De vensters van v292 bij naam + elk groot vast vlak op drie punten midden op het scherm.
     _pullRefreshOverlayOpen() {
         try {
             const m = document.getElementById('modalOverlay');
@@ -22743,21 +22791,122 @@ const app = {
             for (let i = 0; i < nodes.length; i++) {
                 if (nodes[i].offsetWidth > 0 || nodes[i].offsetHeight > 0) return true;
             }
+            const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+            if (vw && vh && typeof document.elementFromPoint === 'function') {
+                const punten = [0.35, 0.5, 0.65];
+                for (let i = 0; i < punten.length; i++) {
+                    const el = document.elementFromPoint(vw / 2, vh * punten[i]);
+                    if (el && this._ptrInVastVlak(el)) return true;
+                }
+            }
             return false;
         } catch (_e) { return false; }
     },
+    // Een zichtbare lijst of tekstvak die zelf scrolt en niet bovenaan staat (bijgehouden via de scroll-gebeurtenissen).
+    _ptrLijstNietBovenaan() {
+        const set = this._ptrScrollers;
+        if (!set || !set.size) return null;
+        let gevonden = null;
+        set.forEach((el) => {
+            if (gevonden) return;
+            if (!el || !el.isConnected) { set.delete(el); return; }
+            if ((el.scrollTop || 0) > 1 && el.getClientRects().length) gevonden = el;
+        });
+        return gevonden;
+    },
+    // Staat er een tekenvak (handtekening: canvas met touch-action:none) in beeld? Bij een korte werkbon staat het vak
+    // bovenaan: een handtekening met een haal naar beneden mag dan geen "verversen" worden.
+    _ptrTekenvakInBeeld() {
+        const vh = window.innerHeight || 0;
+        const lijst = document.querySelectorAll('canvas');
+        for (let i = 0; i < lijst.length; i++) {
+            const r = lijst[i].getBoundingClientRect();
+            if (!r.width || !r.height || r.bottom <= 0 || r.top >= vh) continue;
+            if (getComputedStyle(lijst[i]).touchAction === 'none') return true;
+        }
+        return false;
+    },
+    // Mag "trek om te verversen" nu? { mag, reden: 'venster' | 'pagina' | 'lijst' | 'tekenvak' }
+    _ptrBeoordeel() {
+        try {
+            if (this._pullRefreshOverlayOpen()) return { mag: false, reden: 'venster' };
+            if (this._ptrPaginaTop() > 1) return { mag: false, reden: 'pagina' };
+            if (this._ptrLijstNietBovenaan()) return { mag: false, reden: 'lijst' };
+            if (this._ptrTekenvakInBeeld()) return { mag: false, reden: 'tekenvak' };
+            return { mag: true, reden: '' };
+        } catch (_e) { return { mag: false, reden: 'fout' }; }
+    },
+    _ptrZet(aan) {
+        if (this._ptrAan === aan) return;
+        this._ptrAan = aan;
+        try { if (window.QEBridge && QEBridge.setPullToRefreshEnabled) QEBridge.setPullToRefreshEnabled(aan); } catch (_e) {}
+    },
     _syncPullRefresh() {
-        const open = this._pullRefreshOverlayOpen();
-        if (open === this._lastPullState) return;
-        this._lastPullState = open;
-        try { if (window.QEBridge && QEBridge.setPullToRefreshEnabled) QEBridge.setPullToRefreshEnabled(!open); } catch (_e) {}
+        const b = this._ptrBeoordeel();
+        this._ptrStand = b;
+        if (!b.mag) {
+            clearTimeout(this._ptrAanT); this._ptrAanT = null;
+            this._ptrZet(false);
+            return;
+        }
+        if (this._ptrAan === true || this._ptrVingers > 0 || this._ptrAanT) return;
+        this._ptrAanT = setTimeout(() => {
+            this._ptrAanT = null;
+            if (this._ptrVingers > 0) return;            // iemand raakt het scherm intussen aan: bij het loslaten opnieuw
+            const b2 = this._ptrBeoordeel();
+            this._ptrStand = b2;
+            this._ptrZet(!!b2.mag);
+        }, this._PTR_RUST_MS);
+    },
+    // Raakt de vinger iets aan in een lijst die niet bovenaan staat? (extra vangnet bij het aanraken)
+    _ptrDoelNietBovenaan(el) {
+        for (let i = 0; el && el.nodeType === 1 && i < 80; i++, el = el.parentElement) {
+            if (el === document.body || el === document.documentElement) break;
+            if ((el.scrollTop || 0) > 1) return true;
+        }
+        return false;
     },
     _installPullRefreshGuard() {
         if (this._pullGuardInstalled) return;
         this._pullGuardInstalled = true;
         try {
-            const schedule = () => { clearTimeout(this._pullSyncT); this._pullSyncT = setTimeout(() => this._syncPullRefresh(), 60); };
-            new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+            this._ptrScrollers = new Set();
+            this._ptrVingers = 0;
+            const plan = () => { clearTimeout(this._pullSyncT); this._pullSyncT = setTimeout(() => this._syncPullRefresh(), 60); };
+            this._ptrPlan = plan;
+            new MutationObserver(plan).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open'] });
+            const opties = { capture: true, passive: true };
+            // Wat scrolt (pagina, venster, lijst): weg van boven = meteen uit; terug boven = opnieuw beoordelen.
+            document.addEventListener('scroll', (e) => {
+                const t = e.target;
+                let top;
+                if (t && t.nodeType === 1) {
+                    const set = this._ptrScrollers;
+                    set.add(t);
+                    if (set.size > 200) {
+                        set.forEach((x) => { if (!x.isConnected) set.delete(x); });
+                        if (set.size > 200) { const oud = Array.from(set).slice(0, set.size - 150); oud.forEach((x) => { if (x !== t) set.delete(x); }); }
+                    }
+                    top = t.scrollTop || 0;
+                } else top = this._ptrPaginaTop();
+                if (top > 1) { if (this._ptrAan !== false || this._ptrAanT) this._syncPullRefresh(); }
+                else plan();
+            }, opties);
+            const tel = (e) => { this._ptrVingers = (e && e.touches) ? e.touches.length : 0; };
+            document.addEventListener('touchstart', (e) => {
+                tel(e);
+                clearTimeout(this._ptrAanT); this._ptrAanT = null;
+                if (this._ptrAan !== false) {
+                    let t = e.target;
+                    if (t && t.nodeType !== 1) t = t.parentElement;
+                    if (this._ptrPaginaTop() > 1 || this._ptrDoelNietBovenaan(t) || this._ptrInVastVlak(t)) this._ptrZet(false);
+                }
+            }, opties);
+            const los = (e) => { tel(e); if (!this._ptrVingers) this._syncPullRefresh(); };
+            document.addEventListener('touchend', los, opties);
+            document.addEventListener('touchcancel', los, opties);
+            window.addEventListener('resize', plan);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) { this._ptrVingers = 0; plan(); } });
             this._syncPullRefresh();
         } catch (_e) {}
     },

@@ -58,7 +58,7 @@
     ] },
 
     { slug: 'app', deel: 'Voor je begint', kick: 'Even rondkijken', titel: 'Zo zit de app in elkaar', lead: 'Vier knoppen onderaan, drie dingen bovenaan.', blokken: [
-        { t: 'p', h: '<b>Onderaan staan 4 knoppen:</b><br><b>Planning</b> — jouw klanten van vandaag. Hier begin je.<br><b>Klok</b> — in- en uitklokken en je uren.<br><b>Klaar</b> — de werkbonnen die je al verstuurd hebt.<br><b>Aanvragen</b> — verlof aanvragen, materiaal bestellen en materieel lenen.' },
+        { t: 'p', h: '<b>Onderaan staan 4 knoppen:</b><br><b>Planning</b> — jouw klanten van vandaag. Hier begin je.<br><b>Klok</b> — in- en uitklokken en je uren.<br><b>Klaar</b> — de werkbonnen die je al verstuurd hebt.<br><b>Organisatie</b> — je aanvragen (materiaal bestellen, materieel lenen, verlof aanvragen) en de rekenmachine.' },
         { t: 'p', h: '<b>Bovenaan rechts:</b> de <b>ⓘ-knop</b> legt élk scherm uit (' + L('hulp', 'Hulp in de app') + ') · het <b>rondje met je letter of foto</b> = je profiel · de <b>groene tekst</b> toont of je ingeklokt bent en sinds hoe laat.' },
         { t: 'p', h: '<b>De gekleurde woorden</b> op de planningskaarten tonen het soort werk: <b style="color:var(--green2,#2e7d32)">Onderhoud</b> (groen), <b style="color:#E88A2A">Herstelling</b> (oranje), <b style="color:#6A2C91">Installatie</b> (paars).' },
         { t: 'faq', items: [
@@ -91,7 +91,7 @@
         { t: 'stap', n: 4, h: 'Ben je bij de klant? <b>Tik op de kaart</b> — dan opent de werkorder.' },
         { t: 'p', h: '<b>De wacht-balk</b> (met het schildje, boven je planning) toont wie deze week de <b>wacht</b> heeft. Tik erop voor de komende weken. Heb jíj de wacht, dan kleurt de balk oranje.' },
         { t: 'faq', items: [
-            ['Mijn planning is leeg.', 'Trek het scherm even naar beneden om te verversen. Nog leeg? Dan is er (nog) niets ingepland — bel het bureau als dat niet klopt.'],
+            ['Mijn planning is leeg.', 'Scrol helemaal naar boven, laat los en trek het scherm dan even naar beneden om te verversen. Nog leeg? Dan is er (nog) niets ingepland — bel het bureau als dat niet klopt.'],
             ['Er kwam een nieuwe klant bij, zie ik dat?', 'Ja. De app kijkt elke 5 minuten of er iets bijkwam en toont dan een melding.'],
             ['Wat betekent "In bewerking" op een kaart?', 'Dat je al uren of materiaal invulde op die werkorder. Handig om te zien waar je mee bezig was.'],
             ['Wat betekent "Regie"?', 'Dat alle tijd en materiaal aan de klant wordt doorgerekend. Vul dan extra nauwkeurig in.'],
@@ -384,23 +384,9 @@
         ] },
     ] },
 
-    /* ══ DEEL: AANVRAGEN ══ */
-    { slug: 'verlof', deel: 'Aanvragen', kick: 'Vrij vragen', titel: 'Verlof aanvragen', lead: 'Een dagje vrij of een week vakantie — rechtstreeks vanuit de app.', scherm: 'screenAanvragen', blokken: [
-        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Aanvragen</b>. Je staat meteen op <b>Verlof</b>. Bovenaan zie je je <b>saldo</b>.' },
-        { t: 'stap', n: 2, h: 'Kies de <b>eerste dag</b> en de <b>laatste dag</b>. Tik op <b>"Verlof aanvragen"</b>. Klaar!' },
-        { t: 'stap', n: 3, h: 'Je aanvraag verschijnt onderaan met een status: eerst <b>Aangevraagd</b>, daarna <b>Goedgekeurd</b> of <b>Geweigerd</b>.' },
-        { t: 'stap', n: 4, h: '<b>Tik op een aanvraag</b> voor het detail: de beslissing van kantoor en hun bericht. Typ onderaan om <b>zelf te reageren</b> — je bericht staat op jouw naam.' },
-        { t: 'letop', h: '<b>Ziek?</b> Dat gaat NIET via de app. <b>Bel ’s morgens naar het bureau.</b> Verlof = app, ziekte = bellen.' },
-        { t: 'faq', items: [
-            ['Hoe lang duurt de goedkeuring?', 'Kantoor krijgt je aanvraag meteen binnen. Je ziet de beslissing in de app zodra ze beslist hebben — meestal dezelfde dag.'],
-            ['Kan ik een aanvraag intrekken?', 'Stuur een berichtje in het detail van je aanvraag, of bel even.'],
-            ['Mijn saldo klopt niet volgens mij.', 'Bel Levi — het jaartotaal staat op je fiche op kantoor en kan daar aangepast worden.'],
-            ['Eén losse dag of een halve dag?', 'Eén dag: kies dezelfde dag als eerste én laatste dag. Halve dag: zet het erbij in je aanvraag of stuur een berichtje.'],
-        ] },
-    ] },
-
+    /* ══ DEEL: AANVRAGEN ══ (v427: zelfde volgorde als de tabbladen: Materiaal, Materieel, Verlof) */
     { slug: 'materiaal-bestellen', deel: 'Aanvragen', kick: 'Iets nodig voor een werf?', titel: 'Materiaal bestellen', lead: 'Vul een mandje in de webshop. Het bureel kijkt het na en bestelt.', scherm: 'screenAanvragen', blokken: [
-        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Aanvragen</b>, bovenaan op <b>Materiaal</b> en dan op <b>"+ Nieuwe bestelling"</b>. Sta je in een werkorder? Tik dan in het tabblad <b>Materiaal</b> op <b>"Materiaal bestellen"</b>: de werf staat er dan al bij.' },
+        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Organisatie</b> en dan op <b>Aanvragen</b>: je staat meteen op <b>Materiaal</b>. Tik op <b>"+ Nieuwe bestelling"</b>. Sta je in een werkorder? Tik dan in het tabblad <b>Materiaal</b> op <b>"Materiaal bestellen"</b>: de werf staat er dan al bij.' },
         { t: 'stap', n: 2, h: 'Kies bovenaan <b>waarvoor</b>: een <b>werf</b> uit je planning (of zoek een ander project) of de <b>stock</b>: het magazijn of je camionet.' },
         { t: 'stap', n: 3, h: 'Zoek je artikels en zet ze in je <b>mandje</b>. Je ziet de <b>brutoprijs</b>. Staat iets er niet in? Typ het bij het versturen onder <b>"Staat iets niet in de webshop?"</b>.' },
         { t: 'stap', n: 4, h: 'Tik op <b>Bestellen</b>, kies <b>tegen wanneer</b>, zet er eventueel een opmerking bij en tik op <b>"Bestelling versturen"</b>.' },
@@ -416,7 +402,7 @@
     ] },
 
     { slug: 'materieel', deel: 'Aanvragen', kick: 'Camionet of machine nodig?', titel: 'Materieel lenen', lead: 'Reserveer in de app — dan weet iedereen dat hij bezet is.', scherm: 'screenAanvragen', blokken: [
-        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Aanvragen</b> en dan bovenaan op <b>Materieel</b>. Je ziet per machine of hij <b>nu vrij</b> is (groen), in gebruik (oranje) of gereserveerd (blauw).' },
+        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Organisatie</b>, dan op <b>Aanvragen</b> en bovenaan op <b>Materieel</b>. Je ziet per machine of hij <b>nu vrij</b> is (groen), in gebruik (oranje) of gereserveerd (blauw).' },
         { t: 'stap', n: 2, h: 'Tik op wat je nodig hebt en kijk in de <b>agenda</b> welke dagen al bezet zijn (oranje).' },
         { t: 'stap', n: 3, h: 'Kies je <b>datums</b>, typ kort waarvoor, en tik op <b>"Reserveren aanvragen"</b>. Botsen je datums met een andere reservatie? Dan blokkeert de app dat meteen.' },
         { t: 'stap', n: 4, h: 'Volg de status via <b>"Vorige aanvragingen"</b>: Aangevraagd → Goedgekeurd → In gebruik → Teruggebracht.' },
@@ -426,6 +412,20 @@
             ['Ik heb hem maar een halve dag nodig.', 'Reserveer die ene dag en zet het in de opmerking ("enkel voormiddag"). Breng hem daarna meteen terug en tik "Teruggebracht".'],
             ['Iets kapot aan de machine?', 'Meld het meteen aan het bureau. Niet stilletjes terugzetten.'],
             ['Ik heb hem dringend NU nodig, zonder reservatie.', 'Staat hij op "Nu beschikbaar"? Reserveer hem snel voor vandaag en neem hem mee. Bezet? Bel kantoor — niet zomaar meenemen.'],
+        ] },
+    ] },
+
+    { slug: 'verlof', deel: 'Aanvragen', kick: 'Vrij vragen', titel: 'Verlof aanvragen', lead: 'Een dagje vrij of een week vakantie — rechtstreeks vanuit de app.', scherm: 'screenAanvragen', blokken: [
+        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Organisatie</b>, dan op <b>Aanvragen</b> en bovenaan op <b>Verlof</b> (het laatste tabblad). Bovenaan zie je je <b>saldo</b>.' },
+        { t: 'stap', n: 2, h: 'Kies de <b>eerste dag</b> en de <b>laatste dag</b>. Tik op <b>"Verlof aanvragen"</b>. Klaar!' },
+        { t: 'stap', n: 3, h: 'Je aanvraag verschijnt onderaan met een status: eerst <b>Aangevraagd</b>, daarna <b>Goedgekeurd</b> of <b>Geweigerd</b>.' },
+        { t: 'stap', n: 4, h: '<b>Tik op een aanvraag</b> voor het detail: de beslissing van kantoor en hun bericht. Typ onderaan om <b>zelf te reageren</b> — je bericht staat op jouw naam.' },
+        { t: 'letop', h: '<b>Ziek?</b> Dat gaat NIET via de app. <b>Bel ’s morgens naar het bureau.</b> Verlof = app, ziekte = bellen.' },
+        { t: 'faq', items: [
+            ['Hoe lang duurt de goedkeuring?', 'Kantoor krijgt je aanvraag meteen binnen. Je ziet de beslissing in de app zodra ze beslist hebben — meestal dezelfde dag.'],
+            ['Kan ik een aanvraag intrekken?', 'Stuur een berichtje in het detail van je aanvraag, of bel even.'],
+            ['Mijn saldo klopt niet volgens mij.', 'Bel Levi — het jaartotaal staat op je fiche op kantoor en kan daar aangepast worden.'],
+            ['Eén losse dag of een halve dag?', 'Eén dag: kies dezelfde dag als eerste én laatste dag. Halve dag: zet het erbij in je aanvraag of stuur een berichtje.'],
         ] },
     ] },
 

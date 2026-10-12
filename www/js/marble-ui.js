@@ -49,7 +49,7 @@
         screenAdmin:       { sub: 'Werknemers beheren via Robaws', title: 'Beheer' },
         screenUrenAnalyse: { sub: 'Alle werknemers', title: 'Uren-analyse' },
         screenAfwezigheid: { sub: 'Alleen bureel — weekends worden overgeslagen', title: 'Afwezigheid melden' },
-        screenAanvragen:   { sub: 'Verlof · Materiaal · Materieel', title: 'Aanvragen' },
+        screenAanvragen:   { sub: 'Materiaal · Materieel · Budget · Verlof', title: 'Aanvragen' },
         screenOrganisatie: { sub: 'Aanvragen · Projecten', title: 'Organisatie' },
         screenProjecten:   { sub: 'Alle projecten — tik om dagen in te plannen', title: 'Projecten' },
         screenToestel:     { sub: 'Toestemmingen en toestelfuncties', title: 'Toestel' },
@@ -258,15 +258,16 @@
             ['Correcties', 'Tik op een werkbon om uren of materiaal te corrigeren. Het origineel blijft staan; het verschil komt in een correctie-werkbon.']
         ] },
         screenAanvragen: { name: 'AANVRAGEN', steps: [
-            ['Drie soorten aanvragen', 'Verlof, Materiaal en Materieel — wissel met de tabs bovenaan.', '#aanvraagSubtabs'],
-            ['Verlof aanvragen', 'Bovenaan je saldo (gebruikt en resterend), daaronder de aanvraag: kies van–tot en dien in. Ziek melden gaat níét via de app — bel of stuur een bericht.', '#verlofBudgetBox'],
-            ['Volg je aanvraag', 'Tik op een aanvraag voor het detail met de communicatie — daar zie je de goedkeuring of weigering en kan je reageren.', '#verlofList'],
+            ['Vier tabbladen', 'Materiaal, Materieel, Budget en Verlof — wissel met de tabs bovenaan.', '#aanvraagSubtabs'],
+            ['Materiaal bestellen', 'Je begint op Materiaal: met "+ Nieuwe bestelling" vul je een mandje in de webshop, voor een werf of voor de stock. Het bureel kijkt het na en bestelt.', '#btnMatBestellen'],
+            ['Mijn bestellingen', 'Daaronder volg je je bestellingen: ingediend, wordt nagekeken, wordt besteld, besteld.', '#matBestelLijst'],
             ['Materieel lenen', 'Onder Materieel reserveer je een camionet of machine: kies datums, dien in, en na goedkeuring zijn die dagen voor jou vast. "Vorige aanvragingen" toont de status van al je aanvragen.'],
+            ['Verlof', 'Verlof staat achteraan: daar zie je je saldo, vraag je verlof aan en volg je je aanvragen. Ziek melden gaat níét via de app — bel of stuur een bericht.', '[data-atab="verlof"]'],
             ['Goedkeuren (bureel)', 'Bureel ziet bovenaan een Goedkeuren-kaart met een teller: verlof, facturen en materieel die op een beslissing wachten.', '#aanvraagGoedkeurenCard']
         ] },
         screenOrganisatie: { name: 'ORGANISATIE', steps: [
             ['Compartimenten', 'Organisatie bundelt alles wat geen klokken of werkbon is: je aanvragen, en voor bureel ook de projecten.'],
-            ['Aanvragen', 'Verlof, materiaal, materieel en budget — plus de Goedkeuren-kaart met de teller van wat op jou wacht.'],
+            ['Aanvragen', 'Materiaal, materieel, budget en verlof — plus de Goedkeuren-kaart met de teller van wat op jou wacht.'],
             ['Projecten', 'Zoek tussen alle projecten en maak onderweg dagplanningen voor de monteurs.']
         ] },
         screenProjecten: { name: 'PROJECTEN', steps: [
