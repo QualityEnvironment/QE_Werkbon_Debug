@@ -299,6 +299,7 @@ const RobawsAPI = {
         OFFERTES:       '5',  // Vince
         KEURINGEN:      '5',  // Vince
         URENBEWAKING:   '8',  // Levi
+        MATERIEEL:      '8',  // Levi — defect gemeld via een materieel-tag (v419)
     },
     /** v384: mag de ingelogde persoon dit app-onderdeel zien? Geen lijst in
      *  localStorage = geen beperking (ook nieuwe onderdelen zichtbaar). */
@@ -412,7 +413,7 @@ const RobawsAPI = {
         }
         return JSON.stringify([localStorage.getItem('qe_app_tools'), localStorage.getItem('qe_app_logistiek')]) !== voor;
     },
-    TASK_KEYS: { FACTUREN: 'facturen', OPVOLGING: 'opvolging', ARTIKELS: 'artikels', URENAANPASSING: 'urenAanpassing', OFFERTES: 'offertes', KEURINGEN: 'keuringen', URENBEWAKING: 'urenBewaking' },
+    TASK_KEYS: { FACTUREN: 'facturen', OPVOLGING: 'opvolging', ARTIKELS: 'artikels', URENAANPASSING: 'urenAanpassing', OFFERTES: 'offertes', KEURINGEN: 'keuringen', URENBEWAKING: 'urenBewaking', MATERIEEL: 'materieel' },
     _taakGebruikers: {},
     _taakOntvangersToepassen(map) {
         if (!map || typeof map !== 'object') return;
@@ -1904,6 +1905,10 @@ const RobawsAPI = {
             case 'in':     return wie + ' leverde ze in bij de leverancier';
             case 'uit':    return wie + ' zette ze weer in huur';
             case 'nieuw':  return 'Geregistreerd door ' + wie;
+            // v419: materieel-tags (NFC)
+            case 'defect': return wie + ' meldde een defect' + (naar ? ': ' + naar : '');
+            case 'ok':     return wie + ' meldde: weer in orde' + (naar ? ' (' + naar + ')' : '');
+            case 'koppel': return 'NFC-tag ' + (naar || 'gekoppeld') + ' door ' + wie;
             default:       return wie + (naar ? ' · ' + naar : '');
         }
     },
@@ -2668,6 +2673,111 @@ const RobawsAPI = {
         } });
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) throw new Error('Robaws gaf status ' + res.code);
         return true;
+    },
+
+    // =============================================================
+    // v419: MATERIEEL-TAGS (NFC). De tag draagt als EERSTE record het
+    // QE-merkteken (MIME application/vnd.qe.materieel): enkel zo'n tag opent de
+    // app (APK 1.246) — een bankkaart of klok-tag nooit, dus een betaling wordt
+    // niet onderbroken. Het tag-ID staat in "NFC Tag"; het logboek deelt het veld
+    // "Fles logboek" met de gasflessen (zelfde vorm, zelfde woorden in app, hub en
+    // Worker): mee · terug · defect · ok · koppel · plaats · wie.
+    // =============================================================
+    MAT_NFC_MIME: 'application/vnd.qe.materieel',
+    MAT_NFC_URL: 'https://mijnqe.be/t/',
+    // v420: KLOK-tags openen de app (APK 1.247). Eigen merkteken: een klok-tag telt nooit als
+    // materieel en omgekeerd. De klok zelf blijft op het tag-ID werken.
+    KLOK_NFC_MIME: 'application/vnd.qe.klok',
+    /** Draagt de gelezen tag (event "nfc") het QE-klokmerkteken? */
+    klokNfcHeeftMerk(d) {
+        const recs = (d && Array.isArray(d.ndef)) ? d.ndef : [];
+        const mt = this.KLOK_NFC_MIME;
+        return recs.some(r => r && (String(r.mime || '').toLowerCase() === mt || String(r.type || '').toLowerCase() === mt));
+    },
+    /** Schrijfopdracht voor één klok-tag (brug v4, APK 1.247): enkel het klok-merkteken, enkel díe tag. */
+    klokNfcSchrijfOpdracht(uid, opties) {
+        const o = opties || {};
+        return { records: [{ soort: 'mime', mime: this.KLOK_NFC_MIME, tekst: '1' }],
+            alleen: [String(uid || '').replace(/[^0-9a-f]/gi, '').toUpperCase()],
+            vergrendel: !!o.vergrendel, geldigSec: Math.max(5, Math.min(300, Number(o.geldigSec) || 60)) };
+    },
+    /** Draagt de gelezen tag (event "nfc" van de APK) het QE-merkteken? */
+    matNfcHeeftMerk(d) {
+        const recs = (d && Array.isArray(d.ndef)) ? d.ndef : [];
+        const mt = this.MAT_NFC_MIME;
+        return recs.some(r => r && (String(r.mime || '').toLowerCase() === mt || String(r.type || '').toLowerCase() === mt));
+    },
+    /** Schrijfopdracht voor de APK. Brug v3 (APK 1.246): merkteken eerst, dan het
+     *  webadres met het tag-ID (iPhone of gsm zonder de app), tags in gebruik
+     *  weigeren. Brug v2 (APK 1.245): enkel het merkteken (één record). */
+    matNfcSchrijfOpdracht(apiVersie, opties) {
+        const o = opties || {};
+        const sec = Math.max(5, Math.min(300, Number(o.geldigSec) || 60));
+        if (Number(apiVersie) >= 3) {
+            const records = [{ soort: 'mime', mime: this.MAT_NFC_MIME, tekst: '1' }];
+            if (!o.zonderUrl) records.push({ soort: 'url', url: this.MAT_NFC_URL + '{uid}' });
+            return { records, weiger: (o.weiger || []).map(x => String(x).toUpperCase()), vergrendel: !!o.vergrendel, geldigSec: sec };
+        }
+        return { mime: this.MAT_NFC_MIME, base64: 'MQ==', vergrendel: !!o.vergrendel, geldigSec: sec };
+    },
+    /** Het gemelde defect dat nog openstaat: de laatste 'defect' zonder 'ok' erna. */
+    matDefect(m) {
+        for (const r of this.gasLog(m)) {   // nieuwste eerst
+            if (r.a === 'ok') return null;
+            if (r.a === 'defect') return r;
+        }
+        return null;
+    },
+    /** Enkel een logregel ('defect' | 'ok' | 'koppel'); geeft het verse materiaal terug. */
+    async matLogRegel(materialId, a, n, wie) {
+        return await this._gasSchrijf(materialId, {}, { a, n: n ? String(n).slice(0, 200) : null, wie: wie || null });
+    },
+    /** Tag koppelen + logregel in één merge-PATCH; teruglezen als bewijs. */
+    async matTagZet(materialId, uid, wie) {
+        const tag = uid ? String(uid).trim().toLowerCase() : null;
+        const na = await this._gasSchrijf(materialId,
+            { extraFields: { 'NFC Tag': { type: 'TEXT', stringValue: tag } } },
+            wie ? { a: 'koppel', n: null, wie } : null);
+        if (na) {
+            const f = na.extraFields && na.extraFields['NFC Tag'];
+            const v = f ? String(f.stringValue ?? f.value ?? '').trim().toLowerCase() : '';
+            if (v !== (tag || '')) throw new Error('Robaws nam de tag niet over');
+        }
+        return na;
+    },
+    /** Defect gemeld via de tag: foto (mag) → taak voor het bureel (MOET lukken) →
+     *  logregel. Een mislukte taak gooit een fout met `docId`, zodat een tweede
+     *  poging de foto niet opnieuw oplaadt. */
+    async matDefectMelden(materialId, { tekst, fotoDataUrl, docId, naam, plaats, wie }) {
+        const t = String(tekst || '').trim();
+        if (!t) throw new Error('Beschrijf kort wat er mis is');
+        const wat = String(naam || ('materieel #' + materialId));
+        let doc = docId || null, fotoFout = null;
+        if (!doc && fotoDataUrl) {
+            try {
+                doc = await this.uploadMaterialDocument(materialId, fotoDataUrl,
+                    'Defect ' + wat.replace(/[^0-9A-Za-zÀ-ÿ .,()_-]/g, ' ').trim().slice(0, 60) + ' ' + this._gasNu().slice(0, 10) + '.jpg');
+            } catch (e) { fotoFout = (e && e.message) || 'opladen mislukt'; }
+        }
+        const body = {
+            title: 'Defect gemeld: ' + wat.slice(0, 120),
+            description: ((wie && wie.naam) || 'Iemand') + ' meldde op ' + this.gasLogDatum(this._gasNu()) + ' via de NFC-tag een defect aan ' + wat + ':\n\n' + t +
+                (plaats ? '\n\nWaar: ' + plaats : '') +
+                (doc ? '\n\nFoto: bij de documenten van het materieel.' : (fotoFout ? '\n\nDe foto opladen mislukte (' + fotoFout + ').' : '')) +
+                '\n\nIn de app: Logistiek → Gereedschap → de fiche. Opgelost? Tik daar op "Weer in orde".',
+            assignedUserId: String(this.TASK_USERS.MATERIEEL || '8'),
+        };
+        // een taak "op" het materieel is nog niet bewezen: bij een validatiefout (400/422) zonder
+        let r = await this.post('tasks', Object.assign({ relatedResource: '/materials/' + materialId }, body));
+        if (r.code === 400 || r.code === 422) r = await this.post('tasks', body);
+        if (r.code !== 200 && r.code !== 201) {
+            const e = new Error('Robaws gaf status ' + r.code);
+            e.docId = doc;
+            throw e;
+        }
+        let na = null, logOk = true;
+        try { na = await this._gasSchrijf(materialId, {}, { a: 'defect', n: t.slice(0, 200), wie: wie || null }); } catch (_e) { logOk = false; }
+        return { taak: r.data || null, docId: doc, fotoFout, logOk, na };
     },
 
     // v368: DOCUMENTMAPPEN op een werknemersfiche. GEMETEN 24 aug:
@@ -4013,6 +4123,14 @@ const RobawsAPI = {
     WACHT_TYPE_ID: '40',
     _wachtCache: null,  // { at, weken }
 
+    /** v418: is dit planning-item een wacht-dagplanning (type 40 "Wacht")? Die toont alleen wie
+     *  de wacht heeft: het is geen opdracht waarvoor een werkbon ingevuld moet worden, en geen werf.
+     *  ALLEEN op het type: dagplanningen als "Dax: INTERVENTIE WACHT ZONDAG" of "Depannage wacht"
+     *  (type 34) zijn echte opdrachten met een werkbon (gemeten 6 okt 2026). */
+    isWachtPlanning(item) {
+        return !!item && item.planningTypeId != null && String(item.planningTypeId) === this.WACHT_TYPE_ID;
+    },
+
     /** Wachtweken vanaf maandag van deze week, `wekenVooruit` weken ver.
      *  Resultaat: [{ maandag:'YYYY-MM-DD', zondag:'YYYY-MM-DD',
      *                employeeIds:['12'], namen:['Olivier'] }] — alleen weken
@@ -5098,11 +5216,13 @@ const RobawsAPI = {
         }
         const dayItems = all.filter(it => ((it.startDate || '') + '').split('T')[0] === date);
         if (!dayItems.length) return 0;
-        const met = await this._getPlanningIdsWithWorkOrders(userId);
+        const met = await this._getPlanningIdsWithWorkOrders(userId, employeeId);   // v423: ook werkbonnen van collega's met jouw uren
         return dayItems.filter(it => !met.has(String(it.id))).length;
     },
 
-    async getPlanning(employeeId, date, userId = null) {
+    /** opts.vers (v423): de werkbonnen LIVE lezen i.p.v. de replica — bij het uitklokken telt ook een werkbon die een
+     *  collega net verstuurde. */
+    async getPlanning(employeeId, date, userId = null, opts = null) {
         // v138: GEEN whitelist meer — elke datum wordt geaccepteerd en strikt
         // gefilterd. Voorheen werd elke datum buiten {gisteren, vandaag, morgen}
         // gereset naar today wat ervoor zorgde dat morgen-chip soms vandaag-
@@ -5161,7 +5281,8 @@ const RobawsAPI = {
         filtered.sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
 
         // Check welke planning items al een werkbon hebben van DEZE gebruiker
-        const planningIdsMetWerkbon = await this._getPlanningIdsWithWorkOrders(userId);
+        // v423: of een werkbon (ook van een collega) met de uren van deze werknemer
+        const planningIdsMetWerkbon = await this._getPlanningIdsWithWorkOrders(userId, employeeId, opts);
 
         // Verrijk elk item met klantgegevens + BTW + ordernummer
         // v183: BTW-tarieven 1x als gecachede map (geen vat-tariffs/{id} per klant).
@@ -5279,22 +5400,32 @@ const RobawsAPI = {
         return { items: enriched, date, employeeId };
     },
 
-    async _getPlanningIdsWithWorkOrders(currentUserId = null) {
+    async _getPlanningIdsWithWorkOrders(currentUserId = null, employeeId = null, opts = null) {
         // Verzamel planningItemIds waarvoor de HUIDIGE GEBRUIKER al een werkbon heeft.
         // Meerdere techniekers kunnen op hetzelfde planning-item een werkbon indienen —
         // een planning-item verdwijnt alleen voor de technieker wiens werkbon eraan
         // gelinkt is (verantwoordelijke = zichzelf).
+        // v423 (vraag Levi 12 okt 2026): OF een werkbon (ook van een collega) met de UREN van deze werknemer — "vanaf dat er
+        // een werkbon bestaat met de uren van een bepaalde werknemer mag deze dagplanning niet meer te zien zijn voor deze
+        // werknemer" (collega's vulden elkaar mee in en daarna nog eens zichzelf = dubbele uren; gemeten 12 okt: 7 keer in 60
+        // dagen, 29,74 u). Daarom de lijst MET uurregels (include=timeEntries — gemeten 12 okt: volledig, ±30 % zwaarder; een
+        // planningItemId-filter bestaat niet op /work-orders). Bijproduct: per dagplanning wie er al uren op heeft
+        // (this._werkbonUren, voor urenOpDagplanning). opts.vers = live lezen (geen replica).
         const ids = new Set();
         const seenWoIds = new Set();
+        const perPlan = {};      // v423: planningItemId → [{ id, nr, userId, uren: { employeeId: uren } }]
+        let volledig = false;    // v423: alleen een volledige scan mag een "al ingevuld" bewijzen
         let offset = 0;
         const PAGE = 100;
+        const leesOpties = (opts && opts.vers) ? { bypassCache: true } : undefined;
 
         try {
             const sinceDate = this._localDateStr(null, -7);
             for (let p = 0; p < 15; p++) {
                 // v200: ?offset= i.p.v. ?page= (Robaws negeert page op /work-orders)
                 // + dedup op id, anders blijf je op dezelfde eerste 100 werkbons hangen.
-                const result = await this.get(`work-orders?limit=${PAGE}&offset=${offset}&sort=createdAt:desc`);
+                const result = await this.get(`work-orders?limit=${PAGE}&offset=${offset}&sort=createdAt:desc&include=timeEntries`, leesOpties);
+                if (!result || result.code !== 200) throw new Error('werkbonnen lezen: ' + (result && result.code));   // v423
                 const items = (result.data && result.data.items) || [];
                 if (items.length === 0) break;
 
@@ -5314,26 +5445,64 @@ const RobawsAPI = {
                     const woDate = wo.date || '';
                     if (woDate && woDate < sinceDate) continue;  // oud: overslaan, niet stoppen
                     if (wo.planningItemId) {
+                        const pid = String(wo.planningItemId);
+                        const woUserId = wo.assignedUserId || (wo.assignedUser && wo.assignedUser.id) || null;
+                        // v423: uren per werknemer op deze werkbon (alleen regels met uren > 0 en een werknemer)
+                        const uren = {};
+                        (Array.isArray(wo.timeEntries) ? wo.timeEntries : []).forEach((t) => {
+                            const h = parseFloat(t && t.hours) || 0;
+                            if (!(h > 0) || t.employeeId == null) return;
+                            const e = String(t.employeeId);
+                            uren[e] = Math.round(((uren[e] || 0) + h) * 100) / 100;
+                        });
+                        (perPlan[pid] = perPlan[pid] || []).push({ id: String(wo.id), nr: wo.logicId || null, userId: woUserId != null ? String(woUserId) : null, uren });
                         // Als we een currentUserId hebben, alleen werkbonnen van deze gebruiker tellen
                         if (currentUserId) {
-                            const woUserId = wo.assignedUserId || (wo.assignedUser && wo.assignedUser.id) || null;
                             if (String(woUserId) === String(currentUserId)) {
-                                ids.add(String(wo.planningItemId));
+                                ids.add(pid);
+                            } else if (employeeId != null && uren[String(employeeId)] > 0) {
+                                ids.add(pid);   // v423: een collega zette jouw uren op zijn werkbon
                             }
                         } else {
                             // Fallback: alle werkbonnen tellen (oorspronkelijk gedrag)
-                            ids.add(String(wo.planningItemId));
+                            ids.add(pid);
                         }
                     }
                 }
-                if (stop) break;
-                if (added === 0) break;
-                if (items.length < PAGE) break;
+                if (stop) { volledig = true; break; }
+                if (added === 0) { volledig = true; break; }
+                if (items.length < PAGE) { volledig = true; break; }
                 offset += PAGE;
             }
         } catch (e) { /* Bij fout: geen filtering, niet erg */ }
 
+        this._werkbonUren = { at: Date.now(), perPlan, volledig };   // v423
         return ids;
+    },
+
+    /** v423: wie heeft al uren op een werkbon van deze dagplanning, volgens de laatste werkbonnen-scan (getPlanning,
+     *  uitklokcontrole)? { employeeId: { uren, nrs: [werkbonnummers], userIds: [verantwoordelijken] } }, of null als er
+     *  geen volledige scan van hoogstens maxOudMs (standaard 2 min) oud is. */
+    urenOpDagplanning(planningItemId, maxOudMs = 120000) {
+        const w = this._werkbonUren;
+        if (!w || !w.volledig || (Date.now() - w.at) > maxOudMs) return null;
+        const uit = {};
+        (w.perPlan[String(planningItemId)] || []).forEach((b) => {
+            Object.keys(b.uren).forEach((e) => {
+                const x = uit[e] || (uit[e] = { uren: 0, nrs: [], userIds: [] });
+                x.uren = Math.round((x.uren + b.uren[e]) * 100) / 100;
+                if (b.nr && x.nrs.indexOf(b.nr) < 0) x.nrs.push(b.nr);
+                if (b.userId && x.userIds.indexOf(b.userId) < 0) x.userIds.push(b.userId);
+            });
+        });
+        return uit;
+    },
+
+    /** v423: zelfde vraag, maar eerst VERS (live) de werkbonnen lezen — vlak voor het versturen van een werkbon.
+     *  null = niet na te kijken (geen verbinding of de scan was niet volledig). */
+    async werkbonUrenVoorDagplanning(planningItemId) {
+        await this._getPlanningIdsWithWorkOrders(null, null, { vers: true });
+        return this.urenOpDagplanning(planningItemId, 60000);
     },
 
     // =============================================
@@ -5770,16 +5939,19 @@ const RobawsAPI = {
         for (const m of materials || []) {
             const li = {
                 type: 'LINE',
-                articleId: toStr(m.articleId),
                 quantity: parseFloat(m.quantity || 1),
                 description: m.name || '',
             };
+            // v424: alleen een echt Robaws-artikel (een getal) als articleId; een artikel uit de webshop of een eenmalig
+            // artikel = een vrije lijn met de omschrijving (vroeger ging "ws:…" of "__custom…" mee en weigerde Robaws de lijn)
+            const aid = toStr(m.articleId);
+            if (aid && /^\d+$/.test(aid)) li.articleId = aid;
             if (m.unitPrice != null) li.price = parseFloat(m.unitPrice);
             materialRequests.push(li);
             const r = await this.post(`work-orders/${workOrderId}/line-items`, li);
             if (r.code === 200 || r.code === 201) {
                 materialSuccess++;
-                log.push(`Item toegevoegd: ${li.articleId} x ${li.quantity}`);
+                log.push(`Item toegevoegd: ${li.articleId || li.description} x ${li.quantity}`);
             } else {
                 materialErrors.push({ sent: li, code: r.code, response: r.data });
                 log.push(`FOUT item: ${r.code}`);
@@ -7502,10 +7674,47 @@ const RobawsAPI = {
     HOUR_TYPE_IDS: {
         werkuren: 1,
         overuren: 2,
+        verlof: 35,     // v421: gemeten 6 okt 2026 (type ABSENCE)
+        ziek: 36,       // v421: gemeten 6 okt 2026 (type ABSENCE)
         werkurenZaterdag: null,
         werkurenZondag:   null,
         overurenZaterdag: null,
         overurenZondag:   null,
+    },
+
+    /** v421 (Worker v479): ziek of verlof voor de REST van een gewerkte dag. Het bureel kiest dat in het
+     *  uren-scherm (vraag Levi 6 okt 2026: met een ziektebriefje voor de namiddag mogen de overige uren
+     *  niet van de overuren af). Zo'n regel staat zonder tijden en zonder artikel op de klok-werkbon:
+     *  - telt NOOIT als werk- of overuren (dagoverzicht, maandrapport, recap);
+     *  - de 8u-aanvulling houdt er rekening mee (ze vult alleen aan tot 8 u min de ziekte);
+     *  - een regel "rest van de dag: niet aangevuld — …" in de opmerking = geen aanvulling voor die dag.
+     *  Geeft 'ziek' | 'verlof' | null op uursoort-id (of -naam als die meekomt). */
+    urenAfwSoort(te, htNaam) {
+        if (!te) return null;
+        const id = String(te.hourTypeId != null ? te.hourTypeId : ((te.hourType && te.hourType.id) || ''));
+        if (id === String(this.HOUR_TYPE_IDS.ziek)) return 'ziek';
+        if (id === String(this.HOUR_TYPE_IDS.verlof)) return 'verlof';
+        const nm = String(htNaam || (te.hourType && te.hourType.name) || '').toLowerCase();
+        if (/^\s*ziek/.test(nm)) return 'ziek';
+        if (/^\s*verlof/.test(nm)) return 'verlof';
+        return null;
+    },
+    /** v421: de laatste regel "rest van de dag: …" in de opmerking van een klok-werkbon
+     *  → 'aanvullen' | 'ziek' | 'verlof' | 'geen' | null (zelfde regel als de Worker, urenRestKeuzeUit). */
+    leesRestKeuze(remark) {
+        let k = null;
+        const regels = String(remark || '').replace(/<br\s*\/?>|<\/p>|<\/div>/gi, '\n').replace(/<[^>]+>/g, '')
+            .replace(/&mdash;/g, String.fromCharCode(8212)).replace(/&nbsp;/g, ' ').split('\n');
+        for (const regel of regels) {
+            const m = regel.match(/^\s*rest van de dag\s*:\s*(.*)$/i);
+            if (!m) continue;
+            const w = m[1].split(String.fromCharCode(8212))[0].trim().toLowerCase();
+            if (/^ziek/.test(w)) k = 'ziek';
+            else if (/^verlof/.test(w)) k = 'verlof';
+            else if (/^niet/.test(w)) k = 'geen';
+            else if (/^aangevuld/.test(w)) k = 'aanvullen';
+        }
+        return k;
     },
 
     /** v138: probeer Robaws's hour-types endpoint en cache namen → IDs. */
@@ -8371,8 +8580,9 @@ const RobawsAPI = {
         const userId = o.userId != null ? String(o.userId) : '';
         const datum = String(dateStr || this._localDateStr()).slice(0, 10);
         const ruw = await this._planningLijst('fromDate=' + datum + '&toDate=' + datum, 3);
-        // client-side nog eens op de dag filteren (vals-positief-les) en verlof eruit
-        const items = ruw.filter(x => x && !x.timeOffCategoryId && x.startDate && this._localDateStr(new Date(x.startDate)) === datum);
+        // client-side nog eens op de dag filteren (vals-positief-les); verlof en wacht eruit
+        // (v418: een wacht-dagplanning is geen werf, laden en lossen hoort daar nooit op)
+        const items = ruw.filter(x => x && !x.timeOffCategoryId && !this.isWachtPlanning(x) && x.startDate && this._localDateStr(new Date(x.startDate)) === datum);
         items.sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
 
         // werkbonnen van die dag, met hun tijdsregels

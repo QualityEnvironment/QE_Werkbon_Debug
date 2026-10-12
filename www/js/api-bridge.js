@@ -697,7 +697,7 @@ const APIBridge = {
                             try {
                                 const rLi = await RobawsAPI.post('work-orders/' + workOrderId + '/line-items', {
                                     type: 'LINE',
-                                    description: m.name || 'Eenmalig artikel',
+                                    description: m.name || (m.ws ? 'Artikel uit de webshop' : 'Eenmalig artikel'),
                                     quantity: parseFloat(m.quantity || 1),
                                     price: parseFloat(m.salePrice ?? m.unitPrice ?? 0),
                                 });
@@ -714,9 +714,11 @@ const APIBridge = {
                         // live flow deed dit al; de queue-verwerking stopte de
                         // artikels alleen als bijzin in de Els/Vince-taak,
                         // zonder details en zonder taak voor Felicity.
-                        if (customArticles.length) {
+                        // v424: artikels uit de webshop (m.ws) hoeven niet in Robaws: geen taak voor Felicity
+                        const eenmalig = customArticles.filter(m => !m.ws);
+                        if (eenmalig.length) {
                             try {
-                                const lines = customArticles.map(m => {
+                                const lines = eenmalig.map(m => {
                                     const price = parseFloat(m.salePrice || m.unitPrice || 0).toFixed(2);
                                     const qty = parseFloat(m.quantity || 1);
                                     return '• ' + (m.name || '?') + ' — ' + qty + '× à €' + price;
@@ -744,7 +746,7 @@ const APIBridge = {
                                     (noInvoice
                                         ? ' Dit is een werkbon zonder factuur-stap (garantie/terugkomwerk of monteur-flow).'
                                         : ' Er is GEEN factuur aangemaakt.') +
-                                    (customArticles.length ? ' Er zijn ook eenmalige artikels die in Robaws aangemaakt moeten worden.' : '') +
+                                    (eenmalig.length ? ' Er zijn ook eenmalige artikels die in Robaws aangemaakt moeten worden.' : '') +
                                     (naFouten.length ? '\n\nNiet gelukt bij automatische verwerking: ' + naFouten.join('; ') : '') +
                                     '\n\nGelieve op te volgen.',
                                 // v222b: factuur-taken naar Els (boekhouding);

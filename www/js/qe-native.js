@@ -125,6 +125,8 @@
         /* NFC: events 'nfc' en 'nfc-schrijfmodus'; schrijven wacht op de volgende tag */
         nfcSchrijf: function (o) { return roep('nfcSchrijf', [JSON.stringify(o || {})], 310000); },
         nfcSchrijfStop: function () { direct('nfcSchrijfStop', []); },
+        /* v420 (APK 1.247): de klok-tags {mime, uids} — een klok-tag zonder merkteken krijgt het bij de volgende scan */
+        nfcKlokTags: function (o) { direct('nfcKlokTags', [JSON.stringify(o || {})]); },
 
         /* Bluetooth (base64-data) — events: ble-gevonden, ble-data, ble-verbroken, spp-data, spp-verbroken */
         btStatus: function () { return json('btStatus', [], { beschikbaar: false }); },

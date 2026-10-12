@@ -423,6 +423,12 @@
             </div>
         </div>
 
+        <!-- v424: materiaal uit de webshop (alle artikels van de groothandels, brutoprijs van waar we kopen; opent in de app zelf) -->
+        <button class="btn btn-primary btn-full mb-8" id="btnGsmWebshop" type="button" onclick="app.openGsmBon()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M3 4h2l2.2 10.2a2 2 0 0 0 2 1.6h7.6a2 2 0 0 0 2-1.5L20.5 8H6"/><circle cx="10" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/></svg> Materiaal uit de webshop
+        </button>
+        <p class="text-grey text-sm mb-16" style="margin-top:0">Of zoek zoals vroeger in de artikels van Robaws:</p>
+
         <div class="search-box mb-16">
             <span class="search-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg></span>
             <input type="text" class="form-input" id="materialSearch" placeholder="Zoek artikel..." oninput="app.searchMaterials(this.value)">
@@ -461,8 +467,8 @@
             <p class="text-grey text-sm text-center">Nog geen materialen toegevoegd</p>
         </div>
 
-        <!-- v329: materiaal bestellen (ex-"Materiaal ontbreekt") — regels bij de
-             werkbon; mail naar de order-verantwoordelijke bij het versturen -->
+        <!-- v425: materiaal bestellen via de webshop (mandje met brutoprijzen, de werf van deze werkorder staat al
+             ingevuld); de bestelling gaat meteen naar het bureel (v329 was een tekstformulier) -->
         <button class="btn btn-outline btn-full" style="margin-top:16px;border-color:var(--qe-orange);color:var(--qe-orange);font-size:13px" onclick="app.openMateriaalBestelling()">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><path d="M12 3 21 7.5v9L12 21 3 16.5v-9z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg> Materiaal bestellen
         </button>
@@ -580,9 +586,9 @@
     <button class="btn btn-outline btn-sm" id="btnWbKorting" onclick="app.openKortingSheet()"
         style="width:100%;margin:-6px 0 16px;display:none">+ Korting toevoegen</button>
 
-    <!-- v329: te bestellen materiaal (gaat mee bij versturen, naar de order-verantwoordelijke) -->
+    <!-- v329/v425: materiaal voor deze werkorder: een oude tekstbestelling (gaat mee bij versturen) en de bestellingen via de webshop -->
     <div class="card mb-16" id="wbBestellingCard" style="display:none">
-        <div style="font-size:13px;color:var(--qe-grey);margin-bottom:6px">Te bestellen materiaal <span style="font-size:11px">(wordt gemaild naar de projectleider bij versturen)</span></div>
+        <div id="wbBestellingTitel" style="font-size:13px;color:var(--qe-grey);margin-bottom:6px">Te bestellen materiaal <span style="font-size:11px">(wordt gemaild naar de projectleider bij versturen)</span></div>
         <div id="wbBestellingRows" style="font-size:14px"></div>
     </div>
 
@@ -820,7 +826,8 @@
                 <div class="spinner"></div>
             </div>
             <div style="font-size:11px;color:var(--qe-grey);margin-top:8px;text-align:center">
-                Kies een locatie en druk op <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M11 18h2"/></svg> Scan om een tag toe te wijzen
+                Kies een locatie en druk op <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M11 18h2"/></svg> Scan om een tag toe te wijzen<br>
+                ✍️ zet het QE-klokmerkteken op de tag: daarna opent de app vanzelf, ook als ze dicht is (APK 1.247)
             </div>
         </div>
     </div>
@@ -932,28 +939,19 @@
         <div id="verlofList"><div class="spinner"></div></div>
     </div>
 
-    <!-- MATERIAAL — bestelling aanvragen (v329) -->
+    <!-- MATERIAAL — bestellen met een mandje (v425; vervangt het tekstformulier van v329) -->
     <div class="aanvraag-panel" id="aanvraagMateriaal" style="display:none">
-        <p style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px">Vraag materiaal aan dat besteld moet worden. Je aanvraag gaat per mail naar de gekozen projectleider.</p>
         <div class="card" style="padding:16px;margin-bottom:16px">
-            <div class="form-group"><label>Projectleider</label>
-                <select id="matAanvraagPl" class="form-input"></select></div>
-            <div class="form-group"><label>Werf / project</label>
-                <input type="text" id="matAanvraagWerf" class="form-input" placeholder="Kies of typ de werf..." list="matWerfSuggesties" autocomplete="off">
-                <datalist id="matWerfSuggesties"></datalist></div>
-            <div class="form-group"><label>Materiaal</label>
-                <div id="matAanvraagRegels"></div>
-                <button class="btn btn-outline btn-sm btn-full" onclick="app.addMateriaalRegel('matAanvraagRegels')">+ Nog materiaal toevoegen</button></div>
-            <div class="form-group"><label>Opmerking (optioneel)</label>
-                <textarea id="matAanvraagOpm" class="form-input" rows="2" placeholder="Extra info voor de projectleider..."></textarea></div>
-            <label style="display:flex;align-items:center;gap:10px;margin-bottom:14px;cursor:pointer">
-                <input type="checkbox" id="matAanvraagDringend" style="width:20px;height:20px">
-                <span style="font-size:14px">Dringend</span></label>
-            <div id="matAanvraagError" style="color:var(--qe-red);font-size:13px;text-align:center;margin-bottom:8px;display:none"></div>
-            <button class="btn btn-primary btn-full" id="btnMatAanvraag" onclick="app.submitMateriaalAanvraag()">Aanvraag versturen</button>
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px">Materiaal nodig?</div>
+            <p style="font-size:13px;color:var(--g1);margin:0 0 14px;line-height:1.55">Kies de artikels in de webshop, voor een werf of voor de stock. Het bureel kijkt je bestelling na en bestelt bij de leverancier.</p>
+            <button class="btn btn-primary btn-full" id="btnMatBestellen" onclick="app.openMateriaalBestellen()">+ Nieuwe bestelling</button>
         </div>
-        <div class="section-header"><h2>Mijn aanvragen</h2></div>
-        <div id="matAanvraagList"></div>
+        <div class="section-header"><h2>Mijn bestellingen</h2><button type="button" onclick="app._mbLijstLaden()" style="background:none;border:0;padding:6px 2px;font:inherit;font-size:13px;font-weight:600;color:var(--g2);cursor:pointer">Vernieuwen</button></div>
+        <div id="matBestelLijst"></div>
+        <div id="matAanvraagOud" style="display:none">
+            <div class="section-header"><h2>Vroeger per mail</h2></div>
+            <div id="matAanvraagList"></div>
+        </div>
     </div>
     <!-- MATERIEEL — verhuur/uitleen (v284) -->
     <div class="aanvraag-panel" id="aanvraagMaterieel" style="display:none">
@@ -1401,7 +1399,7 @@
     <div class="card" style="margin-bottom:12px">
         <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
             Welke toestemmingen heeft de app op dit toestel? Alles wat de app later nodig kan
-            hebben zit al in de app (APK 1.245): geef de toestemmingen hier in één keer, of pas
+            hebben zit al in de app (APK 1.246): geef de toestemmingen hier in één keer, of pas
             wanneer een functie erom vraagt. Niets wordt gebruikt zolang de app het niet nodig heeft.
         </div>
     </div>

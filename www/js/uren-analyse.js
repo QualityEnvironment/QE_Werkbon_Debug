@@ -34,6 +34,17 @@
     return /overuren/i.test(nm);
   }
 
+  /** v421 (Worker v479): ziek of verlof voor de REST van een gewerkte dag (uursoort 36 ziek / 35 verlof,
+   *  gezet door het bureel in het uren-scherm). Telt NOOIT als werk- of overuren; apart geteld. */
+  var ABSENCE_HOURTYPE_IDS = { 35: 'verlof', 36: 'ziek' };
+  function afwSoortVan(htId, htNames) {
+    if (ABSENCE_HOURTYPE_IDS[htId]) return ABSENCE_HOURTYPE_IDS[htId];
+    var nm = String((htNames && htNames[String(htId)]) || '').toLowerCase();
+    if (/^\s*ziek/.test(nm)) return 'ziek';
+    if (/^\s*verlof/.test(nm)) return 'verlof';
+    return null;
+  }
+
   var MONTHS_NL = ['januari', 'februari', 'maart', 'april', 'mei', 'juni',
     'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
   var DAYS_NL = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
@@ -251,13 +262,17 @@
     // time-entries
     var te = Array.isArray(wo.timeEntries) ? wo.timeEntries : [];
     var employeeId = 0, totalHours = 0, workHours = 0, overtimeHours = 0;
+    var afwZiek = 0, afwVerlof = 0;   // v421: ziek/verlof voor de rest van de dag (niet in de uren)
     for (var i = 0; i < te.length; i++) {
       var t = te[i];
       var eid = parseInt(t.employeeId || 0, 10);
       if (!employeeId && eid) employeeId = eid;
       var hrs = (typeof t.hours === 'number' || (t.hours != null && !isNaN(t.hours))) ? parseFloat(t.hours) : 0;
-      totalHours += hrs;
       var htId = parseInt(t.hourTypeId || 0, 10);
+      var afwS = afwSoortVan(htId, htNames);
+      if (afwS === 'ziek') { afwZiek += hrs; continue; }
+      if (afwS === 'verlof') { afwVerlof += hrs; continue; }
+      totalHours += hrs;
       if (isOvertimeHourType(htId, htNames)) overtimeHours += hrs;  // v251: incl. weekend-varianten
       else workHours += hrs;
     }
@@ -313,6 +328,8 @@
       totalHours: totalHours,
       workHours: workHours,
       overtimeHours: overtimeHours,
+      afwZiek: afwZiek,
+      afwVerlof: afwVerlof,
       totalKm: totalKm,
       commuteEntries: commuteEntries,
       fietsvergoeding: fiets,
@@ -345,7 +362,7 @@
       if (!byEmp[eid]) {
         byEmp[eid] = {
           id: eid, name: r.employeeName, days: {},
-          tot_work: 0, tot_over: 0, tot_tot: 0, tot_km: 0,
+          tot_work: 0, tot_over: 0, tot_tot: 0, tot_km: 0, tot_ziekU: 0, tot_verlofU: 0,
           count_days: 0, count_late: 0, count_sick: 0,
           count_fiets: 0, count_rsTW: 0, count_rsWT: 0
         };
@@ -353,7 +370,7 @@
       var E = byEmp[eid];
       if (!E.days[day]) {
         E.days[day] = {
-          hours: 0, workHours: 0, overtimeHours: 0, kmTot: 0, kmByMob: {},
+          hours: 0, workHours: 0, overtimeHours: 0, afwZiek: 0, afwVerlof: 0, kmTot: 0, kmByMob: {},
           tijd: r.tijd || '', ingeklokt: r.ingeklokt || '', uitgeklokt: r.uitgeklokt || '',
           status: r.status || '', class: 'ontime', fiets: false, rsTW: false, rsWT: false
         };
@@ -363,6 +380,8 @@
       D.hours += r.totalHours;
       D.workHours += r.workHours;
       D.overtimeHours += r.overtimeHours;
+      D.afwZiek += (r.afwZiek || 0);       // v421
+      D.afwVerlof += (r.afwVerlof || 0);   // v421
       D.kmTot += (r.totalKm || 0);
       (r.commuteEntries || []).forEach(function (c) {
         var mt = c.mobilityTypeName || 'onbekend';
@@ -385,6 +404,8 @@
       E.tot_work += r.workHours;
       E.tot_over += r.overtimeHours;
       E.tot_tot += r.totalHours;
+      E.tot_ziekU += (r.afwZiek || 0);       // v421
+      E.tot_verlofU += (r.afwVerlof || 0);   // v421
       E.tot_km += (r.totalKm || 0);
       if (r.tijdClass === 'late') E.count_late++;
       if (r.tijdClass === 'sick') E.count_sick++;
@@ -605,6 +626,21 @@
           gridRows.push(r3);
         });
 
+        // v421: ziek/verlof voor de rest van een gewerkte dag (telt niet in Uren tot/Werkuren/Overuren)
+        if ((p.tot_ziekU || 0) + (p.tot_verlofU || 0) > 0.001) {
+          var rowAfw = gridBase + gridRows.length;
+          var r4 = [{ v: 'Ziek/verlof u', t: 's', s: 18 }];
+          var afwTot = 0;
+          for (var d7 = 1; d7 <= dim; d7++) {
+            var wk7 = isWeekend(dateOf(ym, d7)), cell7 = p.days[d7];
+            var a7 = cell7 ? round2((cell7.afwZiek || 0) + (cell7.afwVerlof || 0)) : 0;
+            if (a7 > 0) { r4.push({ v: a7, t: 'n', s: wk7 ? 20 : 19 }); afwTot += a7; }
+            else r4.push({ v: '', t: 's', s: wk7 ? 20 : 19 });
+          }
+          r4.push({ f: 'SUM(' + firstDayCol + rowAfw + ':' + lastDayCol + rowAfw + ')', t: 'n', s: 3, v: round2(afwTot) });
+          gridRows.push(r4);
+        }
+
         blockAddr[p.id] = {
           name: p.name, rowOpm: rowOpm, rowUT: rowUT, rowWU: rowWU, rowOV: rowOV,
           rowCmp: rowCmp, rowCzp: rowCzp, rowP: rowP, rowFts: rowFts,
@@ -638,6 +674,11 @@
     header.push({ v: 'Te laat', t: 's', s: 1 });
     header.push({ v: 'Ziek', t: 's', s: 1 });
     header.push({ v: 'Fietsdagen', t: 's', s: 1 });
+    // v421: ziek/verlof voor de rest van een gewerkte dag (uren, niet in de werkuren)
+    var metZiekU = empList.some(function (p) { return (p.tot_ziekU || 0) > 0.001; });
+    var metVerlofU = empList.some(function (p) { return (p.tot_verlofU || 0) > 0.001; });
+    if (metZiekU) header.push({ v: 'Ziek u (rest dag)', t: 's', s: 1 });
+    if (metVerlofU) header.push({ v: 'Verlof u (rest dag)', t: 's', s: 1 });
     summaryRows.push(header);
 
     var sColDagen = col(2), sColWU = col(3), sColOV = col(4), sColUT = col(5),
@@ -664,11 +705,14 @@
       row.push({ v: a.cacheLate, t: 'n', s: 0 });
       row.push({ f: 'COUNTIF(' + firstDayCol + a.rowOpm + ':' + lastDayCol + a.rowOpm + ',"Ziek")', t: 'n', s: 0, v: a.cacheSick });
       row.push({ f: 'COUNTIF(' + firstDayCol + a.rowFts + ':' + lastDayCol + a.rowFts + ',"JA")', t: 'n', s: 0, v: a.cacheFiets });
+      if (metZiekU) row.push({ v: round2(p.tot_ziekU || 0), t: 'n', s: 2 });
+      if (metVerlofU) row.push({ v: round2(p.tot_verlofU || 0), t: 'n', s: 2 });
       summaryRows.push(row);
       rowIdx++;
       g.D += a.cacheDays; g.WU += a.cacheWU; g.OV += a.cacheOV; g.UT += a.cacheUT;
       g.Cmp += a.cacheCmp; g.Czp += a.cacheCzp; g.P += a.cacheP;
       g.Ont += a.cacheOntime; g.Late += a.cacheLate; g.Sick += a.cacheSick; g.Fts += a.cacheFiets;
+      g.ZiekU = (g.ZiekU || 0) + (p.tot_ziekU || 0); g.VerlofU = (g.VerlofU || 0) + (p.tot_verlofU || 0);
     });
     var lastEmpRow = rowIdx - 1;
     function mkSum(c, cache) { return { f: 'SUM(' + c + firstEmpRow + ':' + c + lastEmpRow + ')', t: 'n', s: 3, v: cache }; }
@@ -685,6 +729,9 @@
     totRow.push(mkSum(sColLate, g.Late));
     totRow.push(mkSum(sColZiek, g.Sick));
     totRow.push(mkSum(sColFts, g.Fts));
+    var kolExtra = 11 + nKm;
+    if (metZiekU) { totRow.push(mkSum(col(kolExtra), round2(g.ZiekU || 0))); kolExtra++; }
+    if (metVerlofU) totRow.push(mkSum(col(kolExtra), round2(g.VerlofU || 0)));
     summaryRows.push(totRow);
 
     var sheets = {};
@@ -703,6 +750,8 @@
       mobilityTypes.forEach(function (mt) { hdr.push({ v: 'KM ' + mobAbbr(mt), t: 's', s: 1 }); });
       hdr.push({ v: 'Km totaal', t: 's', s: 1 });
       hdr.push({ v: 'Fiets', t: 's', s: 1 });
+      var metAfw = (p.tot_ziekU || 0) + (p.tot_verlofU || 0) > 0.001;   // v421
+      if (metAfw) hdr.push({ v: 'Ziek/verlof u', t: 's', s: 1 });
       rows.push(hdr);
 
       var nMob = mobilityTypes.length;
@@ -751,6 +800,10 @@
         var isFiets = cell && cell.fiets;
         if (isFiets) tFiets++;
         row.push({ v: isFiets ? 'X' : '', t: 's', s: styleBase });
+        if (metAfw) {
+          var afwDag = cell ? round2((cell.afwZiek || 0) + (cell.afwVerlof || 0)) : 0;
+          row.push(afwDag > 0 ? { v: afwDag, t: 'n', s: 2 } : { v: '', t: 's', s: styleBase });
+        }
         rows.push(row);
       }
       var lastDataRow = 3 + dim;
@@ -771,6 +824,10 @@
       if (nMob > 0) totaalRow.push({ f: 'SUM(' + colKmTot + firstDataRow + ':' + colKmTot + lastDataRow + ')', t: 'n', s: 3, v: round2(tKm) });
       else totaalRow.push({ v: round2(tKm), t: 'n', s: 3 });
       totaalRow.push({ f: 'COUNTIF(' + colFiets + firstDataRow + ':' + colFiets + lastDataRow + ',"X")&" dgn"', t: 's', s: 3, v: tFiets + ' dgn' });
+      if (metAfw) {
+        var colAfw = col(12 + nMob);
+        totaalRow.push({ f: 'SUM(' + colAfw + firstDataRow + ':' + colAfw + lastDataRow + ')', t: 'n', s: 3, v: round2((p.tot_ziekU || 0) + (p.tot_verlofU || 0)) });
+      }
       rows.push(totaalRow);
 
       var sheetName = safeSheetName(p.name);

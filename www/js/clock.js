@@ -190,6 +190,7 @@ window.QEClock = {
             const config = await RobawsAPI.getNfcTagConfig();
             this._tagConfigLoadedAt = Date.now();
             this._tagConfig = config;
+            this._klokTagsNaarApk(config);   // v420
             // Persoonlijk startuur apart opslaan PER USER
             const currentUser = RobawsAPI.getLoggedInUser();
             const currentUserId = currentUser ? String(currentUser.robawsEmployeeId) : null;
@@ -215,6 +216,7 @@ window.QEClock = {
                 const cached = localStorage.getItem('qe_nfc_tags');
                 if (cached) {
                     this._tagConfig = JSON.parse(cached);
+                    this._klokTagsNaarApk(this._tagConfig);   // v420
                     return this._tagConfig;
                 }
             } catch(_) {
@@ -223,6 +225,22 @@ window.QEClock = {
             }
             return null;
         }
+    },
+
+    /** v420: de klok-tags naar de APK (1.247). Een klok-tag die het QE-klokmerkteken nog niet draagt, krijgt
+     *  het bij de volgende scan (met de app open); daarna opent de tag de app ook als ze dicht is. */
+    _klokTagsNaarApk(config) {
+        try {
+            if (typeof window === 'undefined' || !window.QENative || typeof QENative.nfcKlokTags !== 'function') return;
+            const c = config || this.getTagConfig() || {};
+            const uids = [];
+            const erbij = (v) => { const n = String(v || '').replace(/[^0-9a-f]/gi, '').toUpperCase(); if (n && uids.indexOf(n) < 0) uids.push(n); };
+            erbij(c.bureau && c.bureau.tagId);
+            erbij(c.ladenLossen && c.ladenLossen.tagId);
+            (c.camionetten || []).forEach(x => erbij(x && x.tagId));
+            try { erbij(RobawsAPI.wwvTag()); } catch (_) {}
+            QENative.nfcKlokTags({ mime: RobawsAPI.KLOK_NFC_MIME, uids });
+        } catch (_) {}
     },
 
     /** Haal gecachte tag config op */
@@ -482,12 +500,16 @@ window.QEClock = {
         return 'code ' + code;
     },
 
-    async onNfcScan(tagId) {
+    async onNfcScan(tagId, opties) {
         // BUG-fix: tagId normaliseren (lowercase + trim) zodat hex-casing
         // verschillen tussen Android en Robaws-cache geen mismatch geven.
         const normalizedTagId = String(tagId || '').trim().toLowerCase();
+        // v420: de app stond niet open (koude start of achtergrond) en werd door deze tag geopend (APK 1.247)
+        const vanBuiten = !!(opties && opties.vanBuiten);
         if (!normalizedTagId) return;
         console.log('[Clock] NFC scan:', normalizedTagId);
+        // v419: materieel-tags (machines, koffers) toont de app zelf, vanaf elk scherm
+        if (window.app && typeof app.matNfcVangen === 'function' && app.matNfcVangen(normalizedTagId)) return;
 
         // ── SCREEN-GUARD: scannen mag vanuit Planning / Klok / Uren tabs
         // (v126). Andere schermen (werkbon-invul, payment, etc.) blijven
@@ -503,7 +525,19 @@ window.QEClock = {
             && LOGISTIEK_SCREENS.includes(window.app.currentScreen);
         if (!onAllowedScreen && !opLogistiek && !this._pendingAssignment) {
             if (window.app) {
-                app.toast('Scannen kan vanaf Planning, Klok of Uren');
+                // v420: de app werd door een klok-tag geopend maar stond nog op een ander scherm (bv. een
+                // werkbon): niet zomaar wegspringen, wel duidelijk zeggen wat te doen
+                if (vanBuiten && this.identifyTag(normalizedTagId)) {
+                    if (typeof app.showScanResult === 'function') app.showScanResult(false, 'Nog niet geklokt\nDe app stond op een ander scherm. Ga naar Planning of Klok en houd je gsm nog eens tegen de tag.', null, 6000);
+                    else app.toast('Ga naar Planning of Klok en scan de tag opnieuw');
+                    return;
+                }
+                // v419: een tag met het QE-merkteken opent het materieel via het nfc-event (dat
+                // net na deze aanroep binnenkomt) — dan geen melding over het scherm
+                setTimeout(() => {
+                    if (typeof app.matNfcIsRecent === 'function' && app.matNfcIsRecent(normalizedTagId)) return;
+                    app.toast('Scannen kan vanaf Planning, Klok of Uren');
+                }, 700);
             }
             return;
         }
@@ -601,14 +635,19 @@ window.QEClock = {
             }
 
             if (!tag) {
-                if (window.app) app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
+                // v419: zelfde uitstel — een tag met het QE-merkteken toont het materieel zelf
+                if (window.app) setTimeout(() => {
+                    if (typeof app.matNfcIsRecent === 'function' && app.matNfcIsRecent(normalizedTagId)) return;
+                    app.toast('Onbekende NFC tag — wijs deze eerst toe via Tag beheer', true);
+                }, 700);
                 return;
             }
 
             // v358: klok-tags doen niets vanaf de Logistiek-schermen — anders
             // zou een camionet-tag daar per ongeluk in-/uitklokken.
             if (opLogistiek) {
-                if (window.app) app.toast('Klokken kan niet vanaf Logistiek — ga naar het Klok-scherm');
+                if (window.app && vanBuiten && typeof app.showScanResult === 'function') app.showScanResult(false, 'Nog niet geklokt\nDe app stond op Logistiek. Ga naar Planning of Klok en houd je gsm nog eens tegen de tag.', null, 6000);   // v420
+                else if (window.app) app.toast('Klokken kan niet vanaf Logistiek — ga naar het Klok-scherm');
                 return;
             }
 
@@ -820,15 +859,22 @@ window.QEClock = {
                     // Voor monteurs met 1 openstaande werkbon biedt het de uren-
                     // overname + auto-submit aan. Bij blokkade: niet uitklokken.
                     let canProceed = true;
+                    // v422: de overname zet in uitklokCtx.eindTijd de uitkloktijd waarmee de uren naar de
+                    // werkbon(nen) gingen; de klok boekt straks met dezelfde tijd (nooit meer of minder uren).
+                    // Zolang de vragen (verdelen, voor wie) open staan telt een nieuwe scan niet (_vraagOpen).
+                    const uitklokCtx = {};
+                    this._vraagOpen = Date.now();
                     try {
                         if (window.app && typeof app.checkAndHandleOpenWorkordersBeforeClockOut === 'function') {
-                            canProceed = await app.checkAndHandleOpenWorkordersBeforeClockOut(session);
+                            canProceed = await app.checkAndHandleOpenWorkordersBeforeClockOut(session, uitklokCtx);
                         }
                     } catch(e) {
                         console.warn('[Clock] openstaande-werkbon check faalde:', e && e.message);
                         // Bij onverwachte fout: laat uitklokken door zodat een
                         // bug in de check de werknemer niet vasthoudt.
                         canProceed = true;
+                    } finally {
+                        this._vraagOpen = 0;
                     }
                     if (!canProceed) {
                         console.log('[Clock] Uitklokken geblokkeerd — openstaande werkbon(s)');
@@ -882,7 +928,7 @@ window.QEClock = {
                     }
 
                     showLoad();
-                    scanResult = await this._clockOut(session, tag, { gps: gpsUit, opmerking: uitklokOpmerking, extraRegels: uitklokRegels });
+                    scanResult = await this._clockOut(session, tag, { gps: gpsUit, opmerking: uitklokOpmerking, extraRegels: uitklokRegels, eindTijd: uitklokCtx.eindTijd || null });
                     // v394: uitklok gelukt = de opmerking staat in Robaws → klad weg.
                     // Mislukt? Dan blijft het klad staan en is het bij de volgende
                     // scan meteen weer ingevuld.
@@ -893,6 +939,20 @@ window.QEClock = {
                 }
 
                 // ── GEEN ACTIEVE SESSIE → INCLOCKEN ──
+                // v420: de app stond niet open en een CAMIONET-tag opende ze → eerst vragen. Een gsm die in de
+                // camionet op de tag blijft liggen, mag niet ongevraagd (opnieuw) inklokken. Uitklokken vraagt al
+                // de kilometers; de tags aan het bureau hangen aan de muur (geen vraag).
+                if (vanBuiten && tag.type === 'camionet') {
+                    hideLoad();
+                    this._vraagOpen = Date.now();
+                    let ja = false;
+                    try {
+                        const camNaam = (window.app && typeof app.escapeHtml === 'function') ? app.escapeHtml(tag.name || '') : String(tag.name || '').replace(/[<>&"]/g, '');
+                        ja = await this._showConfirmModal('Inklokken?', 'Je scande de tag van camionet <b>' + camNaam + '</b>.', 'Inklokken', 'Annuleren');
+                    } catch (_) { ja = false; }
+                    this._vraagOpen = 0;
+                    if (!ja) { if (window.app && app.toast) app.toast('Niet ingeklokt'); return; }
+                }
                 showLoad('Locatie zoeken…');   // v386: eerst de locatie, daarna Robaws
                 scanResult = await this._clockIn(session, tag);
             } finally {
@@ -1496,11 +1556,102 @@ window.QEClock = {
             useStartuurCorrection,
         };
     },
+
+    /** v422: de PAUZE van een uitklok — ÉÉN regel voor de klok (_clockOut) én de uren-overname naar de
+     *  werkbonnen (app.checkAndHandleOpenWorkordersBeforeClockOut). Persoonlijke pauze (fiche "Pauze", anders
+     *  de bewaarde, anders 60); een technieker in de monteur-rol 45 (v326); maar één keer per dag: een tweede
+     *  sessie krijgt 0 (v214). De Robaws-regel (eerder blok op de klok-werkbon = pauze al genomen, v327) zit
+     *  in _clockOut en in nettoVoorUitklok. */
+    pauzeVoorSessie(session) {
+        let minuten = this._personalPauze;
+        let bron = 'config';
+        if (!minuten && minuten !== 0) {
+            const user = RobawsAPI.getLoggedInUser();
+            const userId = user ? String(user.robawsEmployeeId) : null;
+            if (userId) {
+                const cached = localStorage.getItem(`qe_pauze_${userId}`);
+                if (cached) {
+                    minuten = parseInt(cached, 10);
+                    bron = 'localStorage';
+                }
+            }
+        }
+        if (!minuten && minuten !== 0) {
+            minuten = 60;
+            bron = 'fallback-60';
+        }
+        // v326: beleidsregel (Levi, 5 aug 2026) — een TECHNIEKER die in monteur-rol werkt volgt het
+        // monteur-regime: pauze 45 min i.p.v. zijn fiche-pauze.
+        try {
+            if (window.app && app.currentUser && app.currentUser.role === 'technieker'
+                    && typeof app._activeRole === 'function' && app._activeRole() === 'monteur') {
+                minuten = 45;
+                bron = 'monteur-rol (45)';
+            }
+        } catch (_) {}
+        // v214: pauze maar ÉÉN keer per dag aftrekken. Bij een tweede sessie (ochtend + namiddag op dezelfde
+        // werkbon) werd de volledige pauze voorheen bij ELKE uitklok opnieuw afgetrokken.
+        const isFirstSessionOfDay = !(((session && session.completedSessions) || []).length > 0);
+        if (!isFirstSessionOfDay && minuten > 0) {
+            console.log('[Clock] pauze al toegepast bij eerdere sessie vandaag — nu 0 (was ' + minuten + 'min)');
+            minuten = 0;
+            bron = 'reeds toegepast (sessie 2+)';
+        }
+        return { minuten, bron };
+    },
+
+    /** v422: som van de uren van de getimede blokken van deze werknemer die VÓÓR dit uitklok-blok begonnen
+     *  (artikel 185, geen ziek/verlof) = zelfde lezing als exPrevHours in _clockOut. */
+    _eerdereBlokUren(items, employeeId, entryStartMin) {
+        const ART = RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject;
+        let som = 0;
+        for (const te of (Array.isArray(items) ? items : [])) {
+            if (!te) continue;
+            const aId = te.articleId || (te.article && te.article.id);
+            if (String(aId) !== String(ART)) continue;
+            if (RobawsAPI.urenAfwSoort(te)) continue;
+            if (String(te.employeeId || '') !== String(employeeId || '')) continue;
+            if (te.startTime == null) continue;
+            const sMin = (te.startTime.hour || 0) * 60 + (te.startTime.minute || 0);
+            if (sMin < entryStartMin) som += (parseFloat(te.hours) || 0);
+        }
+        return Math.round(som * 100) / 100;
+    },
+
+    /** v422: de NETTO-uren van deze uitklok, precies zoals _clockOut ze zal boeken (dezelfde grenzen via
+     *  berekenEntryTijden, dezelfde pauze-regels). Voor de uren-overname naar de werkbonnen bij het
+     *  uitklokken: zo dragen de werkbonnen nooit meer of minder dan de klok (vraag Levi 12 okt 2026).
+     *  endTimeRaw = 'HH:MM' (exacte uitkloktijd; de klok krijgt daarna dezelfde via opts.eindTijd).
+     *  Geeft { entryStartMin, entryEndMin, entryStart, entryEnd, endTimeRaw, pauze, pauzeBron, netMin }. */
+    async nettoVoorUitklok(session, endTimeRaw) {
+        const et = this.berekenEntryTijden(session, endTimeRaw);
+        const pz = this.pauzeVoorSessie(session);
+        let pauze = pz.minuten || 0;
+        let bron = pz.bron;
+        // v327-regel: staat er vandaag al een eerder getimed blok van deze werknemer op de klok-werkbon, dan
+        // zat de pauze daar al in. Lezen mislukt = de lokale regel blijft (zoals _clockOut).
+        if (pauze > 0 && session && session.workOrderId) {
+            try {
+                const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`, { bypassCache: true });
+                const items = (exRes && exRes.data && (exRes.data.items || exRes.data)) || [];
+                if (this._eerdereBlokUren(items, session.employeeId, et.entryStartMin) > 0) {
+                    pauze = 0;
+                    bron = 'reeds toegepast (Robaws-blok)';
+                }
+            } catch (_) { /* lokale regel blijft */ }
+        }
+        const netMin = Math.max(0, et.entryEndMin - et.entryStartMin - pauze);
+        return Object.assign({}, et, { endTimeRaw: endTimeRaw, pauze: pauze, pauzeBron: bron, netMin: netMin });
+    },
+
     async _clockOut(session, tag, opts) {
         const opts2 = opts || {};
         const now = await this._getNow();
         // v215: forcedEndTime → een gisteren-sessie afsluiten op 23:45
-        const endTimeRaw = opts2.forcedEndTime || this._localTime(now);
+        // v422: eindTijd = de uitkloktijd waarmee de uren al naar de werkbon(nen) gingen (overname bij het
+        // uitklokken): de klok boekt dan exact dezelfde uren, ook als het kilometerscherm even openstond.
+        const eindTijd = (opts2.eindTijd && /^\d{1,2}:\d{2}$/.test(String(opts2.eindTijd))) ? String(opts2.eindTijd) : null;
+        const endTimeRaw = opts2.forcedEndTime || eindTijd || this._localTime(now);
         // v215: de regels (weekend-check + weekend-uurtype-adjust) gelden
         // voor de dag VAN DE SESSIE, niet per se vandaag.
         const ruleDateStr = session.date || this._localDate();
@@ -1525,44 +1676,11 @@ window.QEClock = {
             openLLNote = '\n(Let op: Laden & Lossen staat nog open — scan de L&L-tag om dat blok af te sluiten)';
         }
 
-        // Pauze ophalen (v56 logica)
-        let pauseMinutes = this._personalPauze;
-        let pauseSource = 'config';
-        if (!pauseMinutes && pauseMinutes !== 0) {
-            const user = RobawsAPI.getLoggedInUser();
-            const userId = user ? String(user.robawsEmployeeId) : null;
-            if (userId) {
-                const cached = localStorage.getItem(`qe_pauze_${userId}`);
-                if (cached) {
-                    pauseMinutes = parseInt(cached, 10);
-                    pauseSource = 'localStorage';
-                }
-            }
-        }
-        if (!pauseMinutes && pauseMinutes !== 0) {
-            pauseMinutes = 60;
-            pauseSource = 'fallback-60';
-        }
-        // v326: beleidsregel (Levi, 5 aug 2026) — een TECHNIEKER die in
-        // monteur-rol werkt volgt het monteur-regime: pauze 45 min i.p.v.
-        // zijn fiche-pauze. Zelfde regel in app.js _fillKlokurenForMonteur
-        // zodat tijdsregistratie en werkbon-overname identiek boeken.
-        try {
-            if (window.app && app.currentUser && app.currentUser.role === 'technieker'
-                    && typeof app._activeRole === 'function' && app._activeRole() === 'monteur') {
-                pauseMinutes = 45;
-                pauseSource = 'monteur-rol (45)';
-            }
-        } catch (_) {}
-        // v214: pauze maar ÉÉN keer per dag aftrekken. Bij een tweede sessie
-        // (ochtend + namiddag op dezelfde werkbon) werd de volledige pauze
-        // voorheen bij ELKE uitklok opnieuw afgetrokken.
-        const isFirstSessionOfDay = !((session.completedSessions || []).length > 0);
-        if (!isFirstSessionOfDay && pauseMinutes > 0) {
-            console.log('[Clock] pauze al toegepast bij eerdere sessie vandaag — nu 0 (was ' + pauseMinutes + 'min)');
-            pauseMinutes = 0;
-            pauseSource = 'reeds toegepast (sessie 2+)';
-        }
+        // Pauze ophalen (v56 logica) — v422: de gedeelde regel (pauzeVoorSessie), zodat de uren-overname
+        // naar de werkbonnen exact dezelfde pauze aftrekt (persoonlijk / monteur-rol 45 / 1× per dag).
+        const _pz = this.pauzeVoorSessie(session);
+        let pauseMinutes = _pz.minuten;
+        let pauseSource = _pz.bron;
 
         // Bepaal start- en eindtijd voor time-entry
         // - Start = MAX(actual scan-tijd, startuur werknemer); rond af op 5min indien te laat
@@ -1741,14 +1859,24 @@ window.QEClock = {
         let exTimedStarts = null;   // Set van startminuten
         let exPrevHours = null;     // som uren van blokken vóór entryStartMin
         let exUntimed = null;       // [{id, hours, isOver}]
+        let exAfwUren = 0;          // v421: ziek/verlof voor de rest van de dag (door het bureel)
         try {
             // (v305 / 1.x v300) bypassCache → LIVE-pool, niet de replica: dit is
             // de idempotency-read; een verouderde kopie zou dubbel kunnen boeken.
             const exRes = await RobawsAPI.get(`work-orders/${session.workOrderId}/time-entries?limit=100`, { bypassCache: true });
             const exItems = (exRes.data && (exRes.data.items || exRes.data)) || [];
+            // v421: ziek of verlof (de rest van de dag, gezet in het uren-scherm) is nooit werk of aanvulling,
+            // maar de 8u-aanvulling vult wel alleen aan tot 8 u min die uren.
+            for (const te of exItems) {
+                if (!RobawsAPI.urenAfwSoort(te)) continue;
+                if (te.employeeId && String(te.employeeId) !== String(session.employeeId || '')) continue;
+                if (te.startTime == null && te.endTime == null) exAfwUren += (parseFloat(te.hours) || 0);
+            }
+            exAfwUren = Math.round(exAfwUren * 100) / 100;
             const mijn = exItems.filter(te => {
                 const aId = te.articleId || (te.article && te.article.id);
                 if (String(aId) !== String(ART_MONTEUR)) return false;
+                if (RobawsAPI.urenAfwSoort(te)) return false;   // v421
                 return String(te.employeeId || '') === String(session.employeeId || '');
             });
             exTimedStarts = new Set();
@@ -1876,10 +2004,16 @@ window.QEClock = {
             // 8u werkuren met gelijke overuren-aftrek; L&L telt niet mee;
             // geen aanvulling op weekend of bij < 1u dag-totaal.)
             {
-                let targetPhantom = Math.max(0, 8 - dayKlantHours);
+                // v421: ziek/verlof voor de rest van de dag telt mee om aan 8 u te komen
+                let targetPhantom = Math.max(0, 8 - dayKlantHours - exAfwUren);
                 let skipReason = '';
                 if (isWeekendOut) { targetPhantom = 0; skipReason = 'weekend'; }
                 else if (dayKlantHours < 1) { targetPhantom = 0; skipReason = 'korte dag (<1u)'; }
+                // v421: het bureel koos "niet aanvullen" voor deze dag (regel in de opmerking)
+                if (targetPhantom > 0 && (await this._restKeuzeVanBon(session.workOrderId)) === 'geen') {
+                    targetPhantom = 0; skipReason = 'niet aanvullen (keuze van het bureel)';
+                }
+                if (exAfwUren > 0) uitklokNote += '\n(rest van de dag: ' + exAfwUren.toFixed(2) + 'u ziek/verlof, gezet door het bureel)';
                 targetPhantom = Math.round(targetPhantom * 100) / 100;
                 const fouten = await this._reconcileAanvulling({
                     workOrderId: session.workOrderId,
@@ -2009,6 +2143,16 @@ window.QEClock = {
     // bij fouten herstelt de eerstvolgende scan het vanzelf (Robaws is de
     // bron van waarheid, geen lokale tellers meer).
     // =============================================
+    // v421: de keuze van het bureel voor de rest van de dag (regel "rest van de dag: …" in de opmerking van
+    // de klok-werkbon). Alleen nodig om "niet aanvullen" te respecteren; bij een leesfout = gewoon aanvullen.
+    async _restKeuzeVanBon(workOrderId) {
+        try {
+            const r = await RobawsAPI.get(`work-orders/${workOrderId}`, { bypassCache: true });
+            if (r && r.code === 200 && r.data) return RobawsAPI.leesRestKeuze(r.data.remark);
+        } catch (_) {}
+        return null;
+    },
+
     async _reconcileAanvulling({ workOrderId, employeeId, target, date, untimed }) {
         const ART = String(RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject);
         const HT_W = RobawsAPI.HOUR_TYPE_IDS.werkuren;
@@ -2024,6 +2168,7 @@ window.QEClock = {
                 for (const te of items) {
                     const aId = te.articleId || (te.article && te.article.id);
                     if (String(aId) !== ART) continue;
+                    if (RobawsAPI.urenAfwSoort(te)) continue;   // v421: ziek/verlof is nooit aanvulling
                     if (String(te.employeeId || '') !== String(employeeId || '')) continue;
                     if (te.startTime != null || te.endTime != null) continue;
                     const h = parseFloat(te.hours) || 0;
@@ -2626,6 +2771,11 @@ window.QEClock = {
             if (assignment.soort !== 'wwv' && _wwv && _norm(_wwv) === _norm(tagId)) {
                 throw new Error('Deze tag is de woon-werkverkeer-tag');
             }
+            // v420: een tag die aan materieel hangt, kan geen klok-tag worden (en omgekeerd: zie gereedschapTagToewijzen)
+            if (assignment.soort !== 'materieel' && window.app && typeof app._matTagMap === 'function' && typeof app._matNfcNorm === 'function') {
+                const mid = app._matTagMap().m[app._matNfcNorm(tagId)];
+                if (mid) throw new Error('Deze tag hangt al aan materieel — neem een andere tag');
+            }
             if (assignment.saveFn) {
                 // v358: materieel-tag (of andere niet-klok-toewijzing)
                 await assignment.saveFn(tagId);
@@ -2940,6 +3090,7 @@ window.QEClock = {
                 for (const te of _teItems) {
                     const aId = String(te.articleId || (te.article && te.article.id) || '');
                     if (aId !== ART) continue;
+                    if (RobawsAPI.urenAfwSoort(te)) continue;   // v421: ziek/verlof is geen werk of aanvulling
                     if (String(te.employeeId || '') !== String(session.employeeId || '')) continue;
                     if (te.startTime != null && te.endTime != null) {
                         const h = parseFloat(te.hours);
@@ -3051,7 +3202,12 @@ window.QEClock = {
         // v359: camionet-tags uit Materieel dragen materialId i.p.v. fieldName
         const materialId = tagData && tagData.materialId ? String(tagData.materialId) : '';
         const statusColor = tagId ? 'var(--qe-green)' : 'var(--qe-orange)';
-        const statusText = tagId ? tagId.substring(0, 16) + (tagId.length > 16 ? '...' : '') : 'Niet ingesteld';
+        let statusText = tagId ? tagId.substring(0, 16) + (tagId.length > 16 ? '...' : '') : 'Niet ingesteld';
+        // v420: weet dit toestel of de tag het klok-merkteken draagt (= opent de app vanzelf)?
+        let merk = null;
+        try { merk = (tagId && window.app && typeof app.klokMerkStand === 'function') ? app.klokMerkStand(tagId) : null; } catch (_) {}
+        if (merk && merk.ok) statusText += ' · opent de app ✓';
+        const schrijfBtn = tagId ? `<button data-action="write" data-tag="${this._htmlAttr(tagId)}" data-name="${this._htmlAttr(name)}" title="QE-klokmerkteken op de tag zetten: de app opent dan vanzelf" style="font-size:13px;background:none;border:1px solid var(--qe-purple);border-radius:6px;cursor:pointer;padding:3px 7px">✍️</button>` : '';
         const rowId = 'tagRow_' + (this._tagRowCounter++);
 
         // Sla fieldName en name op als data-attributen (veilig, geen escaping issues)
@@ -3066,7 +3222,7 @@ window.QEClock = {
                     <div style="font-size:11px;color:${statusColor};font-family:monospace">${statusText}</div>
                 </div>
             </div>
-            <div style="display:flex;align-items:center;gap:4px">${scanBtn}${clearBtn}</div>
+            <div style="display:flex;align-items:center;gap:4px">${scanBtn}${schrijfBtn}${clearBtn}</div>
         </div>`;
     },
 
@@ -3089,6 +3245,7 @@ window.QEClock = {
                     // v417: woon-werkverkeer-tag → de Worker-kluis
                     QEClock.startTagAssignment(null, locName, async (tagId) => {
                         await RobawsAPI.wwvTagOpslaan(tagId);
+                        QEClock._klokTagsNaarApk();   // v420
                     }, 'wwv');
                 } else if (!fieldName && materialId) {
                     // v359: tag hoort bij een voertuig-MATERIAAL → daar opslaan
@@ -3099,6 +3256,12 @@ window.QEClock = {
                 } else {
                     QEClock.startTagAssignment(fieldName, locName);
                 }
+            });
+        });
+        // v420: ✍️ = het QE-klokmerkteken op deze tag schrijven (alleen díe tag)
+        container.querySelectorAll('button[data-action="write"]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (window.app && typeof app.klokTagBeschrijf === 'function') app.klokTagBeschrijf(btn.getAttribute('data-tag'), btn.getAttribute('data-name'));
             });
         });
         container.querySelectorAll('button[data-action="clear"]').forEach(btn => {
@@ -3386,6 +3549,7 @@ window.QEClock = {
         // Bestaande entries: eerder gepresteerde blokken + aanvulling-entries
         const ART = RobawsAPI.WERKUUR_ARTICLE_IDS.monteurProject;
         let prevHours = 0, lastEndMin = null;
+        let afwUren = 0;   // v421: ziek/verlof voor de rest van de dag (door het bureel)
         const untimed = [];
         const exStartSet = new Set();  // v324: per-blok-idempotency (zoals _clockOut)
         const HT_W = RobawsAPI.HOUR_TYPE_IDS.werkuren;
@@ -3394,6 +3558,12 @@ window.QEClock = {
             const teRes = await RobawsAPI.get(`work-orders/${wo.id}/time-entries?limit=100`, { bypassCache: true });
             const items = (teRes.data && (teRes.data.items || teRes.data)) || [];
             for (const te of items) {
+                if (RobawsAPI.urenAfwSoort(te)) {
+                    // v421: geen werk en geen aanvulling, maar wel mee om aan 8 u te komen
+                    if ((!te.employeeId || String(te.employeeId) === String(att.employeeId || ''))
+                        && te.startTime == null && te.endTime == null) afwUren += (parseFloat(te.hours) || 0);
+                    continue;
+                }
                 const aId = String(te.articleId || (te.article && te.article.id) || '');
                 if (aId !== String(ART)) continue;
                 if (String(te.employeeId || '') !== String(att.employeeId || '')) continue;
@@ -3523,8 +3693,10 @@ window.QEClock = {
 
             // v257: 8u-aanvulling HERREKENEN (zelfde helper als _clockOut) —
             // weekend/<1u dag-totaal = geen aanvulling.
-            let target = Math.max(0, 8 - dayKlant);
+            // v421: ziek/verlof voor de rest van de dag telt mee; "niet aanvullen" van het bureel = geen aanvulling
+            let target = Math.max(0, 8 - dayKlant - afwUren);
             if (isWeekend || dayKlant < 1) target = 0;
+            if (target > 0 && RobawsAPI.leesRestKeuze(wo.remark) === 'geen') target = 0;
             target = Math.round(target * 100) / 100;
             const fouten = await this._reconcileAanvulling({
                 workOrderId: wo.id,
