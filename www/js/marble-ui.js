@@ -62,7 +62,8 @@
         screenMaterieelAanvragen:{ sub: 'Jouw materieel-aanvragen', title: 'Vorige aanvragingen' },
         screenHandleiding: { sub: 'Alles over de app · typ om te zoeken', title: 'Handleiding' },
         screenRegelboek:   { sub: 'Welke uren tellen en welke niet', title: 'Regelboek uren' },   // v399
-        screenWissel:      { sub: 'Alleen voor de beheerder', title: 'Wissel van profiel' }   // v415
+        screenWissel:      { sub: 'Alleen voor de beheerder', title: 'Wissel van profiel' },  // v415
+        screenMeldingen:   { sub: 'Een bericht voor je collega\'s in de app', title: 'Meldingen' }   // v428
         /* screenHandleidingH: hoofdstuk rendert zijn eigen Marble-kop */
         // screenDagoverzicht: kop wordt door loadDagoverzicht zelf gerenderd (maand + pijltjes)
         // detail/werkbon/betaal-schermen: hebben hun eigen kop
@@ -211,6 +212,7 @@
     var TUTS = {
         screenPlanning: { name: 'PLANNING', steps: [
             ['Je dagplanning', 'Hier staan de werkorders van vandaag, in volgorde van je route. Met de chips bovenaan wissel je van dag. Tik op een werkorder om hem te openen.', '#dateStrip'],
+            ['Meldingen', 'Heeft het bureel iets belangrijks te melden, dan staat dat hier tot de einddatum. Tik erop om de melding opnieuw te lezen.', '#medBalk'],
             ['Klok-status', 'De kaart bovenaan toont of je in- of uitgeklokt bent. Tik erop om naar het klokscherm te gaan.', '#clockStatusBar'],
             ['Bellen & navigeren', 'De knoppen op elke kaart bellen de klant of openen Google Maps — zonder de werkorder te openen.', '#workorderList'],
             ['Badges', '"Regie" betekent tijd & materiaal aanrekenen. "In bewerking" wil zeggen dat je al uren of materiaal registreerde.', '#workorderList'],
@@ -268,7 +270,15 @@
         screenOrganisatie: { name: 'ORGANISATIE', steps: [
             ['Compartimenten', 'Organisatie bundelt alles wat geen klokken of werkbon is: je aanvragen, en voor bureel ook de projecten.'],
             ['Aanvragen', 'Materiaal, materieel, budget en verlof — plus de Goedkeuren-kaart met de teller van wat op jou wacht.'],
-            ['Projecten', 'Zoek tussen alle projecten en maak onderweg dagplanningen voor de monteurs.']
+            ['Projecten', 'Zoek tussen alle projecten en maak onderweg dagplanningen voor de monteurs.'],
+            ['Meldingen', 'Mag jij meldingen sturen, dan staat hier ook Meldingen: een bericht dat je collega\'s meteen zien als ze de app openen.']
+        ] },
+        /* v428: meldingen sturen (alleen een afzender) */
+        screenMeldingen: { name: 'MELDINGEN', steps: [
+            ['Bericht', 'Typ wat je wil laten weten, bijvoorbeeld "Iedereen binnenkomen vanavond".', '#medTekst'],
+            ['Voor wie', 'Iedereen, of alleen de monteurs, de techniekers of het bureel.', '#medDoel'],
+            ['Hoe lang', 'Tot die dag staat de melding bovenaan de planning van je collega\'s. Daarna verdwijnt ze vanzelf.', '#medTot'],
+            ['Verstuurd', 'Hier zie je wie de melding al las en wie nog niet. Met Intrekken haal je ze weg.', '#medLijst']
         ] },
         screenProjecten: { name: 'PROJECTEN', steps: [
             ['Zoeken', 'Typ een deel van de naam, het P-nummer, de klant of de gemeente — de zoekopdracht kijkt ook in de afgesloten projecten.', '#prjZoek'],

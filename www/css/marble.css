@@ -1209,3 +1209,233 @@ body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 
 .wissel-chip-nu { color: #26334B; background: var(--accent); border-color: var(--accent); }
 .mb-prow.wissel-rij-uit { cursor: default; }
 #screenWissel > .section-header { display: none; }   /* de Marble-kop draagt de titel al */
+
+/* =========================================================
+   v428 · WAT IS ER NIEUW? (#nieuwVenster, app.openNieuw) EN MELDINGEN VAN HET BUREEL (#medVenster, app.openMelding)
+   Ontwerp C (keuze Levi 12 okt 2026): een kaartje in het midden. "Wat is er nieuw?" toont de titels (tik = uitleg),
+   een melding meteen de volledige tekst. Beide vensters dragen de klassen "nw nw-c".
+   ========================================================= */
+.nw { position: fixed; inset: 0; z-index: 99997; display: flex; align-items: center; justify-content: center;
+    padding: calc(20px + var(--safe-top, 0px)) 20px calc(20px + var(--safe-bottom, 0px)); box-sizing: border-box;
+    font-family: var(--font); color: var(--ink); }
+.nw .nw-scrim { position: absolute; inset: 0; background: var(--scrim); animation: mbDim 0.25s ease-out; }
+.nw .nw-c-kaart { position: relative; width: 100%; max-width: 380px; max-height: 100%; display: flex; flex-direction: column;
+    background: var(--bg); border-radius: 18px; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    animation: mbUp 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+.nw .nw-c-kaart:focus { outline: none; }
+.nw .nw-lijn { height: 3px; flex: 0 0 3px; background: linear-gradient(90deg, #F99D3E, #6A2C91); }
+.nw .nw-c-kop { padding: 18px 20px 6px; flex: 0 0 auto; }
+.nw .nw-label { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--g1); }
+.nw .nw-titel { margin: 6px 0 0; font-size: 26px; font-weight: 400; letter-spacing: -0.6px; line-height: 1.15; color: var(--ink); }
+.nw .nw-sub { margin-top: 4px; font-size: 14px; color: var(--g2); }
+.nw .nw-c-lijst { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 2px 12px 10px; }
+.nw .nw-datum { margin: 14px 8px 2px; font-size: 11.5px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--g1); }
+.nw .nw-pil { display: inline-block; flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.3px; white-space: nowrap; }
+.nw .nw-pil.nw-nieuw { background: var(--gwash); color: var(--green2); }
+.nw .nw-pil.nw-beter { background: var(--pwash); color: var(--purple2); }
+.nw .nw-pil.nw-opgelost { background: var(--awash2); color: var(--amber2); }
+.nw .nw-c-rij { width: 100%; display: flex; align-items: center; gap: 10px; padding: 13px 8px; border: 0; border-bottom: 1px solid var(--l2);
+    background: none; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.nw .nw-c-titel { flex: 1 1 auto; min-width: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.nw .nw-c-pijl { flex: 0 0 auto; color: var(--g1); display: flex; transition: transform 0.2s; }
+.nw .nw-c-item.open .nw-c-pijl { transform: rotate(90deg); }
+.nw .nw-c-uitleg { display: none; padding: 2px 8px 14px; border-bottom: 1px solid var(--l2); }
+.nw .nw-c-item.open .nw-c-rij { border-bottom: 0; }
+.nw .nw-c-item.open .nw-c-uitleg { display: block; }
+.nw .nw-it-tekst { font-size: 14.5px; line-height: 1.5; color: var(--txt2); }
+.nw .nw-meer { margin-top: 6px; padding: 8px 0; border: 0; background: none; font: 600 14px var(--font); color: var(--purple2); cursor: pointer; }
+.nw .nw-meer::after { content: ' \2192'; }
+.nw .nw-nog, .nw .nw-leeg { margin: 14px 8px 0; font-size: 13px; line-height: 1.45; color: var(--g2); }
+.nw .nw-voet { flex: 0 0 auto; padding: 12px 20px 18px; background: var(--bg); }
+/* melding: de tekst zelf is het belangrijkste */
+.nw.nw-med .nw-c-kop { padding-bottom: 2px; }
+.nw.nw-med .nw-med-item { padding: 10px 8px 14px; }
+.nw.nw-med .nw-med-item + .nw-med-item { border-top: 1px solid var(--l2); }
+.nw.nw-med .nw-med-tekst { margin: 0; font-size: 18px; font-weight: 400; line-height: 1.4; color: var(--ink); white-space: pre-line; overflow-wrap: break-word; }
+.nw.nw-med .nw-med-tekst.groot { font-size: 24px; line-height: 1.25; letter-spacing: -0.4px; }
+.nw.nw-med .nw-med-van { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--g2); }
+
+/* v428: meldingen bovenaan de planning (#medBalk, app._medBalkTekenen) */
+#medBalk { display: none; margin-bottom: 14px; }
+#medBalk.aan { display: block; }
+#medBalk .med-rij { width: 100%; display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1px solid var(--cb);
+    border-left: 3px solid var(--accent); border-radius: 12px; background: var(--card); text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+#medBalk .med-rij + .med-rij { margin-top: 8px; }
+#medBalk .med-icoon { flex: 0 0 auto; display: flex; color: var(--amber2); margin-top: 1px; }
+#medBalk .med-inhoud { display: block; flex: 1 1 auto; min-width: 0; }
+#medBalk .med-tekst { font-size: 14.5px; font-weight: 600; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: break-word; }
+#medBalk .med-van { display: block; margin-top: 3px; font-size: 12px; color: var(--g1); }
+#medBalk .med-stip { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+
+/* v428: Organisatie → Meldingen (alleen een afzender; app.loadMeldingen) */
+#screenMeldingen .med-teller { font-size: 12px; color: var(--g1); text-align: right; margin-top: -8px; margin-bottom: 10px; }
+#screenMeldingen .med-kaart { padding: 14px 16px; margin-bottom: 10px; }
+#screenMeldingen .med-k-tekst { font-size: 15.5px; font-weight: 600; line-height: 1.4; white-space: pre-line; overflow-wrap: break-word; }
+#screenMeldingen .med-k-meta { margin-top: 6px; font-size: 12.5px; line-height: 1.45; color: var(--g1); }
+#screenMeldingen .med-k-stand { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+#screenMeldingen .med-k-pil { padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+#screenMeldingen .med-k-pil.actief { background: var(--gwash); color: var(--green2); }
+#screenMeldingen .med-k-pil.voorbij { background: var(--l1); color: var(--g2); }
+#screenMeldingen .med-k-pil.weg { background: var(--awash2); color: var(--amber2); }
+#screenMeldingen .med-k-gelezen { flex: 1 1 auto; border: 0; background: none; padding: 6px 0; text-align: left; font: 600 13px var(--font); color: var(--ink); cursor: pointer; }
+#screenMeldingen .med-k-gelezen::after { content: ' \25B8'; color: var(--g1); }
+#screenMeldingen .med-k-gelezen.open::after { content: ' \25BE'; }
+#screenMeldingen .med-k-lezers { display: none; margin-top: 6px; font-size: 13px; line-height: 1.55; color: var(--txt2); }
+#screenMeldingen .med-k-lezers.open { display: block; }
+#screenMeldingen .med-k-lezers b { color: var(--ink); font-weight: 600; }
+#screenMeldingen .med-k-knoppen { display: flex; justify-content: flex-end; margin-top: 8px; }
+#screenMeldingen .med-k-weg { border: 1px solid var(--b1); background: none; border-radius: 10px; padding: 9px 14px; font: 600 13px var(--font); color: var(--g2); cursor: pointer; }
+#screenMeldingen .med-leeg { font-size: 13.5px; color: var(--g1); text-align: center; padding: 18px 8px; }
+
+/* =========================================================
+   v429 · MAGAZIJN OP DE GSM (app.loadMagazijn): de stock scannen in een reeks
+   (ontwerp C, keuze Levi 12 okt 2026): vier soorten, de camera blijft open, een lijst met − aantal +
+   ========================================================= */
+#screenMagazijn { padding-bottom: 0; }
+#screenMagazijn .mag { display: flex; flex-direction: column; gap: 12px;
+    min-height: calc(100vh - var(--header-h) - var(--nav-h) - var(--safe-top) - var(--safe-bottom) - 16px); }
+#screenMagazijn .mag-kop { display: flex; flex-direction: column; gap: 10px; }
+#screenMagazijn .mag-titel { font-size: 22px; font-weight: 600; color: var(--ink); line-height: 1.2; }
+#screenMagazijn .mag-sub { font-size: 13px; color: var(--g2); margin-top: -6px; }
+#screenMagazijn .mag-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 12px; background: var(--wash); border: 1px solid var(--l1); }
+#screenMagazijn .mag-seg button { min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--ink); font: 600 13px var(--font); cursor: pointer; padding: 0 2px; }
+#screenMagazijn .mag-seg button.aan { background: var(--btn); color: var(--btnfg); }
+#screenMagazijn .mag-banner { padding: 10px 12px; border-radius: 12px; background: var(--awash2); border: 1px solid var(--aborder2); color: var(--amber2); font-size: 13px; line-height: 1.45; }
+#screenMagazijn .mag-reeks { display: flex; flex-direction: column; gap: 12px; }
+/* de camera: altijd donker, ook in het lichte thema */
+#screenMagazijn .mag-cam { position: relative; height: 180px; flex: 0 0 180px; border-radius: 18px; background: #1F2229; overflow: hidden; cursor: pointer; }
+#screenMagazijn .mag-cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; visibility: hidden; }
+#screenMagazijn .mag-hoek { position: absolute; width: 26px; height: 26px; border: 0 solid #FDFCFA; pointer-events: none; }
+#screenMagazijn .mag-hoek.lb { left: 16%; top: 22px; border-left-width: 4px; border-top-width: 4px; border-radius: 6px 0 0 0; }
+#screenMagazijn .mag-hoek.rb { right: 16%; top: 22px; border-right-width: 4px; border-top-width: 4px; border-radius: 0 6px 0 0; }
+#screenMagazijn .mag-hoek.lo { left: 16%; bottom: 38px; border-left-width: 4px; border-bottom-width: 4px; border-radius: 0 0 0 6px; }
+#screenMagazijn .mag-hoek.ro { right: 16%; bottom: 38px; border-right-width: 4px; border-bottom-width: 4px; border-radius: 0 0 6px 0; }
+#screenMagazijn .mag-lijn { position: absolute; left: calc(16% + 12px); right: calc(16% + 12px); top: 50%; margin-top: -9px; height: 2px; background: var(--accent); pointer-events: none; }
+#screenMagazijn .mag-cam[data-stand="loopt"] .mag-lijn { animation: magScan 2.4s ease-in-out infinite; }
+@keyframes magScan { 0%, 100% { transform: translateY(-34px); } 50% { transform: translateY(34px); } }
+#screenMagazijn .mag-cam-tekst { position: absolute; left: 12px; right: 12px; bottom: 8px; text-align: center; color: #E6E4DB; font-size: 13px; line-height: 1.35; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+#screenMagazijn .mag-cam:not([data-stand="loopt"]) .mag-cam-tekst { top: 50%; bottom: auto; transform: translateY(-50%); font-size: 14px; }
+#screenMagazijn .mag-cam:not([data-stand="loopt"]) .mag-hoek,
+#screenMagazijn .mag-cam:not([data-stand="loopt"]) .mag-lijn { opacity: .35; }
+#screenMagazijn .mag-cam-melding { position: absolute; left: 10px; right: 10px; top: 10px; padding: 8px 12px; border-radius: 10px; background: rgba(20,22,26,.86); color: #FFFFFF;
+    font-size: 13.5px; font-weight: 600; line-height: 1.3; opacity: 0; transform: translateY(-6px); transition: opacity .18s, transform .18s; pointer-events: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#screenMagazijn .mag-cam-melding.zicht { opacity: 1; transform: none; }
+#screenMagazijn .mag-cam-melding.ok { background: rgba(47,100,67,.92); }
+#screenMagazijn .mag-cam-melding.onbekend { background: rgba(90,37,128,.92); }
+#screenMagazijn .mag-cam-melding.fout { background: rgba(180,55,47,.92); }
+#screenMagazijn .mag-cam-pauze { position: absolute; right: 8px; bottom: 30px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255,255,255,.16); color: #FFFFFF; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+#screenMagazijn .mag-cam:not([data-stand="loopt"]) .mag-cam-pauze { display: none; }
+#screenMagazijn .mag-coderij { display: flex; gap: 8px; }
+#screenMagazijn .mag-natief { flex: 1 1 auto; min-height: 48px; border: 0; border-radius: 14px; background: var(--accent); color: #26334B; font: 700 15px var(--font); cursor: pointer; padding: 0 12px; }
+#screenMagazijn .mag-coderij input { flex: 1 1 120px; min-width: 0; min-height: 48px; padding: 0 12px; border: 1px solid var(--b1); border-radius: 14px; background: var(--card); color: var(--ink); font: 400 15px var(--font); }
+#screenMagazijn .mag-code-ok { flex: 0 0 auto; min-width: 54px; min-height: 48px; border: 1px solid var(--b1); border-radius: 14px; background: var(--card); color: var(--ink); font: 600 14px var(--font); cursor: pointer; }
+#screenMagazijn .mag-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+#screenMagazijn .mag-werf { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 14px; background: var(--card); border: 1px solid var(--cb); }
+#screenMagazijn .mag-werf.leeg { border-color: var(--aborder2); background: var(--awash2); }
+#screenMagazijn .mag-werf-kop { font-weight: 600; font-size: 14px; color: var(--ink); }
+#screenMagazijn .mag-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+#screenMagazijn .mag-chip { min-height: 38px; max-width: 100%; padding: 0 12px; border-radius: 999px; border: 1px solid var(--b1); background: var(--card); color: var(--ink); font: 600 13px var(--font); cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#screenMagazijn .mag-chip small { font-weight: 500; color: var(--g1); margin-left: 4px; }
+#screenMagazijn .mag-chip.aan { background: var(--btn); border-color: var(--btn); color: var(--btnfg); }
+#screenMagazijn .mag-chip.aan small { color: inherit; opacity: .75; }
+#screenMagazijn .mag-chip.ander { border-style: dashed; color: var(--g2); }
+#screenMagazijn .mag-werf-laden { font-size: 13px; color: var(--g1); }
+#screenMagazijn .mag-lijst { display: flex; flex-direction: column; gap: 10px; }
+#screenMagazijn .mag-leeg { padding: 16px; border-radius: 14px; border: 1px dashed var(--b2); color: var(--txt2); text-align: center; font-size: 14px; }
+#screenMagazijn .mag-rij { background: var(--card); border: 1px solid var(--cb); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+#screenMagazijn .mag-rij.onbekend { border-color: var(--pborder); }
+#screenMagazijn .mag-rij.wacht { border-style: dashed; }
+#screenMagazijn .mag-rij.flits, #screenMagazijn .mag-werf.flits { animation: magFlits .9s ease-out; }
+@keyframes magFlits { 0% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+#screenMagazijn .mag-rij-kop { display: flex; gap: 8px; align-items: flex-start; }
+#screenMagazijn .mag-rij-tekst { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+#screenMagazijn .mag-naam { font-weight: 600; line-height: 1.25; color: var(--ink); overflow-wrap: anywhere; }
+#screenMagazijn .mag-info { font-size: 13px; color: var(--g2); overflow-wrap: anywhere; }
+#screenMagazijn .mag-info.paars { color: var(--purple2); }
+#screenMagazijn .mag-weg { width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid var(--l1); border-radius: 10px; background: var(--card); color: var(--g2); font-size: 18px; line-height: 1; cursor: pointer; }
+#screenMagazijn .mag-koppel { min-height: 44px; border: 1px solid var(--pborder); border-radius: 12px; background: var(--pwash); color: var(--purple2); font: 600 14px var(--font); cursor: pointer; }
+#screenMagazijn .mag-opnieuw { min-height: 40px; border: 1px solid var(--b1); border-radius: 12px; background: var(--card); color: var(--ink); font: 600 13.5px var(--font); cursor: pointer; }
+#screenMagazijn .mag-rij-voet { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#screenMagazijn .mag-hint { font-size: 14px; color: var(--txt2); min-width: 0; }
+#screenMagazijn .mag-hint.rood { color: var(--red2); }
+#screenMagazijn .mag-hint.oranje { color: var(--amber2); }
+#screenMagazijn .mag-stap { display: flex; align-items: center; flex: 0 0 auto; border: 1px solid var(--b1); border-radius: 12px; background: var(--card); }
+#screenMagazijn .mag-stap button { width: 44px; height: 44px; border: 0; background: transparent; font-size: 18px; color: var(--ink); cursor: pointer; }
+#screenMagazijn .mag-stap input { width: 56px; height: 44px; border: 0; background: transparent; text-align: center; font: 700 15px var(--font); color: var(--ink);
+    font-variant-numeric: tabular-nums; -moz-appearance: textfield; padding: 0; }
+#screenMagazijn .mag-stap input::-webkit-outer-spin-button,
+#screenMagazijn .mag-stap input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+#screenMagazijn .mag-voet { position: sticky; bottom: calc(var(--nav-h) + var(--safe-bottom)); margin: auto -16px 0; padding: 12px 16px 14px; background: var(--card); border-top: 1px solid var(--l1); z-index: 5; }
+#screenMagazijn .mag-voet button { width: 100%; min-height: 52px; border: 0; border-radius: 14px; background: var(--btn); color: var(--btnfg); font: 700 16px var(--font); cursor: pointer; }
+#screenMagazijn .mag-voet button:disabled { background: var(--l1); color: var(--g2); cursor: default; }
+#screenMagazijn .mag-klaar { display: flex; flex-direction: column; gap: 12px; padding-bottom: 20px; }
+#screenMagazijn .mag-ok { width: 56px; height: 56px; border-radius: 50%; background: var(--gwash); color: var(--green2); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; }
+#screenMagazijn .mag-ok.fout { background: var(--rwash); color: var(--red2); }
+#screenMagazijn .mag-klaar h2 { margin: 0; font-size: 22px; font-weight: 600; color: var(--ink); text-wrap: balance; }
+#screenMagazijn .mag-klaar-sub { margin-top: -6px; font-size: 15px; font-weight: 600; color: var(--txt2); overflow-wrap: anywhere; }
+#screenMagazijn .mag-res { padding: 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--cb); font-size: 14px; color: var(--ink); display: flex; flex-direction: column; gap: 2px; }
+#screenMagazijn .mag-res small { font-size: 12.5px; color: var(--g1); }
+#screenMagazijn .mag-res.fout { border-color: var(--red2); color: var(--red2); background: var(--rwash); }
+#screenMagazijn .mag-res-noot { font-size: 13px; color: var(--g2); }
+#screenMagazijn .mag-nieuw { margin-top: 6px; min-height: 52px; }
+/* de bladen (koppelen, werf kiezen) liggen boven de onderbalk */
+.mag-sheet-ov { position: fixed; inset: 0; z-index: 99990; background: var(--scrim); display: flex; flex-direction: column; justify-content: flex-end; }
+.mag-sheet { background: var(--card); border-radius: 22px 22px 0 0; padding: 12px 16px calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; max-height: 88vh; overflow-y: auto; animation: magOp .28s var(--ease-marble); }
+@keyframes magOp { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+.mag-sheet .mag-greep { width: 40px; height: 4px; border-radius: 2px; background: var(--b1); align-self: center; flex: 0 0 auto; }
+.mag-sheet h2 { margin: 0; font-size: 19px; font-weight: 600; color: var(--ink); }
+.mag-sheet .mag-sheet-tekst { margin: 0; font-size: 14px; color: var(--txt2); line-height: 1.45; overflow-wrap: anywhere; }
+.mag-sheet input[type="search"], .mag-sheet input[type="text"] { min-height: 46px; padding: 0 14px; border: 1px solid var(--b1); border-radius: 12px; background: var(--card); color: var(--ink); font: 400 15px var(--font); width: 100%; }
+.mag-sheet .mag-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mag-kieslijst { display: flex; flex-direction: column; gap: 8px; }
+.mag-kieslijst.bezig { opacity: .5; pointer-events: none; }
+.mag-kies-kop { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--g1); margin-top: 4px; }
+.mag-kies { text-align: left; min-height: 56px; padding: 10px 14px; border: 1px solid var(--l1); border-radius: 12px; background: var(--card); color: var(--ink); cursor: pointer; display: flex; flex-direction: column; gap: 2px; font: inherit; }
+.mag-kies.nieuw, .mag-kies.ander { border-style: dashed; }
+.mag-kies-naam { font-weight: 600; font-size: 14.5px; line-height: 1.3; overflow-wrap: anywhere; }
+.mag-kies-info { font-size: 13px; color: var(--g2); overflow-wrap: anywhere; }
+.mag-sheet .mag-leeg { padding: 14px; border-radius: 12px; border: 1px dashed var(--b2); color: var(--txt2); text-align: center; font-size: 14px; }
+.mag-sheet .mag-nieuw-naam { font-weight: 600; font-size: 15px; color: var(--ink); }
+.mag-sheet .mag-veldlab { font-size: 13px; color: var(--g2); margin-bottom: -6px; }
+.mag-sheet .mag-rij-knoppen { display: flex; gap: 8px; }
+.mag-sheet .mag-rij-knoppen .btn { flex: 1; }
+@media (prefers-reduced-motion: reduce) {
+    #screenMagazijn .mag-cam[data-stand="loopt"] .mag-lijn, #screenMagazijn .mag-rij.flits, #screenMagazijn .mag-werf.flits, .mag-sheet { animation: none !important; }
+}
+
+/* ============ v430 · FOTO'S VERPLICHT (vinkje op de dagplanning) ============ */
+.wo-foto-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--accent); vertical-align: middle; }
+.wo-foto-tag.ok { color: var(--green2); }
+.foto-verplicht { margin-bottom: 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45;
+  background: rgba(249,157,62,.14); color: var(--ink); border-left: 3px solid var(--accent); }
+.foto-verplicht.ok { background: rgba(46,112,66,.10); border-left-color: var(--green2); }
+#detailTabs .tab-btn.tab-verplicht::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 5px;
+  border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+
+/* ============ v431 · NFC TAGS (Logistiek) ============ */
+.nfc-sectie { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--qe-grey); margin: 4px 4px 8px; }
+.nfc-sectie span { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 4px; }
+.nfc-filter { display: flex; gap: 6px; margin-bottom: 10px; }
+.nfc-filter button { flex: 1; padding: 8px 6px; border-radius: 999px; border: 1px solid var(--line, rgba(0,0,0,.12)); background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.nfc-filter button.aan { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.nfc-kop { font-size: 12px; font-weight: 600; color: var(--qe-grey); padding: 12px 0 4px; }
+.nfc-kop span { font-weight: 400; margin-left: 4px; }
+.nfc-rij { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line, rgba(0,0,0,.08)); cursor: pointer; }
+.nfc-rij:last-child { border-bottom: 0; }
+.nfc-tekst { flex: 1; min-width: 0; }
+.nfc-naam { font-size: 14px; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nfc-soort { font-size: 11.5px; font-weight: 400; color: var(--qe-grey); }
+.nfc-sub { font-size: 11.5px; color: var(--qe-grey); margin-top: 2px; }
+.nfc-id { font-family: monospace; color: var(--green2); }
+.nfc-geen { color: var(--accent); }
+.nfc-knoppen { display: flex; gap: 4px; flex-shrink: 0; }
+.nfc-knoppen .btn { padding: 5px 9px; font-size: 12px; }
+
+/* ============ v432 · SLEUTELKLUIS (extraveld op het project) ============ */
+.wo-kluis { font-size: 13px; color: var(--ink); margin: 3px 0 2px; }
+.wo-kluis b { font-family: 'Roboto Mono', ui-monospace, monospace; font-size: 14px; letter-spacing: .06em; margin-left: 2px; }
+.detail-kluis { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding: 10px 12px;
+  border-radius: 12px; background: rgba(249,157,62,.12); border-left: 3px solid var(--accent); font-size: 13px; color: var(--ink); }
+.detail-kluis b { font-family: 'Roboto Mono', ui-monospace, monospace; font-size: 20px; letter-spacing: .1em; word-break: break-all; text-align: right; }

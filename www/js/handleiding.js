@@ -132,6 +132,24 @@
         ] },
     ] },
 
+    // v429: het magazijn op de gsm (de stock scannen). Verschijnt pas in de app als de stock in gebruik is.
+    { slug: 'magazijn', deel: 'Jouw werkdag', kick: 'In het magazijn', titel: 'Het magazijn: scannen', lead: 'Scan wat je meeneemt, wat bijna op is, wat er geleverd is of wat er in een vak ligt.', scherm: 'screenLogistiek', blokken: [
+        { t: 'stap', n: 1, h: 'Tik onderaan op <b>Logistiek</b> en dan op <b>Magazijn</b>. Kies bovenaan wat je doet: <b>Bijbestellen</b>, <b>Meenemen</b>, <b>Ontvangen</b> of <b>Tellen</b>.' },
+        { t: 'stap', n: 2, h: 'De camera blijft open. Richt ze op het etiket van het vak of op de streepjescode van de doos. Elk artikel komt in de lijst. Scan je hetzelfde nog eens, dan telt het er een bij.' },
+        { t: 'stap', n: 3, h: 'Klopt het aantal niet? Tik op <b>−</b> of <b>+</b>, of tik op het getal en typ het juiste aantal.' },
+        { t: 'stap', n: 4, h: 'Neem je materiaal mee? Kies bovenaan <b>naar welke werf</b> het gaat. Staat je werf er niet bij, tik dan op <b>Andere werf</b>.' },
+        { t: 'stap', n: 5, h: 'Tik op <b>Klaar</b>. Je ziet meteen wat er bewaard is. Daarna begin je met <b>Nieuwe reeks</b>.' },
+        { t: 'tip', h: '<b>Bijbestellen</b>: loop langs de bakjes en scan wat bijna op is. Het bureel ziet je lijst in de webshop en bestelt. Er wordt niets vanzelf besteld.' },
+        { t: 'letop', h: 'Kent de app een code nog niet? Tik op <b>Koppelen aan een artikel</b> en kies het artikel. De volgende keer herkent de app de code.' },
+        { t: 'faq', items: [
+            ['Ik heb geen bereik in het magazijn.', 'Scan gewoon verder. Codes die de app nog niet kon opzoeken, blijven in de lijst staan en worden opgezocht zodra er weer verbinding is. Tik daarna op Klaar.'],
+            ['Ik tikte twee keer op Klaar.', 'Geen probleem: een reeks wordt maar één keer bewaard.'],
+            ['De camera staat stil.', 'Na twee minuten zonder scan pauzeert de camera om je batterij te sparen. Tik op het zwarte vak om verder te scannen.'],
+            ['Ik werk met een handscanner.', 'Scan gewoon: de code komt vanzelf in de lijst, ook als het codevak niet geselecteerd is.'],
+            ['Waar zie ik prijzen?', 'Nergens: het magazijn op de gsm toont alleen aantallen en vakken.'],
+        ] },
+    ] },
+
     { slug: 'wo-info', deel: 'Jouw werkdag', kick: 'De werkorder · tabblad 1', titel: 'De werkorder: Info', lead: 'Bovenin de werkorder staan 4 tabbladen: Info · Uren · Materiaal · Foto’s.', blokken: [
         { t: 'stap', n: 1, h: 'Op <b>Info</b> zie je de klant (adres, telefoon) en de <b>installatie</b> waar je voor komt.' },
         { t: 'stap', n: 2, h: 'Staat er een <b>taakomschrijving</b>? Lees die eerst — daar staat wat je moet doen.' },
@@ -182,6 +200,7 @@
         { t: 'stap', n: 1, h: 'Tik op het tabblad <b>Foto’s</b> en dan op de <b>camera-knop</b>.' },
         { t: 'stap', n: 2, h: 'Maak duidelijke foto’s van je werk. <b>Meerdere foto’s mag altijd</b> — beter te veel dan te weinig.' },
         { t: 'stap', n: 3, h: 'Goede gewoonte: een foto <b>vóór</b> je begint en een foto <b>ná</b> je werk. Zo is er nooit discussie.' },
+        { t: 'letop', h: 'Staat er op je planning <b>Foto’s verplicht</b>? Dan vraagt het bureel foto’s van je werk. Je kan de werkbon pas versturen (en bij het uitklokken laten versturen) als er minstens één foto op staat. Staat er een foto op, dan wordt het <b>Foto’s ✓</b>.' },
         { t: 'letop', h: 'Bij een <b>onderhoud</b> is minstens <b>één foto van het attest verplicht</b>. Zonder die foto kan de werkbon niet verstuurd worden — de app houdt je tegen.' },
         { t: 'tip', h: 'Je foto’s blijven bewaard, óók als de app herstart of je even geen internet hebt. Je raakt ze niet kwijt.' },
         { t: 'faq', items: [
@@ -457,6 +476,19 @@
         { t: 'stap', n: 2, h: 'Je krijgt uitleg over <b>precies dat scherm</b>, stap voor stap. De <b>oranje ring</b> wijst aan waar je moet tikken.' },
         { t: 'stap', n: 3, h: 'Onderaan die uitleg start je ook de <b>volledige rondleiding</b> — of open je deze <b>handleiding</b>.' },
         { t: 'tip', h: 'De ⓘ-uitleg en deze handleiding kan je <b>zo vaak openen als je wil</b>. Niemand ziet hoe vaak je ze gebruikt.' },
+    ] },
+
+    { slug: 'meldingen', deel: 'Jouw app', kick: 'Op de hoogte blijven', titel: 'Meldingen en nieuwigheden', lead: 'Wat het bureel je laat weten, en wat er na een update veranderde.', scherm: 'screenPlanning', blokken: [
+        { t: 'stap', n: 1, h: 'Heeft het bureel iets belangrijks te melden, zoals <b>"Iedereen binnenkomen vanavond"</b>, dan verschijnt dat <b>meteen</b> als je de app opent. Staat de app al open, dan komt het binnen enkele minuten.' },
+        { t: 'stap', n: 2, h: 'Lees het en tik op <b>Begrepen</b>. Het bureel ziet dan dat jij het gelezen hebt.' },
+        { t: 'stap', n: 3, h: 'Tot de einddatum staat de melding ook <b>bovenaan je planning</b>. Tik erop om ze nog eens te lezen.' },
+        { t: 'stap', n: 4, h: 'Na een <b>update</b> toont de app één keer wat er sinds je vorige versie veranderd is. Tik op een regel voor de uitleg. Alles teruglezen: Profiel → <b>App bijwerken</b> → <b>Wat is er nieuw?</b>' },
+        { t: 'faq', items: [
+            ['Ik tikte de melding te snel weg.', 'Geen probleem: zolang ze geldt, staat ze bovenaan je planning. Tik erop en je leest ze opnieuw.'],
+            ['Krijg ik een melding als de app dicht is?', 'Ja, met de nieuwste versie van de app. Je gsm kijkt elk kwartier of er iets nieuws is en toont het als melding op je gsm. Tik erop en je leest ze in de app. Krijg je niets? Kijk dan of meldingen voor de QE-app aan staan in de instellingen van je gsm.'],
+            ['Kan ik zelf een melding sturen?', 'Nee, meldingen komen van het bureel. Wil je iedereen iets laten weten, vraag het dan aan het bureel.'],
+            ['Waar lees ik wat er in de vorige updates veranderde?', 'Profiel → App bijwerken → Wat is er nieuw?'],
+        ] },
     ] },
 
     /* ══ DEEL: ALS HET MISLOOPT ══ */

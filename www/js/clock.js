@@ -2726,6 +2726,7 @@ window.QEClock = {
             setTimeout(() => {
                 this._removeNfcOverlay();
                 if (window.app && app.currentScreen === 'screenClock') app.onNavigateToClock();
+                else if (window.app && app.currentScreen === 'screenNfcTags') app.loadNfcTags();   // v431
             }, 1500);
         }
     },
@@ -3169,7 +3170,10 @@ window.QEClock = {
     // =============================================
 
     /** Render tag beheer HTML voor het klokscherm */
-    renderTagAdmin() {
+    renderTagAdmin(opts) {
+        // v431: opts.zonderMateriaal = camionetten die op een voertuig in Materieel staan niet tonen (het scherm NFC tags
+        // in Logistiek toont die bij de voertuigen)
+        const o = opts || {};
         const config = this.getTagConfig();
         if (!config) return '<p class="text-grey text-sm">NFC configuratie niet geladen</p>';
 
@@ -3188,6 +3192,7 @@ window.QEClock = {
 
         // Camionetten
         for (const cam of (config.camionetten || [])) {
+            if (o.zonderMateriaal && cam.materialId) continue;
             html += this._renderTagRow('🚐', cam.name, cam, cam.fieldName);
         }
 
@@ -3233,8 +3238,8 @@ window.QEClock = {
     },
 
     /** Bind click events op tag admin knoppen (aanroepen na innerHTML) */
-    bindTagAdminEvents() {
-        const container = document.getElementById('clockTagList');
+    bindTagAdminEvents(containerId) {
+        const container = document.getElementById(containerId || 'clockTagList');   // v431: ook in Logistiek → NFC tags
         if (!container) return;
         container.querySelectorAll('button[data-action="assign"]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -3288,6 +3293,7 @@ window.QEClock = {
             if (window.app) {
                 app.toast('Tag verwijderd ✓');
                 if (app.currentScreen === 'screenClock') app.onNavigateToClock();
+                else if (app.currentScreen === 'screenNfcTags') app.loadNfcTags();   // v431
             }
         } catch (e) {
             if (window.app) app.toast('Kon tag niet verwijderen: ' + e.message, true);

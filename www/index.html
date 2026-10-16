@@ -109,6 +109,9 @@
         <!-- Gevuld door JS -->
     </div>
 
+    <!-- v428: meldingen van het bureel (gevuld door app._medBalkTekenen; alleen zolang er een actieve melding is) -->
+    <div id="medBalk"></div>
+
     <!-- v314: wacht-balk (gevuld door app._loadWachtBanner; verborgen zonder wachtplanning) -->
     <div id="wachtBanner" onclick="app.openWachtOverzicht()"
         style="display:none;align-items:center;gap:10px;padding:11px 14px;margin-bottom:14px;border-radius:12px;border:1px solid var(--cb,#e5e2da);background:var(--card,#FDFCFA);font-size:13.5px;cursor:pointer"></div>
@@ -157,6 +160,8 @@
         <div id="detailRegieBanner" style="display:none;margin:-12px -16px 10px;padding:10px 16px;font-size:14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v6M18 9v6"/></svg> REGIE — tijd &amp; materiaal</div>
         <div id="detailTitle" style="font-size:15px;font-weight:600;color:var(--qe-darkblue)"></div>
         <div id="detailSubtitle" style="font-size:13px;color:var(--qe-grey);margin-top:2px"></div>
+        <!-- v432: code van het sleutelkluisje op de werf (extraveld "Sleutelkluis code" op het project) -->
+        <div id="detailSleutelkluis" class="detail-kluis" style="display:none"><span>🔑 Sleutelkluis</span><b id="detailSleutelkluisCode"></b></div>
         <div id="detailWerkpakket" style="display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--qe-hairline,#ECEEF2);border-radius:12px;background:var(--qe-card,#fff)">
             <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;color:var(--qe-grey)">WERKPAKKET &middot; NACALCULATIE</div>
             <select id="wpSelect" style="width:100%;margin-top:6px;font-size:14px;padding:8px;border-radius:8px;border:1px solid var(--qe-hairline,#ECEEF2)" onchange="app.zetWerkpakket(this.value)"><option value="">&mdash; kies het werkpakket &mdash;</option></select>
@@ -476,6 +481,7 @@
 
     <!-- TAB: Foto's -->
     <div class="tab-content" id="tabFotos">
+        <div id="photoVerplicht" class="foto-verplicht" style="display:none"></div>
         <div id="photoCount" style="font-size:13px;color:var(--qe-grey);margin-bottom:8px"></div>
         <div class="photo-grid" id="photoGrid">
             <button class="photo-add" onclick="app.takePhoto()">
@@ -815,6 +821,13 @@
 
     <!-- NFC Tag beheer (alleen voor kantoor) -->
     <div id="clockTagAdmin" style="display:none">
+        <!-- v431: het beheer staat nu in Logistiek → NFC tags -->
+        <div class="card card-clickable mb-16" style="padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="app.openNfcTags()">
+            <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;color:var(--ink)">NFC tags beheren</div>
+            <div style="font-size:12px;color:var(--qe-grey);margin-top:2px">Staat nu in Logistiek → NFC tags, samen met de tags van voertuigen en gereedschap</div></div>
+            <span style="font-size:16px;color:var(--g3)">→</span>
+        </div>
+        <div style="display:none">
         <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
             <h3 style="font-size:14px">NFC Tags beheren</h3>
             <button class="btn btn-outline btn-sm" onclick="app.refreshTagAdmin()" style="font-size:12px;padding:4px 10px">
@@ -829,6 +842,7 @@
                 Kies een locatie en druk op <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M11 18h2"/></svg> Scan om een tag toe te wijzen<br>
                 ✍️ zet het QE-klokmerkteken op de tag: daarna opent de app vanzelf, ook als ze dicht is (APK 1.247)
             </div>
+        </div>
         </div>
     </div>
 </div>
@@ -988,6 +1002,17 @@
         </div>
         <span class="org-pijl">→</span>
     </div>
+    <!-- v428: meldingen sturen (alleen wie de Worker als afzender kent; app.loadOrganisatie toont de kaart) -->
+    <div class="card card-clickable org-kaart" id="orgKaartMeldingen" onclick="app.openMeldingen()" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div class="org-kaart-t">Meldingen</div>
+            <div class="org-kaart-s" id="orgMeldingenSub">Laat iedereen in de app iets weten</div>
+        </div>
+        <span class="org-pijl">→</span>
+    </div>
     <!-- v408: rekenmachine voor verwarming, sanitair, elektriciteit en ventilatie (iedereen) -->
     <div class="card card-clickable org-kaart" id="orgKaartReken" onclick="app.openReken()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
@@ -1004,6 +1029,27 @@
 <!-- ========== SCREEN: REKENMACHINE (v408) ========== -->
 <div class="screen" id="screenReken">
     <div id="rekenHost"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: MELDINGEN (v428 + Worker v502; alleen een afzender, nu enkel Levi) ========== -->
+<div class="screen" id="screenMeldingen">
+    <div class="card" style="padding:16px;margin-bottom:16px">
+        <div class="form-group" style="margin-bottom:6px">
+            <label for="medTekst">Wat wil je laten weten?</label>
+            <textarea id="medTekst" class="form-input" rows="3" maxlength="500" placeholder="bv. Iedereen binnenkomen vanavond" oninput="app.medTekstTel()"></textarea>
+        </div>
+        <div class="med-teller" id="medTeller">0 / 500</div>
+        <div class="dp-groep">Voor wie?</div>
+        <div class="dp-chips" id="medDoel"></div>
+        <div class="dp-groep" style="margin-top:12px">Zichtbaar tot en met</div>
+        <div class="dp-chips" id="medTot"></div>
+        <div class="dp-hint" id="medTotTekst"></div>
+        <div class="dp-fout" id="medFout" style="display:none;margin-top:10px"></div>
+        <button class="btn btn-primary btn-full" id="btnMedVerstuur" onclick="app.medVerstuur()" style="margin-top:14px">Melding versturen</button>
+        <div class="dp-hint">Wie de app opent, krijgt de melding meteen te zien. Staat de app al open, dan verschijnt ze binnen enkele minuten. Tot de einddatum staat ze ook bovenaan de planning.</div>
+    </div>
+    <div class="section-header"><h2>Verstuurd</h2><button type="button" onclick="app.loadMeldingen()" style="background:none;border:0;padding:6px 2px;font:inherit;font-size:13px;font-weight:600;color:var(--g2);cursor:pointer">Vernieuwen</button></div>
+    <div id="medLijst"></div>
 </div>
 
 <!-- ========== SCREEN: PROJECTEN (v391, bureel) ========== -->
@@ -1337,6 +1383,16 @@
             <div id="updateStatus" style="font-size:13px;text-align:center;margin:4px 0 12px;display:none"></div>
             <div id="apiQuotaInfo" style="font-size:11.5px;color:var(--qe-grey);margin:2px 0 12px;display:none"></div>
         </div>
+        <!-- v428: alles teruglezen wat er in de updates veranderde (js/nieuw.js) -->
+        <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow" id="pgRowNieuw" style="border-bottom:none" onclick="app.openNieuw({ alles: true })">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Wat is er nieuw?</div>
+                    <div class="mb-prow-s">Alles wat er in de updates veranderde</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
         <!-- v391: toestemmingen & toestelfuncties (APK 1.245) -->
         <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
             <div class="mb-prow" style="border-bottom:none" onclick="app.openToestel()">
@@ -1476,6 +1532,17 @@
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
+    <!-- v431: NFC tags — alle tags op één plaats (bureel) -->
+    <div class="card card-clickable" id="logKaartNfc" style="margin-bottom:12px;padding:16px 18px;display:none;align-items:center;gap:14px;cursor:pointer" onclick="app.openNfcTags()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <rect x="6.5" y="3" width="11" height="18" rx="2.5"/><path d="M10 9.5a3 3 0 0 1 4 0M8.6 7.6a5 5 0 0 1 6.8 0"/><path d="M11 18h2"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:600;color:var(--ink)">NFC tags</div>
+            <div style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Klok-tags, voertuigen en gereedschap op één plaats</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
     <!-- v363: Werknemersbudget -->
     <div class="card card-clickable" id="logKaartBudget" style="margin-bottom:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;cursor:pointer" onclick="app.openBudget()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
@@ -1497,7 +1564,34 @@
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
+    <!-- v434: Gsm's & tablets (bureel beheert; monteur/technieker ziet alleen zijn eigen toestel) -->
+    <div class="card card-clickable" id="logKaartToestellen" style="margin-bottom:12px;padding:16px 18px;display:none;align-items:center;gap:14px;cursor:pointer" onclick="app.openToestellen()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M11 18h2"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div id="logToestellenTitel" style="font-size:15px;font-weight:600;color:var(--ink)">Gsm’s &amp; tablets</div>
+            <div id="logToestellenSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Wie heeft welk toestel, IMEI en abonnement</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
+    <!-- v429: Magazijn — de stock scannen (meenemen, bijbestellen, ontvangen, tellen) -->
+    <div class="card card-clickable" id="logKaartMagazijn" style="margin-bottom:12px;padding:16px 18px;display:none;align-items:center;gap:14px;cursor:pointer" onclick="app.openMagazijn()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <path d="M3 21V8l9-5 9 5v13"/><path d="M7 21v-8h10v8"/><path d="M7 17h10"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:600;color:var(--ink)">Magazijn</div>
+            <div id="logMagazijnSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Scan wat je meeneemt, wat bijna op is of wat geleverd is</div>
+        </div>
+        <span style="font-size:16px;color:var(--g3)">→</span>
+    </div>
     <div id="logMeerLater" style="font-size:12px;color:var(--g3);text-align:center;margin-top:18px">Meer logistiek volgt hier later.</div>
+</div>
+
+<!-- ========== SCREEN: MAGAZIJN (v429 + Worker v503) — de stock scannen in een reeks; app.loadMagazijn tekent alles ========== -->
+<div class="screen" id="screenMagazijn">
+    <div id="magHost"><div class="spinner"></div></div>
 </div>
 
 <!-- ========== SCREEN: WERKNEMERSBUDGET (v363) ========== -->
@@ -1540,6 +1634,52 @@
         <button class="btn btn-outline" style="flex:1" onclick="app.openKeurdag()">✓ Keurdag registreren</button>
     </div>
     <div id="gereedschapList"><div class="spinner"></div></div>
+</div>
+
+<!-- ========== SCREEN: NFC TAGS (v431) — klok-tags + materieel-tags; app.loadNfcTags tekent alles ========== -->
+<div class="screen" id="screenNfcTags">
+    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h2>NFC tags</h2>
+        <button class="btn btn-outline btn-sm" onclick="app.loadNfcTags()" title="Verversen" style="padding:4px 10px">↻</button>
+    </div>
+    <div class="nfc-sectie">Klokken</div>
+    <div class="card mb-16" style="padding:4px 14px">
+        <div id="nfcKlokLijst"></div>
+    </div>
+    <div class="nfc-sectie">Materieel <span id="nfcMatTel"></span></div>
+    <input type="text" id="nfcZoek" class="form-input" placeholder="Zoek op naam, merk, serienummer of tag…" style="width:100%;margin-bottom:10px" oninput="app.nfcZet('zoek', this.value)">
+    <div id="nfcFilter" class="nfc-filter">
+        <button data-f="alles" class="aan" onclick="app.nfcZet('filter', 'alles')">Alles</button>
+        <button data-f="met" onclick="app.nfcZet('filter', 'met')">Met tag</button>
+        <button data-f="zonder" onclick="app.nfcZet('filter', 'zonder')">Zonder tag</button>
+    </div>
+    <div class="card" style="padding:4px 14px"><div id="nfcMatLijst"><div class="spinner"></div></div></div>
+    <div style="font-size:11.5px;color:var(--qe-grey);margin:10px 4px 0;line-height:1.5">
+        📶 = scan een tag om hem te koppelen · ✍️ = het QE-merkteken op de tag zetten: daarna opent de app vanzelf, ook als ze dicht is ·
+        tik op een naam voor de volledige fiche.
+    </div>
+</div>
+
+<!-- ========== SCREEN: GSM'S & TABLETS (v434, Worker v564) — app.loadToestellen tekent alles ========== -->
+<div class="screen" id="screenToestellen">
+    <div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h2 id="tstTitel">Gsm’s &amp; tablets</h2>
+        <button class="btn btn-outline btn-sm" onclick="app.loadToestellen()" title="Verversen" style="padding:4px 10px">↻</button>
+    </div>
+    <div id="tstBeheer" style="display:none">
+        <div id="tstKop" style="font-size:12.5px;color:var(--qe-grey);margin:-4px 4px 10px;line-height:1.45"></div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn btn-outline" style="flex:1" onclick="app.toestelOpen(null, 'gsm')">+ Gsm</button>
+            <button class="btn btn-outline" style="flex:1" onclick="app.toestelOpen(null, 'tablet')">+ Tablet</button>
+        </div>
+        <input type="text" id="tstZoek" class="form-input" placeholder="Zoek op naam, IMEI, nummer…" style="width:100%;margin-bottom:10px" oninput="app.toestelZet('zoek', this.value)">
+        <div id="tstFilter" class="nfc-filter">
+            <button data-f="alle" class="aan" onclick="app.toestelZet('soort', 'alle')">Alles</button>
+            <button data-f="gsm" onclick="app.toestelZet('soort', 'gsm')">Gsm’s</button>
+            <button data-f="tablet" onclick="app.toestelZet('soort', 'tablet')">Tablets</button>
+        </div>
+    </div>
+    <div class="card" style="padding:4px 14px"><div id="tstLijst"><div class="spinner"></div></div></div>
 </div>
 
 <!-- ========== SCREEN: GASFLESSEN (v388) ========== -->
@@ -1793,7 +1933,7 @@
         Klaar
     </button>
     <button class="nav-item" data-screen="screenLogistiek" id="navLogistiek" style="display:none"
-        data-screens="screenVoertuigen,screenGereedschap,screenGasflessen,screenBudget"
+        data-screens="screenVoertuigen,screenGereedschap,screenNfcTags,screenGasflessen,screenBudget,screenMagazijn"
         onclick="app.openLogistiek()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>
@@ -1802,7 +1942,7 @@
     </button>
     <!-- v391: "Aanvragen" is een compartiment van het onderdeel Organisatie geworden -->
     <button class="nav-item" data-screen="screenOrganisatie" id="navOrganisatie"
-        data-screens="screenAanvragen,screenVerlofDetail,screenGoedkeuren,screenFactuurDetail,screenMaterieelDetail,screenMaterieelAanvragen,screenProjecten,screenProjectDetail,screenDagplanningNieuw,screenReken"
+        data-screens="screenAanvragen,screenVerlofDetail,screenGoedkeuren,screenFactuurDetail,screenMaterieelDetail,screenMaterieelAanvragen,screenProjecten,screenProjectDetail,screenDagplanningNieuw,screenReken,screenMeldingen"
         onclick="app.openOrganisatie()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
@@ -2023,6 +2163,7 @@
 <script src="js/maand-recap.js"></script>
 <script src="js/jaar-recap.js"></script>
 <script src="js/handleiding.js"></script>
+<script src="js/nieuw.js"></script>
 <script src="js/qe-native.js"></script>
 <script src="js/app.js"></script>
 <!-- Marble UI-runtime (tutorial, wipe, loader, overgangen) — NA app.js laden -->

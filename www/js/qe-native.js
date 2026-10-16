@@ -112,6 +112,8 @@
         toonMelding: function (o) { return !!direct('toonMelding', [JSON.stringify(o || {})], false); },
         planMelding: function (o) { return !!direct('planMelding', [JSON.stringify(o || {})], false); },
         annuleerMelding: function (tag) { direct('annuleerMelding', [tag]); },
+        /* v1.248: meldingen van het bureel ook met de app dicht: {url, sessie, rol, fiche}; {} = stoppen (afmelden) */
+        zetMededelingen: function (o) { return !!direct('zetMededelingen', [JSON.stringify(o || {})], false); },
 
         spraak: function (taal, prompt) { return roep('spraak', [taal || 'nl-BE', prompt || ''], 120000); },
         biometrieStatus: function () { return direct('biometrieStatus', [], 'niet-beschikbaar'); },

@@ -176,6 +176,17 @@ const app = {
                     try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
                     return;
                 }
+                // 0f. v428: venster met een melding van het bureel of "Wat is er nieuw?" sluiten (telt als gelezen) + pop compenseren
+                if (document.getElementById('medVenster')) {
+                    this.medSluit();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
+                if (document.getElementById('nieuwVenster')) {
+                    this.nieuwSluit();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
                 // 0. Fullscreen PDF-overlay heeft voorrang: sluit hem + compenseer de pop
                 //    (v283 — anders navigeert de back-knop ONDER de overlay door).
                 const pdfOv = document.getElementById('pdfFullscreen');
@@ -203,6 +214,13 @@ const app = {
                     else if (matBlad.id === 'matKoppelSheet') this.matKoppelSluit();
                     else if (matBlad.id === 'matSubSheet') this._matSubSluit();
                     else this._matScanSluit();
+                    try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
+                    return;
+                }
+                // 0g. v429: magazijn — het blad "koppelen" of "naar welke werf?" sluiten + pop compenseren
+                if (document.getElementById('magKoppelSheet') || document.getElementById('magWerfSheet')) {
+                    this.magKoppelSluit();
+                    this.magWerfSluit();
                     try { history.pushState({ qeApp: true }, '', location.pathname); } catch(_) {}
                     return;
                 }
@@ -283,6 +301,12 @@ const app = {
                 // dezelfde gebruiker na de update kan verderwerken.
                 try { localStorage.removeItem('qe_active_role_override'); } catch(_) {}
             }
+            // v428: de versie van vóór de update onthouden: "Wat is er nieuw?" toont wat er sindsdien veranderde aan wie
+            // op dit toestel nog niets zag (qe_nieuw_gezien_<fiche> bestaat dan nog niet)
+            if (currentVer && lastVer && lastVer !== currentVer) {
+                try { localStorage.setItem('qe_nieuw_vorige', lastVer); } catch(_) {}
+            }
+            this._wwwVersie = Number(currentVer) || 0;
             if (currentVer) {
                 try { localStorage.setItem('qe_last_seen_version', currentVer); } catch(_) {}
             }
@@ -547,6 +571,8 @@ const app = {
         try { if (RobawsAPI.wisselStand()) RobawsAPI._wisselHerstel(); } catch (_e) {}
         try { await fetch('api/auth.php?action=logout'); } catch(e) {}
         try { if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser('', '', '', '', '', ''); } catch(_e) {}
+        // v433: de gsm kijkt niet meer naar meldingen van het bureel voor deze werknemer (APK 1.248)
+        try { if (window.QENative && QENative.versie() >= 5) QENative.zetMededelingen({}); } catch (_e) {}
         // v315: persoonlijke API-key wissen (volgende gebruiker krijgt zijn eigen key bij login)
         try { RobawsAPI.clearActiveCredentials(true); } catch(_e) {}
         // v333: algemene API-account-key ook wissen (komt vers mee bij de volgende login)
@@ -724,6 +750,8 @@ const app = {
             const _ap = RobawsAPI._authPair ? RobawsAPI._authPair() : {};
             if (window.QEBridge && QEBridge.setApprovalUser) QEBridge.setApprovalUser(String(_emp), String((_apu && _apu.role) || ''), String((_ap && _ap.key) || ''), String((_ap && _ap.secret) || ''), String(RobawsAPI.TENANT || ''), String(this._myRobawsUserId() || ''));
         } catch (_e) {}
+        // v428: eerst de meldingen van het bureel, daarna (na een update) één keer wat er voor deze werknemer nieuw is
+        try { this._medStart(); } catch (_e) { try { this._nieuwPlan(); } catch (_e2) {} }
     },
 
     // ========================================
@@ -1513,6 +1541,8 @@ const app = {
         // Werknemer-aanvink
         // v423: wie al uren op een werkbon van deze dagplanning heeft (een collega vulde hem al in), staat er met een
         // opmerking en kan je niet aanvinken — anders staan zijn uren dubbel
+        // v430: vraagt deze dagplanning foto's en staan er nog geen? Dan nog niet uitklokken: eerst de foto's.
+        if (!(await this._fotoControle(wo, 'Je werkbon wordt bij het uitklokken verstuurd, maar het bureel vraagt foto\u2019s van je werk.'))) return false;
         const employees = await this._showEmployeeCheckList(wo, this._alIngevuldOpties([wo]));
         if (!employees || employees.length === 0) {
             // Gebruiker heeft geannuleerd of geen werknemers → niet uitklokken
@@ -1862,6 +1892,13 @@ const app = {
         // verstuurde): die krijgt er geen uren meer — een opmerking bij zijn naam, en wie op álle dagplanningen al staat,
         // kan je niet aanvinken.
         const metUren = openItems.filter((_, k) => minuten[k] > 0);
+        // v430: een werkbon die uren krijgt en foto's vraagt, moet ze al hebben (anders wordt hij niet verstuurd)
+        const zonderFotos = metUren.filter((w) => this._fotosOntbreken(w));
+        if (zonderFotos.length) {
+            await this._fotoControle(zonderFotos[0], (zonderFotos.length > 1 ? zonderFotos.length + ' werkbonnen vragen' : 'Deze werkbon vraagt') +
+                ' foto\u2019s van je werk (' + zonderFotos.map((w) => naamVan(w)).join(', ') + ').');
+            return false;
+        }
         if (typeof this.showScanLoading === 'function') { try { this.showScanLoading('Werkbonnen nakijken…'); } catch (_) {} }
         const inRobaws = await this._robawsUrenOp(metUren);
         if (typeof this.hideScanLoading === 'function') { try { this.hideScanLoading(); } catch (_) {} }
@@ -2284,6 +2321,35 @@ const app = {
         });
     },
 
+    /** v430: vraagt de dagplanning foto's (vinkje "Foto's verplicht") en staat er nog geen enkele foto op deze werkbon? */
+    _fotosOntbreken(wo) {
+        if (!wo || !wo.fotosVerplicht) return false;
+        const d = this.woData && this.woData[wo.id];
+        return !(d && Array.isArray(d.photos) && d.photos.length > 0);
+    },
+
+    /** v430: de werkbon openen op het tabblad Foto's (na een melding "Foto's verplicht"). */
+    async _openFotosVan(wo) {
+        try {
+            if (!this.currentWO || String(this.currentWO.id) !== String(wo.id) || this.currentScreen !== 'screenDetail') {
+                await this.openWorkorder(wo.id);
+            }
+        } catch (_) {}
+        const knop = document.querySelector('#detailTabs .tab-btn[data-tab="tabFotos"]');
+        if (knop) this.switchTab(knop);
+    },
+
+    /** v430: controle vóór elk versturen of afsluiten van een werkbon. true = verder. Ontbreken de foto's, dan een
+     *  melding en de werkbon open op het tabblad Foto's; er wordt niets verstuurd. */
+    async _fotoControle(wo, uitleg) {
+        if (!this._fotosOntbreken(wo)) return true;
+        await this._showMessageModal('Foto\u2019s verplicht',
+            (uitleg || 'Voor deze opdracht vraagt het bureel foto\u2019s van je werk.') +
+            ' Voeg minstens één foto toe, daarna kan je de werkbon versturen.');
+        await this._openFotosVan(wo);
+        return false;
+    },
+
     /** v423: de controle op dubbele uren vlak vóór het versturen vanuit de werkbon (knop van een monteur én van een
      *  technieker). Eén controle tegelijk; de knop toont zolang "Nakijken…". true = verder versturen, false = stoppen
      *  (ook als je intussen een andere werkbon opende). */
@@ -2310,6 +2376,7 @@ const app = {
     /** v423: de knop "Uren & materiaal versturen" van een monteur (ging vroeger rechtstreeks naar
      *  executeMonteurSubmitFlow): eerst de controle op dubbele uren, dan versturen. */
     async _monteurVersturen() {
+        if (!(await this._fotoControle(this.currentWO))) return;   // v430
         if (!(await this._dubbelControleVoorVersturen())) return;
         return this.executeMonteurSubmitFlow();
     },
@@ -2564,6 +2631,8 @@ const app = {
     // NAVIGATION
     // ========================================
     navigate(screenId, pushHistory = true) {
+        // v429: het magazijn verlaten = de camera uit (de reeks blijft bewaard)
+        if (this.currentScreen === 'screenMagazijn' && screenId !== 'screenMagazijn' && typeof this._magVerlaat === 'function') { try { this._magVerlaat(); } catch (_) {} }
         if (pushHistory && this.currentScreen !== screenId) {
             this.screenHistory.push(this.currentScreen);
             // Voeg ook een entry toe aan window.history zodat de Android
@@ -2605,6 +2674,8 @@ const app = {
             screenAanvragen: 'Aanvragen',  // v278
             screenOrganisatie: 'Organisatie',  // v391
             screenReken: 'Rekenmachine',  // v408
+            screenMeldingen: 'Meldingen',  // v428
+            screenMagazijn: 'Magazijn',  // v429
             screenProjecten: 'Projecten',  // v391
             screenProjectDetail: 'Project',  // v391
             screenDagplanningNieuw: 'Dagplanning maken',  // v391
@@ -2644,11 +2715,13 @@ const app = {
         // v391: Organisatie · Projecten · Toestel
         if (screenId === 'screenOrganisatie') this.loadOrganisatie();
         if (screenId === 'screenReken') this.loadReken();   // v408
+        if (screenId === 'screenMeldingen') this.loadMeldingen();   // v428
         if (screenId === 'screenProjecten') this.loadProjecten();
         if (screenId === 'screenProjectDetail') { this.renderProjectDetail(); this.loadProjectPlanning(); }
         if (screenId === 'screenDagplanningNieuw' && !this._dp) setTimeout(() => this.goBack(), 0);
         if (screenId === 'screenToestel') this.loadToestel();
         if (screenId === 'screenLogistiek') this._logHubRender();   // v395: kaarten per toegangsrecht
+        if (screenId === 'screenMagazijn') this.loadMagazijn();   // v429
 
         // v137: toon FAB enkel op planning-tab + niet voor monteurs
         this._updateNewWoFabVisibility();
@@ -3031,7 +3104,8 @@ const app = {
             'zoom-in': '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/>',
             'zoom-out': '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/>',
             'chevron-left': '<path d="m15 18-6-6 6-6"/>',
-            'chevron-right': '<path d="m9 18 6-6-6-6"/>'
+            'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+            'megafoon': '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'   // v428: meldingen
         };
         return `<svg${cls}${st} width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
     },
@@ -3101,6 +3175,14 @@ const app = {
         const regieChip = isRegie
             ? `<span class="wo-regie-tag">${this.icon('cash', { size: 13 })} Regie</span>`
             : '';
+        // v430: "Foto's verplicht" op de dagplanning (oranje zolang er geen foto is, groen zodra er een is)
+        let fotoChip = '';
+        if (wo.fotosVerplicht) {
+            const nFoto = (data && Array.isArray(data.photos)) ? data.photos.length : 0;
+            fotoChip = nFoto > 0
+                ? `<span class="wo-foto-tag ok" title="Foto's verplicht: ${nFoto} toegevoegd">${this.icon('camera', { size: 13 })} Foto's ✓</span>`
+                : `<span class="wo-foto-tag" title="Voeg minstens één foto toe voor je de werkbon verstuurt">${this.icon('camera', { size: 13 })} Foto's verplicht</span>`;
+        }
         // v409: laden-&-lossen-uren die op deze werkbon wachten tot hij verstuurd is
         let lnlChip = '';
         try {
@@ -3118,7 +3200,8 @@ const app = {
                         <h3>${this.escapeHtml(clientName)}</h3>
                         ${wo.summary ? `<div style="font-size:13px;color:var(--qe-darkblue);font-weight:500;margin:2px 0">${this.escapeHtml(wo.summary)}</div>` : ''}
                         ${address ? `<div class="wo-address">${this.icon('map-pin', { size: 14 })} ${this.escapeHtml(address)}</div>` : ''}
-                        <span class="wo-type ${type}">${typeLabel}</span>${regieChip}${lnlChip}
+                        ${wo.sleutelkluis ? `<div class="wo-kluis" title="Code van het sleutelkluisje op de werf">🔑 Sleutelkluis <b>${this.escapeHtml(wo.sleutelkluis)}</b></div>` : ''}
+                        <span class="wo-type ${type}">${typeLabel}</span>${regieChip}${fotoChip}${lnlChip}
                         ${orderNr ? `<span style="margin-left:6px;font-size:11px;color:var(--qe-purple);font-weight:500">${this.escapeHtml(orderNr)}</span>` : ''}
                         ${histBadge}
                         ${hasMaterials || hasHours ? `<span style="margin-left:6px;font-size:11px;color:var(--qe-green)">${this.icon('check', { size: 12, style: 'vertical-align:-2px' })} In bewerking</span>` : ''}
@@ -3288,6 +3371,13 @@ const app = {
         // v181: regie (tijd & materiaal) heel zichtbaar bovenaan tonen
         const _regieBanner = document.getElementById('detailRegieBanner');
         if (_regieBanner) _regieBanner.style.display = this.currentWO.timeAndMaterial ? 'block' : 'none';
+        // v432: code van het sleutelkluisje op de werf (extraveld "Sleutelkluis code" op het project)
+        const _kluis = document.getElementById('detailSleutelkluis');
+        if (_kluis) {
+            const code = this.currentWO.sleutelkluis || '';
+            _kluis.style.display = code ? 'flex' : 'none';
+            const v = document.getElementById('detailSleutelkluisCode'); if (v) v.textContent = code;
+        }
         // v400: werkpakket-kaart voor projectwerkbonnen (fire-and-forget)
         this._toonWerkpakket(this.currentWO).catch(() => {});
 
@@ -7549,6 +7639,18 @@ const app = {
         const count = data.photos.length;
         const countEl = document.getElementById('photoCount');
         countEl.textContent = count > 0 ? `${count} foto('s) toegevoegd` : '';
+        // v430: "Foto's verplicht" op de dagplanning
+        const verplicht = !!this.currentWO.fotosVerplicht;
+        const meld = document.getElementById('photoVerplicht');
+        if (meld) {
+            meld.style.display = verplicht ? '' : 'none';
+            meld.classList.toggle('ok', count > 0);
+            meld.textContent = count > 0
+                ? 'Foto\u2019s verplicht voor deze opdracht: in orde.'
+                : 'Foto\u2019s verplicht voor deze opdracht. Voeg minstens één foto van je werk toe, anders kan je de werkbon niet versturen.';
+        }
+        const tabKnop = document.querySelector('#detailTabs .tab-btn[data-tab="tabFotos"]');
+        if (tabKnop) tabKnop.classList.toggle('tab-verplicht', verplicht && count === 0);
 
         document.getElementById('photoGrid').innerHTML = data.photos.map(p => `
             <div class="photo-thumb">
@@ -7595,7 +7697,8 @@ const app = {
             warnings.push({ level: 'info', msg: 'Geen materialen toegevoegd' });
         }
         if (data.photos.length === 0) {
-            warnings.push({ level: 'info', msg: 'Geen foto\u2019s genomen' });
+            if (this.currentWO.fotosVerplicht) warnings.push({ level: 'error', msg: 'Foto\u2019s verplicht: voeg minstens één foto toe' });   // v430
+            else warnings.push({ level: 'info', msg: 'Geen foto\u2019s genomen' });
         }
 
         // Checklist controle
@@ -8362,6 +8465,7 @@ const app = {
 
         // v423: staan de uren van iemand in deze werkbon al op een andere werkbon van deze dagplanning (een collega vulde
         // hem mee in)? Dan eerst vragen — nog eens versturen gaf de dubbele uren.
+        if (!(await this._fotoControle(this.currentWO))) return;   // v430: "Foto's verplicht" op de dagplanning
         if (!(await this._dubbelControleVoorVersturen())) return;
 
         if (this.isMonteur()) {
@@ -9108,6 +9212,11 @@ const app = {
         if (this._submitInProgress) {
             melding('Bezig met versturen...');
             return { ok: false, bezig: true };
+        }
+        // v430: "Foto's verplicht" op de dagplanning en nog geen foto = niet versturen
+        if (this._fotosOntbreken(wo)) {
+            melding('Foto\u2019s verplicht: voeg eerst een foto toe');
+            return { ok: false, fotos: true, fout: 'Foto\u2019s verplicht: nog geen foto op de werkbon' };
         }
 
         // v205: validatie VÓÓR het zetten van de vlag (zelfde leak-fix als
@@ -10901,7 +11010,7 @@ const app = {
             const delen = RobawsAPI.mijnLogistiekDelen();
             const nl = document.getElementById('navLogistiek');
             if (nl) nl.style.display = delen.length ? '' : 'none';
-            const LOG = { screenVoertuigen: ['voertuigen', 'mijnvoertuig'], screenGereedschap: ['gereedschap'], screenGasflessen: ['gasflessen'], screenBudget: ['budget'] };
+            const LOG = { screenVoertuigen: ['voertuigen', 'mijnvoertuig'], screenGereedschap: ['gereedschap'], screenNfcTags: ['voertuigen', 'gereedschap'], screenGasflessen: ['gasflessen'], screenBudget: ['budget'], screenMagazijn: ['magazijn'], screenToestellen: ['toestellen', 'mijntoestel'] };
             if (this.currentScreen === 'screenLogistiek') {
                 if (!delen.length) this.navigate('screenPlanning', false);
                 else this._logHubRender();
@@ -10920,6 +11029,346 @@ const app = {
         this.navigate('screenLogistiek');
     },
 
+    // ========== v431: NFC TAGS — alle tags op één plaats (Logistiek, alleen het bureel) ==========
+    // Klokken (bureau, laden en lossen, woon-werkverkeer, oude camionet-velden op fiche 1) via de bestaande tag-rijen van
+    // QEClock; voertuigen en gereedschap uit Materieel (extraveld "NFC Tag") met dezelfde acties als op hun fiche.
+    _nfcKlokMag() { return this._logBeheer() && RobawsAPI.magAppTool('klok'); },
+
+    openNfcTags() {
+        if (!this._logBeheer()) { this.toast('Alleen het bureel beheert de NFC tags', true); return; }
+        this._nfcState = this._nfcState || { zoek: '', filter: 'alles' };
+        this.navigate('screenNfcTags', true);
+        const z = document.getElementById('nfcZoek'); if (z) z.value = this._nfcState.zoek || '';
+        this.loadNfcTags();
+    },
+
+    async loadNfcTags() {
+        const kl = document.getElementById('nfcKlokLijst');
+        const ml = document.getElementById('nfcMatLijst');
+        this._nfcState = this._nfcState || { zoek: '', filter: 'alles' };
+        if (kl) {
+            if (this._nfcKlokMag()) {
+                if (!kl.innerHTML.trim()) kl.innerHTML = '<div class="spinner"></div>';
+                try { await QEClock.loadTagConfig(true); } catch (_e) {}
+                kl.innerHTML = QEClock.renderTagAdmin({ zonderMateriaal: true });
+                QEClock.bindTagAdminEvents('nfcKlokLijst');
+            } else {
+                kl.innerHTML = '<p style="font-size:13px;color:var(--qe-grey);margin:4px 0">De klok-tags beheren vraagt het recht "Klok-beheer (anderen klokken)".</p>';
+            }
+        }
+        if (!ml) return;
+        if (!this._nfcMats) ml.innerHTML = '<div class="spinner"></div>';
+        try {
+            const mats = await RobawsAPI.getMaterials({ bypassCache: true });
+            this._matTagMapZet(mats);
+            this._nfcMats = mats.filter(m => !RobawsAPI.isGasfles(m) && (String(m.status || '') !== 'inactief' || this._gsNfcTag(m)));
+            // de acties (koppelen, beschrijven, wissen) zoeken het materiaal in deze lijsten
+            this._voertuigen = this._voertuigen || {};
+            this._gsAlles = this._gsAlles || {};
+            this._nfcMats.forEach(m => { if (this._isVoertuig(m)) this._voertuigen[m.id] = m; else this._gsAlles[m.id] = m; });
+            this._nfcRender();
+        } catch (e) {
+            ml.innerHTML = '<p style="font-size:13px;color:var(--qe-red)">Kon het materieel niet laden: ' + this.escapeHtml((e && e.message) || '?') + '</p>';
+        }
+    },
+
+    nfcZet(sleutel, waarde) {
+        this._nfcState = this._nfcState || { zoek: '', filter: 'alles' };
+        this._nfcState[sleutel] = waarde;
+        this._nfcRender();
+    },
+
+    _nfcRender() {
+        const ml = document.getElementById('nfcMatLijst');
+        if (!ml || !this._nfcMats) return;
+        const st = this._nfcState || { zoek: '', filter: 'alles' };
+        document.querySelectorAll('#nfcFilter [data-f]').forEach(b => b.classList.toggle('aan', b.getAttribute('data-f') === st.filter));
+        const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+        const woorden = norm(st.zoek).split(/\s+/).filter(Boolean);
+        const alle = this._nfcMats;
+        const metTag = alle.filter(m => this._gsNfcTag(m)).length;
+        const lijst = alle.filter(m => {
+            const tag = this._gsNfcTag(m);
+            if (st.filter === 'met' && !tag) return false;
+            if (st.filter === 'zonder' && tag) return false;
+            if (!woorden.length) return true;
+            const tekst = norm([m.name, m.brand, m.serialNumber, tag, this._isVoertuig(m) ? 'voertuig camionet' : this._gsSoort(m)].join(' '));
+            return woorden.every(w => tekst.indexOf(w) >= 0);
+        });
+        const tel = document.getElementById('nfcMatTel');
+        if (tel) tel.textContent = metTag + ' van ' + alle.length + ' met een tag';
+        const groepen = [
+            ['Voertuigen', lijst.filter(m => this._isVoertuig(m))],
+            ['Gereedschap en machines', lijst.filter(m => !this._isVoertuig(m))],
+        ];
+        const html = groepen.filter(g => g[1].length).map(([kop, items]) => {
+            items.sort((a, b) => (this._gsNfcTag(a) ? 0 : 1) - (this._gsNfcTag(b) ? 0 : 1) || this._natSort(String(a.name || ''), String(b.name || '')));
+            return '<div class="nfc-kop">' + this.escapeHtml(kop) + ' <span>' + items.length + '</span></div>' + items.map(m => this._nfcRij(m)).join('');
+        }).join('');
+        ml.innerHTML = html || '<p style="font-size:13px;color:var(--qe-grey);text-align:center;margin:14px 0">Niets gevonden</p>';
+    },
+
+    _nfcRij(m) {
+        const id = String(m.id);
+        const tag = this._gsNfcTag(m);
+        const voertuig = this._isVoertuig(m);
+        let klokNaam = null;
+        try { const k = tag && QEClock.identifyTag(tag); klokNaam = k ? k.name : null; } catch (_e) {}
+        let merk = null;
+        try { merk = tag ? (voertuig ? this.klokMerkStand(tag) : null) : null; } catch (_e) {}
+        const sub = tag
+            ? '<span class="nfc-id">' + this.escapeHtml(tag.length > 16 ? tag.slice(0, 16) + '…' : tag) + '</span>' +
+              (voertuig && klokNaam ? ' · klokt' : '') + (merk && merk.ok ? ' · opent de app ✓' : '')
+            : '<span class="nfc-geen">Geen tag</span>';
+        const soort = voertuig ? (m.brand || 'Voertuig') : (this._gsSoort(m) || '');
+        const open = voertuig ? 'app.openVoertuig(\'' + id + '\')' : 'app.openGereedschapItem(\'' + id + '\')';
+        const knoppen = tag
+            ? (voertuig
+                ? '<button class="btn btn-outline btn-sm" title="QE-klokmerkteken op de tag zetten" onclick="event.stopPropagation(); app.klokTagBeschrijf(\'' + this._escapeJsArg(tag) + '\', \'' + this._escapeJsArg(m.name || '') + '\')">✍️</button>'
+                : '<button class="btn btn-outline btn-sm" title="Tag opnieuw beschrijven" onclick="event.stopPropagation(); app.matTagKoppel(\'' + id + '\', true)">✍️</button>') +
+              '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation(); app.nfcWis(\'' + id + '\')">Wissen</button>'
+            : '<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); app.nfcKoppel(\'' + id + '\')">📶 Koppelen</button>';
+        return '<div class="nfc-rij" onclick="' + open + '">' +
+            '<div class="nfc-tekst"><div class="nfc-naam">' + this.escapeHtml(m.name || ('#' + id)) +
+            (soort ? ' <span class="nfc-soort">' + this.escapeHtml(soort) + '</span>' : '') + '</div>' +
+            '<div class="nfc-sub">' + sub + '</div></div>' +
+            '<div class="nfc-knoppen">' + knoppen + '</div></div>';
+    },
+
+    /** v431: tag koppelen vanuit het NFC-scherm: gereedschap = koppelen en beschrijven (merkteken, zoals op de fiche),
+     *  een voertuig = alleen koppelen (dat is een klok-tag van de camionet). */
+    nfcKoppel(id) {
+        if ((this._voertuigen || {})[id] && !(this._gsAlles || {})[id]) return this.gereedschapTagToewijzen(id);
+        return this.matTagKoppel(id);
+    },
+
+    async nfcWis(id) {
+        const m = (this._gsAlles || {})[id] || (this._voertuigen || {})[id];
+        const naam = (m && m.name) || ('#' + id);
+        const klok = this._isVoertuig(m || {}) ? ' Met deze tag kan er dan niet meer geklokt worden in dit voertuig.' : '';
+        if (!confirm('De NFC-tag van "' + naam + '" wissen?' + klok)) return;
+        await this.gereedschapTagWissen(id);
+        if (this.currentScreen === 'screenNfcTags') this.loadNfcTags();
+    },
+
+    // ========== v434: GSM'S & TABLETS (Logistiek; Worker v564, zelfde lijst als de hub-Logistiek) ==========
+    // Lezen en bewaren via de Worker (app-toestellen / app-toestel, kop X-App-Sessie). De Worker beslist: bureel = alles zien en
+    // beheren; iemand anders krijgt alleen zijn eigen toestellen en kan niets wijzigen. Nooit PIN- of PUK-codes.
+    openToestellen() {
+        if (!RobawsAPI.magLogistiekDeel('toestellen') && !RobawsAPI.magLogistiekDeel('mijntoestel')) { this.toast('Geen toegang', true); return; }
+        this._tst = this._tst || { lijst: null, beheer: false, zoek: '', soort: 'alle' };
+        this.navigate('screenToestellen', true);
+        const z = document.getElementById('tstZoek'); if (z) z.value = this._tst.zoek || '';
+        this.loadToestellen();
+    },
+
+    async _toestelFetch(pad, body) {
+        const s = RobawsAPI.sessieLees();
+        if (!s) throw new Error('Meld je opnieuw aan in de app om de toestellen te zien.');
+        const init = { headers: { 'X-App-Sessie': s.token } };
+        if (body) { init.method = 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+        const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/' + pad, init, 12000);
+        let j = null; try { j = await r.json(); } catch (_e) {}
+        if (r.status === 404 && !(j && j.error && j.ok === false)) throw new Error('Nog niet beschikbaar (de server wordt bijgewerkt). Probeer later opnieuw.');
+        if (!j) throw new Error('Geen antwoord van de server (' + r.status + ')');
+        if (!r.ok || j.ok === false) throw new Error(j.error || ('Fout ' + r.status));
+        return j;
+    },
+
+    async loadToestellen() {
+        const el = document.getElementById('tstLijst');
+        this._tst = this._tst || { lijst: null, beheer: false, zoek: '', soort: 'alle' };
+        if (el && !this._tst.lijst) el.innerHTML = '<div class="spinner"></div>';
+        try {
+            const j = await this._toestelFetch('app-toestellen');
+            this._tst.lijst = Array.isArray(j.toestellen) ? j.toestellen : [];
+            this._tst.beheer = !!j.beheer;
+            this._toestelRender();
+        } catch (e) {
+            if (el) el.innerHTML = '<p style="font-size:13px;color:var(--qe-red);margin:10px 0">' + this.escapeHtml((e && e.message) || 'Kon de toestellen niet laden') + '</p>';
+        }
+    },
+
+    toestelZet(sleutel, waarde) {
+        this._tst = this._tst || { lijst: null, beheer: false, zoek: '', soort: 'alle' };
+        this._tst[sleutel] = waarde;
+        this._toestelRender();
+    },
+
+    _toestelImeiOk(s) {
+        s = String(s || '');
+        if (!/^\d{15}$/.test(s)) return false;
+        let som = 0;
+        for (let i = 0; i < 15; i++) { let d = +s.charAt(14 - i); if (i % 2) { d *= 2; if (d > 9) d -= 9; } som += d; }
+        return som % 10 === 0;
+    },
+    _toestelEur(n) { return '€ ' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2).replace('.', ','); },
+    _toestelDatum(iso) {
+        if (!iso) return '';
+        try { return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('nl-BE', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (_e) { return String(iso); }
+    },
+    _TST_KLEUR: { 'in gebruik': 'var(--green2, #3E7A4E)', 'reserve': '#3D6EA8', 'defect': 'var(--qe-red)', 'ingeleverd': 'var(--qe-grey)' },
+
+    _toestelRender() {
+        const st = this._tst;
+        const el = document.getElementById('tstLijst');
+        if (!el || !st || !st.lijst) return;
+        const beheer = st.beheer;
+        const bh = document.getElementById('tstBeheer'); if (bh) bh.style.display = beheer ? '' : 'none';
+        const titel = document.getElementById('tstTitel'); if (titel) titel.textContent = beheer ? 'Gsm’s & tablets' : 'Mijn gsm of tablet';
+        if (!beheer) { el.innerHTML = this._toestelEigenHtml(st.lijst); return; }
+        document.querySelectorAll('#tstFilter [data-f]').forEach(b => b.classList.toggle('aan', b.getAttribute('data-f') === st.soort));
+        const actief = st.lijst.filter(t => t.status !== 'ingeleverd');
+        const mnd = actief.reduce((s, t) => s + (Number(t.prijs) || 0), 0);
+        const kop = document.getElementById('tstKop');
+        if (kop) kop.textContent = actief.filter(t => t.soort === 'gsm').length + ' gsm’s en ' + actief.filter(t => t.soort === 'tablet').length +
+            ' tablets in gebruik of reserve' + (mnd ? ' · abonnementen samen ' + this._toestelEur(mnd) + ' per maand' : '');
+        const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+        const woorden = norm(st.zoek).split(/\s+/).filter(Boolean);
+        const lijst = st.lijst.filter(t => {
+            if (st.soort !== 'alle' && t.soort !== st.soort) return false;
+            if (!woorden.length) return true;
+            const tekst = norm([t.empNaam, t.toestel, t.imei, t.imei2, t.nummer, String(t.nummer || '').replace(/\D/g, ''), t.abonnement, t.status].join(' '));
+            return woorden.every(w => tekst.indexOf(w) >= 0);
+        });
+        if (!st.lijst.length) { el.innerHTML = '<p style="font-size:13px;color:var(--qe-grey);text-align:center;margin:14px 0">Nog geen gsm’s of tablets. Voeg er een toe met + Gsm of + Tablet.</p>'; return; }
+        const volg = { 'in gebruik': 0, 'reserve': 1, 'defect': 2, 'ingeleverd': 3 };
+        const html = [['gsm', 'Werkgsm’s'], ['tablet', 'Tablets']].map(([soort, kopTekst]) => {
+            const deel = lijst.filter(t => t.soort === soort).sort((a, b) => (volg[a.status] || 0) - (volg[b.status] || 0) ||
+                String(a.empNaam || '~').localeCompare(String(b.empNaam || '~')) || String(a.toestel || '').localeCompare(String(b.toestel || '')));
+            if (!deel.length) return '';
+            return '<div class="nfc-kop">' + kopTekst + ' <span>' + deel.length + '</span></div>' + deel.map(t => {
+                const sub = [t.toestel, t.nummer, t.abonnement].filter(Boolean).join(' · ') || '(geen toestel ingevuld)';
+                const rechts = t.status === 'in gebruik' ? (t.gekregenOp ? 'sinds ' + this._toestelDatum(t.gekregenOp) : '') : t.status;
+                return '<div class="nfc-rij" data-tst="' + this.escapeHtml(t.id) + '" style="' + (t.status === 'ingeleverd' ? 'opacity:.55' : '') + '" onclick="app.toestelOpen(\'' + this._escapeJsArg(t.id) + '\')">' +
+                    '<span style="width:9px;height:9px;border-radius:50%;flex-shrink:0;background:' + (this._TST_KLEUR[t.status] || 'var(--qe-grey)') + '"></span>' +
+                    '<div class="nfc-tekst"><div class="nfc-naam">' + this.escapeHtml(t.empNaam || 'Niet toegewezen') + '</div>' +
+                    '<div class="nfc-sub">' + this.escapeHtml(sub) + '</div></div>' +
+                    '<div style="font-size:11px;color:var(--qe-grey);text-align:right;flex-shrink:0;max-width:34%">' + this.escapeHtml(rechts) + '</div></div>';
+            }).join('');
+        }).join('');
+        el.innerHTML = html || '<p style="font-size:13px;color:var(--qe-grey);text-align:center;margin:14px 0">Niets gevonden</p>';
+    },
+
+    /** Monteur/technieker: alleen het eigen toestel, alles in één oogopslag (geen bewerken). */
+    _toestelEigenHtml(lijst) {
+        if (!lijst.length) return '<p style="font-size:13px;color:var(--qe-grey);text-align:center;margin:14px 0">Er staat nog geen gsm of tablet op jouw naam. Vraag het aan het bureel als dat niet klopt.</p>';
+        const rij = (l, w) => w ? '<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line, rgba(0,0,0,.08));font-size:13.5px">' +
+            '<span style="color:var(--qe-grey)">' + l + '</span><span style="text-align:right;color:var(--ink);font-variant-numeric:tabular-nums">' + this.escapeHtml(w) + '</span></div>' : '';
+        return lijst.map(t => '<div style="padding:10px 0 6px">' +
+            '<div style="font-size:15px;font-weight:600;color:var(--ink);margin-bottom:4px">' + (t.soort === 'tablet' ? 'Tablet' : 'Gsm') + (t.toestel ? ': ' + this.escapeHtml(t.toestel) : '') + '</div>' +
+            rij('Nummer', t.nummer) + rij('IMEI', t.imei) + rij('IMEI 2', t.imei2) + rij('Abonnement', t.abonnement) +
+            rij('Gekregen op', this._toestelDatum(t.gekregenOp)) + rij('Stand', t.status !== 'in gebruik' ? t.status : '') + rij('Opmerking', t.opmerking) +
+            '</div>').join('') +
+            '<p style="font-size:11.5px;color:var(--qe-grey);margin:8px 0 6px">Klopt er iets niet? Laat het het bureel weten.</p>';
+    },
+
+    async toestelOpen(id, soort) {
+        const st = this._tst;
+        if (!st || !st.beheer) return;
+        const t = id ? (st.lijst || []).find(x => x.id === id) : { soort: soort || 'gsm', status: 'in gebruik', gekregenOp: new Date().toISOString().slice(0, 10) };
+        if (!t) return;
+        this._tstOpen = t;
+        let emps = [];
+        try { emps = await RobawsAPI.getActiveEmployees(); } catch (_e) {}
+        if (t.empId && !emps.some(e => String(e.employeeId) === String(t.empId))) emps = emps.concat([{ employeeId: t.empId, name: t.empNaam || ('#' + t.empId) }]);
+        const v = (k) => this.escapeHtml(t[k] == null ? '' : t[k]);
+        const abos = Array.from(new Set((st.lijst || []).map(x => x.abonnement).filter(Boolean))).sort();
+        const opt = (waarde, label, aan) => '<option value="' + this.escapeHtml(waarde) + '"' + (aan ? ' selected' : '') + '>' + this.escapeHtml(label) + '</option>';
+        const gesch = (t.geschiedenis || []).slice().reverse();
+        document.getElementById('modalContent').innerHTML =
+            '<h3>' + (id ? this.escapeHtml(t.toestel || (t.soort === 'tablet' ? 'Tablet' : 'Gsm')) : (t.soort === 'tablet' ? 'Nieuwe tablet' : 'Nieuwe werkgsm')) + '</h3>' +
+            (id ? '<p style="font-size:12px;color:var(--qe-grey);margin-bottom:10px">Laatst bewaard door ' + this.escapeHtml(t.door || '?') + ' op ' + this._toestelDatum(t.bijgewerkt) + '</p>' : '') +
+            '<div style="display:flex;gap:8px"><div class="form-group" style="flex:1"><label>Soort</label><select class="form-input" id="tstSoort">' +
+                opt('gsm', 'Gsm', t.soort === 'gsm') + opt('tablet', 'Tablet', t.soort === 'tablet') + '</select></div>' +
+            '<div class="form-group" style="flex:1"><label>Stand</label><select class="form-input" id="tstStatus">' +
+                ['in gebruik', 'reserve', 'defect', 'ingeleverd'].map(s => opt(s, s.charAt(0).toUpperCase() + s.slice(1), t.status === s)).join('') + '</select></div></div>' +
+            '<div class="form-group"><label>Werknemer</label><select class="form-input" id="tstEmp" onchange="app._toestelEmpGekozen()">' +
+                opt('', '— niemand (reserve) —', !t.empId) + emps.map(e => opt(String(e.employeeId), e.name + (e.role ? ' (' + e.role + ')' : ''), String(e.employeeId) === String(t.empId || ''))).join('') + '</select></div>' +
+            '<div class="form-group"><label>Gekregen op</label><input type="date" class="form-input" id="tstDatum" value="' + v('gekregenOp') + '"></div>' +
+            '<div class="form-group"><label>Toestel (merk en model)</label><input type="text" class="form-input" id="tstToestel" maxlength="80" placeholder="bv. Samsung Galaxy A55" value="' + v('toestel') + '"></div>' +
+            '<div class="form-group"><label>IMEI</label><input type="text" class="form-input" id="tstImei" inputmode="numeric" maxlength="20" placeholder="15 cijfers (*#06#)" value="' + v('imei') + '" oninput="app._toestelImeiMelding()"></div>' +
+            '<div class="form-group"><label>IMEI 2 (dubbele simkaart)</label><input type="text" class="form-input" id="tstImei2" inputmode="numeric" maxlength="20" placeholder="optioneel" value="' + v('imei2') + '" oninput="app._toestelImeiMelding()"></div>' +
+            '<div id="tstImeiMeld" style="font-size:12px;color:var(--accent);margin:-6px 2px 8px"></div>' +
+            '<div class="form-group"><label>Gsm-nummer</label><input type="tel" class="form-input" id="tstNummer" maxlength="30" placeholder="bv. 0470 12 34 56" value="' + v('nummer') + '"></div>' +
+            '<div class="form-group"><label>Abonnement</label><input type="text" class="form-input" id="tstAbo" maxlength="80" list="tstAboLijst" placeholder="bv. Proximus Business 20 GB" value="' + v('abonnement') + '">' +
+                '<datalist id="tstAboLijst">' + abos.map(a => '<option value="' + this.escapeHtml(a) + '">').join('') + '</datalist></div>' +
+            '<div class="form-group"><label>Abonnement € per maand</label><input type="text" class="form-input" id="tstPrijs" inputmode="decimal" placeholder="optioneel" value="' + (t.prijs != null ? Number(t.prijs).toFixed(2).replace('.', ',') : '') + '"></div>' +
+            '<div class="form-group"><label>Opmerking</label><textarea class="form-input" id="tstOpm" rows="2" maxlength="500" placeholder="bv. hoesje en lader meegegeven">' + v('opmerking') + '</textarea></div>' +
+            '<p style="font-size:11.5px;color:var(--qe-grey);margin:-4px 2px 12px">Zet hier nooit een PIN- of PUK-code.</p>' +
+            (gesch.length ? '<div class="nfc-kop">Vorige houders</div>' + gesch.map(g => '<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:5px 0"><span>' +
+                this.escapeHtml(g.naam || '?') + '</span><span style="color:var(--qe-grey)">' + this._toestelDatum(g.van) + ' → ' + this._toestelDatum(g.tot) + '</span></div>').join('') + '<div style="height:10px"></div>' : '') +
+            '<button class="btn btn-primary btn-full" id="tstBewaarKnop" onclick="app.toestelBewaar()" style="margin-bottom:8px">✓ Opslaan</button>' +
+            '<button class="btn btn-outline btn-full" onclick="app.closeModal()" style="margin-bottom:8px">Annuleren</button>' +
+            (id ? '<button class="btn btn-outline btn-full" style="color:var(--qe-red)" onclick="app.toestelVerwijder()">Verwijderen</button>' : '');
+        this.openModal();
+        this._toestelImeiMelding();
+    },
+
+    _toestelWaarden() {
+        const w = (id) => { const e = document.getElementById(id); return e ? String(e.value) : ''; };
+        return { soort: w('tstSoort'), status: w('tstStatus'), empId: w('tstEmp'), gekregenOp: w('tstDatum'), toestel: w('tstToestel').trim(),
+            imei: w('tstImei').replace(/\D/g, ''), imei2: w('tstImei2').replace(/\D/g, ''), nummer: w('tstNummer').trim(),
+            abonnement: w('tstAbo').trim(), prijs: w('tstPrijs').trim(), opmerking: w('tstOpm').trim() };
+    },
+
+    /** Een andere houder: de datum wordt vandaag (tenzij al aangepast), de stand volgt mee. */
+    _toestelEmpGekozen() {
+        const o = this._tstOpen || {}, emp = document.getElementById('tstEmp').value, d = document.getElementById('tstDatum'), st = document.getElementById('tstStatus');
+        if (o.id && emp !== String(o.empId || '') && d.value === String(o.gekregenOp || '')) d.value = new Date().toISOString().slice(0, 10);
+        if (emp && st.value === 'reserve') st.value = 'in gebruik';
+        if (!emp && st.value === 'in gebruik') st.value = 'reserve';
+    },
+
+    _toestelImeiMelding() {
+        const m = document.getElementById('tstImeiMeld');
+        if (!m) return;
+        const w = this._toestelWaarden(), fout = [];
+        [w.imei, w.imei2].forEach((s, i) => {
+            if (!s) return;
+            if (s.length !== 15) fout.push('IMEI' + (i ? ' 2' : '') + ' heeft ' + s.length + ' cijfers (moet 15 zijn)');
+            else if (!this._toestelImeiOk(s)) fout.push('IMEI' + (i ? ' 2' : '') + ' klopt niet: kijk hem na met *#06#');
+        });
+        m.textContent = fout.join(' · ');
+    },
+
+    async toestelBewaar() {
+        const o = this._tstOpen || {}, w = this._toestelWaarden();
+        if (!w.toestel && !w.imei && !w.nummer) { this.toast('Vul minstens het toestel, de IMEI of het nummer in.', true); return; }
+        if (w.prijs && !/^\d+([.,]\d{1,2})?$/.test(w.prijs)) { this.toast('De prijs per maand is geen bedrag (bv. 19,50).', true); return; }
+        const slecht = [w.imei, w.imei2].filter(s => s && !this._toestelImeiOk(s));
+        if (slecht.length && !confirm('IMEI ' + slecht.join(' en ') + ' lijkt niet te kloppen. Toch opslaan?')) return;
+        let empNaam = '';
+        if (w.empId) {
+            try { const e = (await RobawsAPI.getActiveEmployees()).find(x => String(x.employeeId) === w.empId); empNaam = e ? e.name : (o.empNaam || ''); } catch (_e) { empNaam = o.empNaam || ''; }
+        }
+        const knop = document.getElementById('tstBewaarKnop');
+        if (knop) { knop.disabled = true; knop.textContent = 'Bewaren…'; }
+        try {
+            const j = await this._toestelFetch('app-toestel', { toestel: Object.assign({}, w, { id: o.id || '', versie: o.bijgewerkt || '', empNaam }) });
+            this._tst.lijst = j.toestellen || this._tst.lijst;
+            this.closeModal();
+            this.toast((w.soort === 'tablet' ? 'Tablet' : 'Gsm') + ' opgeslagen');
+            this._toestelRender();
+        } catch (e) {
+            if (knop) { knop.disabled = false; knop.textContent = '✓ Opslaan'; }
+            this.toast((e && e.message) || 'Opslaan mislukt', true);
+        }
+    },
+
+    async toestelVerwijder() {
+        const o = this._tstOpen || {};
+        if (!o.id) return;
+        if (!confirm('Dit toestel helemaal verwijderen, met zijn vorige houders?\n\nIs het toestel terug binnen of weg, kies dan liever de stand "Ingeleverd": dan blijft het te zien.')) return;
+        try {
+            const j = await this._toestelFetch('app-toestel', { verwijderId: o.id });
+            this._tst.lijst = j.toestellen || [];
+            this.closeModal();
+            this.toast('Toestel verwijderd');
+            this._toestelRender();
+        } catch (e) { this.toast((e && e.message) || 'Verwijderen mislukt', true); }
+    },
+
     /** v395: de kaarten van de Logistiek-hub volgens wat deze persoon mag zien. */
     _logHubRender() {
         const delen = RobawsAPI.mijnLogistiekDelen();
@@ -10928,8 +11377,15 @@ const app = {
         toon('logKaartMijnVoertuig', delen.indexOf('mijnvoertuig') >= 0);
         toon('logKaartVoertuigen', delen.indexOf('voertuigen') >= 0);
         toon('logKaartGereedschap', delen.indexOf('gereedschap') >= 0);
+        toon('logKaartNfc', beheer && (delen.indexOf('voertuigen') >= 0 || delen.indexOf('gereedschap') >= 0 || RobawsAPI.magAppTool('klok')));   // v431
         toon('logKaartBudget', delen.indexOf('budget') >= 0);
         toon('logKaartGas', delen.indexOf('gasflessen') >= 0);
+        toon('logKaartMagazijn', delen.indexOf('magazijn') >= 0);   // v429
+        // v434: gsm's & tablets (bureel = beheren, anders = alleen het eigen toestel)
+        toon('logKaartToestellen', delen.indexOf('toestellen') >= 0 || delen.indexOf('mijntoestel') >= 0);
+        const tstT = document.getElementById('logToestellenTitel'), tstS = document.getElementById('logToestellenSub');
+        if (tstT) tstT.textContent = delen.indexOf('toestellen') >= 0 ? 'Gsm’s & tablets' : 'Mijn gsm of tablet';
+        if (tstS) tstS.textContent = delen.indexOf('toestellen') >= 0 ? 'Wie heeft welk toestel, IMEI en abonnement' : 'IMEI, nummer en abonnement van jouw toestel';
         const meer = document.getElementById('logMeerLater');
         if (meer) meer.style.display = beheer ? '' : 'none';
         const gasSub = document.getElementById('logGasSub');
@@ -10975,6 +11431,1050 @@ const app = {
         const opNaam = (flessen || []).filter(m => mijn && String(m.assignedEmployeeId || '') === mijn);
         const inCamionet = (flessen || []).filter(m => opNaam.indexOf(m) < 0 && m.stockLocationId && locIds.indexOf(String(m.stockLocationId)) >= 0);
         return { opNaam, inCamionet, locIds };
+    },
+
+    // =========================================================
+    // v429 (Worker v503): MAGAZIJN OP DE GSM — de stock scannen.
+    // Vraag Levi 12 okt 2026: "Het is de bedoeling dat er ook winkelmanden kunnen gevuld worden door de codes te scannen in het
+    // magazijn." + uitgaand materiaal "gemengd" (duur materiaal scannen met de werf, kleingoed via de bakjes, elke week een kast
+    // tellen). Ontwerp C (keuze Levi uit klikbare varianten): vier soorten bovenaan (Bijbestellen · Meenemen · Ontvangen · Tellen),
+    // de camera blijft open (scan het ene vak na het andere), een lijst met − aantal +, Klaar = één boeking + samenvatting.
+    // Elke code gaat naar de Worker (/bel-api/shop-app-stk-code, kop X-App-Sessie): het artikelnummer van het etiket, een EAN of een
+    // code die iemand koppelde. Onbekend = koppelen aan een artikel (de app onthoudt de code). Een handscanner (PDA) tikt de code in
+    // het codevak of, zonder vak, als snelle toetsen + Enter. Klaar = /bel-api/shop-app-stk-actie met een vast kid per reeks: een
+    // herkansing boekt nooit dubbel. De reeks staat ook op de gsm (localStorage qe_mag_reeks_<fiche>, 3 dagen): een herstart of een
+    // update verliest niets. Er wordt hier nooit iets besteld en er staat nooit een prijs.
+    // =========================================================
+    MAG_MODI: [
+        { k: 'bij', naam: 'Bijbestellen', sub: 'Loop langs de bakjes en scan wat bijna op is' },
+        { k: 'mee', naam: 'Meenemen', sub: 'Scan wat je meeneemt naar de werf' },
+        { k: 'ont', naam: 'Ontvangen', sub: 'Scan wat er geleverd is' },
+        { k: 'tel', naam: 'Tellen', sub: 'Scan elk vak en vul het aantal in' },
+    ],
+    MAG_TTL: 3 * 86400000,          // een reeks die niet bewaard werd, blijft 3 dagen op de gsm
+    MAG_WERF_TTL: 4 * 3600000,      // de gekozen werf (meenemen) geldt 4 uur: morgen begin je niet per ongeluk op de werf van gisteren
+    MAG_PAUZE_MS: 120000,           // 2 minuten niets gescand: de camera pauzeert (batterij)
+    MAG_LEV: { desco: 'Desco', vanoirschot: 'Van Oirschot', stg: 'STG', metalunion: 'Metalunion', carnoy: 'Carnoy', viessmann: 'Viessmann' },
+
+    openMagazijn() {
+        if (!RobawsAPI.magLogistiekDeel('magazijn')) { this.toast('Geen toegang tot het magazijn', true); return; }
+        this.navigate('screenMagazijn', true);
+    },
+
+    // ---- de reeks (op de gsm bewaard) ----
+    _magSleutel() { return 'qe_mag_reeks_' + String((this.currentUser && this.currentUser.robawsEmployeeId) || 'x'); },
+    _magState() {
+        const emp = String((this.currentUser && this.currentUser.robawsEmployeeId) || '');
+        if (this._mag && this._mag.emp === emp) return this._mag;
+        let m = null;
+        try { m = JSON.parse(localStorage.getItem(this._magSleutel()) || 'null'); } catch (_) { m = null; }
+        if (!m || typeof m !== 'object' || String(m.emp) !== emp || !(Date.now() - (Number(m.t) || 0) < this.MAG_TTL)) m = null;
+        const bureel = !!(this.currentUser && this.currentUser.role === 'bureel');
+        if (!m) m = { emp, modus: bureel ? 'bij' : 'mee', lijst: [], werf: null, kid: null, t: Date.now() };
+        if (!this.MAG_MODI.some((x) => x.k === m.modus)) m.modus = 'mee';
+        m.lijst = (Array.isArray(m.lijst) ? m.lijst : []).filter((r) => r && r.k && r.code).slice(0, 300);
+        m.lijst.forEach((r) => { r.bezig = false; });
+        if (m.werf && !(Date.now() - (Number(m.werf.t) || 0) < this.MAG_WERF_TTL)) m.werf = null;
+        m.klaar = null;
+        this._mag = m;
+        return m;
+    },
+    _magBewaar() {
+        const m = this._mag;
+        if (!m) return;
+        m.t = Date.now();
+        try {
+            if (!m.lijst.length && !m.werf && !m.kid) localStorage.removeItem(this._magSleutel());
+            else localStorage.setItem(this._magSleutel(), JSON.stringify({ emp: m.emp, modus: m.modus, lijst: m.lijst.map((r) => Object.assign({}, r, { bezig: undefined })), werf: m.werf, kid: m.kid, t: m.t }));
+        } catch (_) {}
+    },
+    _magNieuwK() { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); },
+    _magNieuwKid() { return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); },
+    _magSchoon(s) {
+        // geen stuurtekens (een handscanner stuurt soms een prefix), geen spaties aan de randen
+        return Array.from(String(s == null ? '' : s)).filter((c) => { const n = c.charCodeAt(0); return n >= 32 && n !== 127; }).join('').trim();
+    },
+    _magCodeSl(code) { return String(code || '').replace(/\s+/g, '').toUpperCase(); },
+    _magRond(x) { return Math.round((Number(x) || 0) * 1000) / 1000; },
+    _magFmt(x) { try { return this._magRond(x).toLocaleString('nl-BE', { maximumFractionDigits: 3 }); } catch (_) { return String(this._magRond(x)); } },
+    _magEsc(s) { return this.escapeHtml(String(s == null ? '' : s)); },
+    /** Naam van een artikel uit de webshop. Carnoy schrijft "nl|fr| maat": dan de Nederlandse naam met de maat. */
+    _magWebNaam(w) {
+        const d = String((w && (w.n || w.c)) || '').split('|').map((x) => x.trim()).filter(Boolean);
+        if (d.length >= 3 && d[d.length - 1].length <= 24) return d[0] + ' ' + d[d.length - 1];
+        return d.join(' ');
+    },
+
+    // ---- aantallen (ontwerp C) ----
+    /** Bijbestellen: aanvullen tot het maximum, in hele verpakkingen (zoals Bijbestellen in de webshop). */
+    _magVoorstel(a) {
+        const per = Number(a.per) > 0 ? Number(a.per) : 1;
+        const peil = (Number(a.n) || 0) + (Number(a.besteld) || 0);
+        if (!(Number(a.ma) > 0)) return per;
+        const ruw = Math.max(per, Number(a.ma) - peil);
+        const op = Math.ceil(ruw / per) * per;
+        const neer = Math.max(per, Math.floor(ruw / per) * per);
+        return peil + op <= Number(a.ma) ? op : neer;
+    },
+    _magStap(r, modus) {
+        if (modus === 'bij') return (r.art && Number(r.art.per) > 0) ? Number(r.art.per) : 1;
+        return Number(r.per) > 0 ? Number(r.per) : 1;   // een doos-code telt de inhoud van de doos
+    },
+    _magStartN(r, modus) {
+        const a = r.art || {};
+        if (modus === 'bij') return this._magVoorstel(a);
+        if (modus === 'ont') return Number(a.besteld) > 0 ? Number(a.besteld) : this._magStap(r, modus);
+        if (modus === 'tel') return Number(a.n) || 0;
+        return this._magStap(r, modus);
+    },
+    _magHint(r, modus) {
+        const a = r.art || {}, f = (x) => this._magFmt(x);
+        const stock = Number(a.n) || 0, besteld = Number(a.besteld) || 0;
+        if (modus === 'bij') {
+            if (!(Number(a.ma) > 0)) return { t: 'geen maximum ingesteld' + (a.bij ? ' · al op de lijst (' + f(a.bij.n) + ')' : ''), k: '' };
+            const na = stock + besteld + r.n;
+            return { t: (na > Number(a.ma) ? 'boven max (' + f(na) + ')' : 'tot max ' + f(a.ma)) + (a.bij ? ' · al op de lijst (' + f(a.bij.n) + ')' : ''), k: na > Number(a.ma) ? 'rood' : '' };
+        }
+        if (modus === 'mee') {
+            if (!a.geteld) return { t: 'nog niet geteld', k: '' };
+            const rest = this._magRond(stock - r.n);
+            if (rest < 0) return { t: 'meer dan op stock (' + f(stock) + ')', k: 'oranje' };
+            if (a.mi != null && rest < Number(a.mi)) return { t: 'daarna ' + f(rest) + ', onder min', k: 'oranje' };
+            return { t: 'daarna ' + f(rest) + ' op stock', k: '' };
+        }
+        if (modus === 'ont') return { t: besteld > 0 ? 'besteld ' + f(besteld) : 'niet besteld', k: '' };
+        if (!a.geteld) return { t: 'nog nooit geteld', k: '' };
+        const d = this._magRond(r.n - stock);
+        return d === 0 ? { t: 'klopt met de stock', k: '' } : { t: 'verschil ' + (d > 0 ? '+' : '') + f(d), k: 'oranje' };
+    },
+    _magInfo(a) {
+        const f = (x) => this._magFmt(x);
+        const delen = [a.vak ? 'Vak ' + a.vak : (a.plaats || 'Geen vak')];
+        delen.push(a.geteld ? f(a.n) + ' ' + (a.eh || 'st') + ' op stock' : 'nog niet geteld');
+        if (a.mi != null) delen.push('min ' + f(a.mi));
+        if (a.ma != null) delen.push('max ' + f(a.ma));
+        return delen.join(' · ');
+    },
+
+    // ---- de server ----
+    async _magApi(pad, opts) {
+        const s = RobawsAPI.sessieLees();
+        const fout = (t, code) => { const e = new Error(t); e.code = code; return e; };
+        if (!s || !s.token) throw fout('Meld je opnieuw aan in de app.', 'sessie');
+        const init = { headers: { 'X-App-Sessie': s.token } };
+        if (opts && opts.body) { init.method = 'POST'; init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
+        let r;
+        try { r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/' + pad, init, (opts && opts.ms) || 12000); }
+        catch (_) { throw fout('Geen verbinding', 'net'); }
+        let j = null;
+        try { j = await r.json(); } catch (_) {}
+        if (r.status === 401 && j && j.sessie === false) throw fout('Meld je opnieuw aan in de app.', 'sessie');
+        if (r.status === 503 && j && j.db === false) throw fout(j.error || 'De stock staat nog niet aan.', 'uit');
+        if ((r.status === 404 && (!j || /onbekend/i.test(String(j.error || '')))) || r.status === 401) throw fout('Het magazijn staat nog niet aan op de server.', 'oud');
+        if (!r.ok || !j) throw fout((j && j.error) || ('Er ging iets mis (' + r.status + ')'), r.status >= 500 ? 'server' : 'fout');
+        return j;
+    },
+
+    // ---- het scherm ----
+    loadMagazijn() {
+        const host = document.getElementById('magHost');
+        if (!host) return;
+        const m = this._magState();
+        if (!host.querySelector('#magVak')) this._magOpbouw(host);
+        this._magRender();
+        this._magToetsenAan();
+        if (!this._magZichtFn) {
+            this._magZichtFn = () => {
+                if (document.hidden) {
+                    if (this._magCam && this._magCam.stream) { this._magCamStop(); this._magCamTerug = true; }
+                } else if (this._magCamTerug) {
+                    this._magCamTerug = false;
+                    if (this.currentScreen === 'screenMagazijn' && this._mag && !this._mag.klaar) this._magCamStart();
+                }
+            };
+            document.addEventListener('visibilitychange', this._magZichtFn);
+        }
+        if (!this._magOnlineFn) {
+            this._magOnlineFn = () => { if (this.currentScreen === 'screenMagazijn') this._magOpzoekenWacht(); };
+            window.addEventListener('online', this._magOnlineFn);
+        }
+        this._magOpzoekenWacht();
+        if (!m.klaar) this._magCamStart();
+        if (m.modus === 'mee') this._magWervenLaden();
+    },
+    /** Weg van het scherm (navigate): camera uit, geen toetsen meer opvangen. De reeks blijft. */
+    _magVerlaat() {
+        this._magCamStop();
+        this._magCamTerug = false;
+        if (this._magHerkansT) { clearTimeout(this._magHerkansT); this._magHerkansT = null; }
+        if (this._magToetsFn) { document.removeEventListener('keydown', this._magToetsFn, true); this._magToetsFn = null; }
+        this.magKoppelSluit();
+        this.magWerfSluit();
+    },
+    _magOpbouw(host) {
+        const modi = this.MAG_MODI.map((x) => '<button type="button" data-k="' + x.k + '" onclick="app.magKiesModus(\'' + x.k + '\')">' + x.naam + '</button>').join('');
+        host.innerHTML =
+            '<div class="mag">' +
+            '<div class="mag-kop"><div class="mag-titel">Magazijn</div><div class="mag-sub" id="magSub"></div>' +
+            '<div class="mag-seg" role="group" aria-label="Wat doe je?" id="magSeg">' + modi + '</div></div>' +
+            '<div class="mag-banner" id="magBanner" style="display:none"></div>' +
+            '<div id="magReeks" class="mag-reeks">' +
+            '<div class="mag-cam" id="magVak" onclick="app.magCamTik()">' +
+            '<video id="magVideo" playsinline autoplay muted></video>' +
+            '<span class="mag-hoek lb"></span><span class="mag-hoek rb"></span><span class="mag-hoek lo"></span><span class="mag-hoek ro"></span><span class="mag-lijn"></span>' +
+            '<div class="mag-cam-tekst" id="magCamTekst">Camera starten…</div>' +
+            '<div class="mag-cam-melding" id="magCamMelding"></div>' +
+            '<button type="button" class="mag-cam-pauze" id="magCamPauze" aria-label="Camera pauzeren" onclick="event.stopPropagation();app.magCamPauze()"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg></button>' +
+            '</div>' +
+            '<div class="mag-coderij">' +
+            '<button type="button" class="mag-natief" id="magNatief" onclick="app.magNatief()">Scanner van de gsm</button>' +
+            '<label for="magCode" class="mag-sr">Code typen of scannen met een handscanner</label>' +
+            '<input id="magCode" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go" placeholder="Code typen" onkeydown="app.magCodeToets(event)">' +
+            '<button type="button" class="mag-code-ok" onclick="app.magCodeOk()">OK</button>' +
+            '</div>' +
+            '<div id="magWerf"></div>' +
+            '<div id="magLijst" class="mag-lijst"></div>' +
+            '</div>' +
+            '<div id="magKlaarScherm" class="mag-klaar" style="display:none"></div>' +
+            '<div class="mag-voet" id="magVoet"><button type="button" id="magKlaarKnop" onclick="app.magKlaar()">Klaar</button></div>' +
+            '</div>';
+        const nat = document.getElementById('magNatief');
+        if (nat && !this._gfScanNatiefKan()) nat.style.display = 'none';
+    },
+    _magRender() {
+        const m = this._magState();
+        const md = this.MAG_MODI.find((x) => x.k === m.modus) || this.MAG_MODI[0];
+        const sub = document.getElementById('magSub');
+        if (sub) sub.textContent = md.sub;
+        document.querySelectorAll('#magSeg button').forEach((b) => { const aan = b.dataset.k === m.modus; b.classList.toggle('aan', aan); b.setAttribute('aria-pressed', aan ? 'true' : 'false'); });
+        const reeks = document.getElementById('magReeks'), klaar = document.getElementById('magKlaarScherm'), voet = document.getElementById('magVoet');
+        if (reeks) reeks.style.display = m.klaar ? 'none' : '';
+        if (klaar) klaar.style.display = m.klaar ? '' : 'none';
+        if (voet) voet.style.display = m.klaar ? 'none' : '';
+        if (m.klaar) { this._magKlaarRender(); return; }
+        this._magWerfRender();
+        this._magLijstRender();
+        this._magVoetBij();
+    },
+    _magBanner(tekst, code) {
+        const b = document.getElementById('magBanner');
+        if (!b) return;
+        if (!tekst) { b.style.display = 'none'; b.textContent = ''; return; }
+        b.textContent = tekst + (code === 'uit' || code === 'oud' ? ' Scannen werkt pas als het magazijn aanstaat.' : '');
+        b.style.display = '';
+    },
+
+    // ---- de lijst ----
+    _magLijstRender() {
+        const box = document.getElementById('magLijst');
+        if (!box) return;
+        const m = this._magState();
+        box.innerHTML = m.lijst.length ? m.lijst.map((r) => this._magRijHtml(r)).join('') : '<div class="mag-leeg" id="magLeeg">Nog niets gescand in deze reeks.</div>';
+    },
+    _magRijHtml(r) {
+        const m = this._magState(), e = (s) => this._magEsc(s), k = e(r.k);
+        let kop, info, infoKlasse = '', onder = '';
+        if (r.wacht) {
+            kop = 'Code ' + e(r.code);
+            info = e(r.fout || 'Wordt opgezocht…');
+            if (r.fout) onder = '<button type="button" class="mag-opnieuw" onclick="app.magOpnieuw(\'' + k + '\')">Opnieuw opzoeken</button>';
+        } else if (r.onbekend) {
+            kop = 'Onbekende code';
+            info = (r.ean ? 'EAN ' : 'Code ') + e(r.code) + ' · nog niet gekoppeld';
+            infoKlasse = ' paars';
+            onder = '<button type="button" class="mag-koppel" onclick="app.magKoppel(\'' + k + '\')">Koppelen aan een artikel</button>';
+        } else {
+            kop = e(r.art.naam);
+            info = e(this._magInfo(r.art));
+            const h = this._magHint(r, m.modus);
+            onder = '<div class="mag-rij-voet"><span class="mag-hint' + (h.k ? ' ' + h.k : '') + '" id="magHint-' + k + '">' + e(h.t) + '</span>' +
+                '<span class="mag-stap" role="group" aria-label="Aantal">' +
+                '<button type="button" aria-label="Minder" onclick="app.magStap(\'' + k + '\',-1)">−</button>' +
+                '<input id="magN-' + k + '" type="number" inputmode="decimal" step="any" min="0" value="' + e(this._magRond(r.n)) + '" aria-label="Aantal" oninput="app.magTypN(\'' + k + '\', this.value)" onchange="app.magZetN(\'' + k + '\', this.value)">' +
+                '<button type="button" aria-label="Meer" onclick="app.magStap(\'' + k + '\',1)">+</button>' +
+                '</span></div>';
+        }
+        return '<div class="mag-rij' + (r.onbekend ? ' onbekend' : '') + (r.wacht ? ' wacht' : '') + '" id="magRij-' + k + '">' +
+            '<div class="mag-rij-kop"><div class="mag-rij-tekst"><span class="mag-naam">' + kop + '</span><span class="mag-info' + infoKlasse + '">' + info + '</span></div>' +
+            '<button type="button" class="mag-weg" aria-label="Weghalen: ' + kop + '" onclick="app.magWeg(\'' + k + '\')">×</button></div>' +
+            onder + '</div>';
+    },
+    _magRijNieuw(r) {
+        const box = document.getElementById('magLijst');
+        if (!box) return;
+        const leeg = document.getElementById('magLeeg');
+        if (leeg) leeg.remove();
+        box.insertAdjacentHTML('afterbegin', this._magRijHtml(r));
+    },
+    /** Eén regel bijwerken. Typ je net in het aantal van die regel, dan blijft het vak staan (alleen de hint verandert). */
+    _magRijBij(r) {
+        const el = document.getElementById('magRij-' + r.k);
+        if (!el) { this._magRijNieuw(r); return; }
+        const act = document.activeElement;
+        if (act && act.id === 'magN-' + r.k && r.art) { this._magHintBij(r); return; }
+        el.outerHTML = this._magRijHtml(r);
+    },
+    _magHintBij(r) {
+        const h = this._magHint(r, this._magState().modus);
+        const el = document.getElementById('magHint-' + r.k);
+        if (el) { el.textContent = h.t; el.className = 'mag-hint' + (h.k ? ' ' + h.k : ''); }
+    },
+    _magRijWeg(k) {
+        const el = document.getElementById('magRij-' + k);
+        if (el) el.remove();
+        if (!this._magState().lijst.length) this._magLijstRender();
+    },
+    _magFlits(k) {
+        const el = document.getElementById('magRij-' + k);
+        if (!el) return;
+        el.classList.remove('flits');
+        void el.offsetWidth;
+        el.classList.add('flits');
+    },
+    _magVoetBij() {
+        const m = this._magState();
+        const n = m.lijst.filter((r) => r.art && !r.onbekend && !r.wacht).length;
+        const b = document.getElementById('magKlaarKnop');
+        if (!b) return;
+        b.disabled = !n || !!this._magBezig;
+        b.textContent = this._magBezig ? 'Bewaren…' : (n ? 'Klaar · ' + n + (n === 1 ? ' artikel' : ' artikels') : 'Klaar');
+    },
+    magWeg(k) {
+        const m = this._magState();
+        const i = m.lijst.findIndex((r) => r.k === k);
+        if (i < 0) return;
+        m.lijst.splice(i, 1);
+        this._magRijWeg(k);
+        this._magVoetBij();
+        this._magBewaar();
+    },
+    magStap(k, richting) {
+        const m = this._magState();
+        const r = m.lijst.find((x) => x.k === k && x.art);
+        if (!r) return;
+        const stap = this._magStap(r, m.modus);
+        const onder = m.modus === 'tel' ? 0 : stap;
+        r.n = this._magRond(Math.max(onder, r.n + richting * stap));
+        const inp = document.getElementById('magN-' + k);
+        if (inp) inp.value = String(this._magRond(r.n));
+        this._magHintBij(r);
+        this._magBewaar();
+    },
+    _magLeesN(v, modus) {
+        const n = Number(String(v == null ? '' : v).replace(',', '.'));
+        if (!isFinite(n) || n < 0) return null;
+        if (modus !== 'tel' && n < 0.001) return null;
+        return this._magRond(Math.min(n, 1e6));
+    },
+    magTypN(k, v) {
+        const m = this._magState();
+        const r = m.lijst.find((x) => x.k === k && x.art);
+        if (!r) return;
+        const n = this._magLeesN(v, m.modus);
+        if (n == null) return;
+        r.n = n;
+        this._magHintBij(r);
+        this._magBewaar();
+    },
+    magZetN(k, v) {
+        const m = this._magState();
+        const r = m.lijst.find((x) => x.k === k && x.art);
+        if (!r) return;
+        const n = this._magLeesN(v, m.modus);
+        if (n != null) r.n = n;
+        const inp = document.getElementById('magN-' + k);
+        if (inp) inp.value = String(this._magRond(r.n));
+        this._magHintBij(r);
+        this._magBewaar();
+    },
+    async magKiesModus(k) {
+        const m = this._magState();
+        const nieuw = this.MAG_MODI.find((x) => x.k === k);
+        if (!nieuw || (m.modus === k && !m.klaar)) return;
+        if (m.klaar) { m.klaar = null; m.modus = k; this._magBewaar(); this._magRender(); this._magCamStart(); if (k === 'mee') this._magWervenLaden(); return; }
+        const arts = m.lijst.filter((r) => r.art && !r.onbekend);
+        if (arts.length) {
+            const oud = (this.MAG_MODI.find((x) => x.k === m.modus) || {}).naam || '';
+            const ok = await QEClock._showConfirmModal('Wisselen naar ' + nieuw.naam + '?',
+                (arts.length === 1 ? 'Het gescande artikel blijft' : 'De ' + arts.length + ' gescande artikels blijven') + ' in de lijst, maar de aantallen van <b>' + this._magEsc(oud) + '</b> worden opnieuw voorgesteld voor <b>' + this._magEsc(nieuw.naam) + '</b>.',
+                'Wisselen', 'Annuleren');
+            if (!ok) return;
+        }
+        m.modus = k;
+        m.kid = null;
+        m.lijst.forEach((r) => { if (r.art && !r.onbekend) r.n = this._magRond(this._magStartN(r, k)); });
+        this._magBewaar();
+        this._magRender();
+        if (k === 'mee') this._magWervenLaden();
+    },
+
+    // ---- een code verwerken (camera, scanner van de gsm, codevak, handscanner) ----
+    async _magCode(ruw, getypt) {
+        const m = this._magState();
+        const code = this._magSchoon(ruw).slice(0, 120);
+        if (!code) return;
+        if (m.klaar) { m.klaar = null; this._magRender(); this._magCamStart(); }
+        const sl = this._magCodeSl(code);
+        let r = m.lijst.find((x) => Array.isArray(x.codes) && x.codes.indexOf(sl) >= 0);
+        if (!r && this._magCodeMem) { const id = this._magCodeMem.get(sl); if (id) r = m.lijst.find((x) => x.art && x.art.id === id); }
+        if (r) {
+            if (r.wacht) { r.extra = (r.extra || 0) + 1; this._magMeld('Wordt nog opgezocht…', 'wacht'); this._magBewaar(); if (r.fout) this._magOpzoeken(r); return; }
+            if (r.onbekend) { this._magMeld('Onbekende code · koppel ze eerst aan een artikel', 'onbekend'); this._magFlits(r.k); return; }
+            const stap = this._magStap(r, m.modus);
+            r.n = this._magRond(r.n + stap);
+            if (Array.isArray(r.codes) && r.codes.indexOf(sl) < 0) r.codes.push(sl);
+            this._magRijBij(r);
+            this._magFlits(r.k);
+            this._magBewaar();
+            this._magMeld('+' + this._magFmt(stap) + ' · ' + r.art.naam, 'ok');
+            this._magTril('nfcRead');
+            return;
+        }
+        r = { k: this._magNieuwK(), code, codes: [sl], wacht: true, extra: 0, t: Date.now(), getypt: !!getypt };
+        m.lijst.unshift(r);
+        this._magRijNieuw(r);
+        this._magVoetBij();
+        this._magBewaar();
+        await this._magOpzoeken(r);
+    },
+    async _magOpzoeken(r) {
+        const m = this._mag;
+        if (!m || !r || r.bezig) return;
+        r.bezig = true;
+        let j = null, fout = null;
+        try { j = await this._magApi('shop-app-stk-code?c=' + encodeURIComponent(r.code), { ms: 10000 }); }
+        catch (e) { fout = e; }
+        r.bezig = false;
+        if (m !== this._mag || m.lijst.indexOf(r) < 0) return;   // de reeks of de regel is intussen weg
+        if (fout) {
+            r.fout = fout.code === 'net' ? 'Geen verbinding · nog niet opgezocht' : (fout.message || 'Opzoeken mislukt');
+            if (fout.code === 'sessie' || fout.code === 'uit' || fout.code === 'oud') this._magBanner(fout.message, fout.code);
+            this._magRijBij(r);
+            this._magBewaar();
+            this._magMeld(r.fout, 'fout');
+            this._magTril('error');
+            // kwam er intussen verbinding (of een nieuwe scan) terwijl deze vraag nog liep: meteen opnieuw; anders straks vanzelf
+            if (fout.code === 'net') {
+                if (r.nogEens) { r.nogEens = false; setTimeout(() => this._magOpzoeken(r), 300); }
+                else this._magHerkansingPlan();
+            }
+            return;
+        }
+        r.nogEens = false;
+        this._magBanner('');
+        r.wacht = false;
+        r.fout = '';
+        if (j.onbekend) {
+            r.onbekend = true;
+            r.ean = j.ean || '';
+            r.cand = (Array.isArray(j.arts) ? j.arts : []).filter((a) => a && a.id).slice(0, 6);
+            r.web = (Array.isArray(j.web) ? j.web : []).slice(0, 6);
+            this._magRijBij(r);
+            this._magVoetBij();
+            this._magBewaar();
+            this._magMeld('Onbekende code · koppel ze aan een artikel', 'onbekend');
+            this._magTril('error');
+            return;
+        }
+        this._magArtZet(r, j.art, Number(j.per) || 1);
+    },
+    /** Een regel krijgt zijn artikel. Staat dat artikel al in de lijst (met een andere code), dan telt het daar bij. */
+    _magArtZet(r, art, per) {
+        const m = this._mag;
+        if (!m || !art || !art.id) return;
+        this._magCodeMem = this._magCodeMem || new Map();
+        (r.codes || []).forEach((c) => this._magCodeMem.set(c, art.id));
+        const extra = Number(r.extra) || 0;
+        const ander = m.lijst.find((x) => x !== r && x.art && x.art.id === art.id);
+        if (ander) {
+            ander.art = art;
+            ander.n = this._magRond(ander.n + this._magStap(ander, m.modus) * (1 + extra));
+            ander.codes = Array.from(new Set((ander.codes || []).concat(r.codes || [])));
+            m.lijst.splice(m.lijst.indexOf(r), 1);
+            this._magRijWeg(r.k);
+            this._magRijBij(ander);
+            this._magFlits(ander.k);
+        } else {
+            r.onbekend = false; r.cand = null; r.web = null; r.ean = '';
+            r.art = art;
+            r.per = per > 0 ? per : 1;
+            r.n = this._magRond(this._magStartN(r, m.modus) + this._magStap(r, m.modus) * extra);
+            r.extra = 0;
+            this._magRijBij(r);
+            this._magFlits(r.k);
+        }
+        this._magVoetBij();
+        this._magBewaar();
+        this._magMeld('✓ ' + art.naam, 'ok');
+        this._magTril('nfcRead');
+    },
+    magOpnieuw(k) {
+        const r = this._magState().lijst.find((x) => x.k === k && x.wacht);
+        if (!r) return;
+        r.fout = '';
+        this._magRijBij(r);
+        this._magOpzoeken(r);
+    },
+    /** Codes die nog niet opgezocht konden worden (geen verbinding): opnieuw proberen. */
+    _magOpzoekenWacht() {
+        const m = this._mag;
+        if (!m) return;
+        m.lijst.filter((r) => r.wacht).slice(0, 10).forEach((r) => { if (r.bezig) r.nogEens = true; else this._magOpzoeken(r); });
+    },
+    /** Zonder verbinding: om de 10 seconden opnieuw proberen zolang het magazijnscherm open is (en bij het event "online"). */
+    _magHerkansingPlan() {
+        if (this._magHerkansT) return;
+        this._magHerkansT = setTimeout(() => {
+            this._magHerkansT = null;
+            if (this.currentScreen !== 'screenMagazijn' || document.hidden) return;
+            this._magOpzoekenWacht();
+        }, 10000);
+    },
+    _magTril(soort) { try { if (window.QEMarble && typeof QEMarble.haptic === 'function') QEMarble.haptic(soort); } catch (_) {} },
+    _magMeld(tekst, soort) {
+        const el = document.getElementById('magCamMelding');
+        if (!el) return;
+        el.textContent = tekst;
+        el.className = 'mag-cam-melding zicht ' + (soort || '');
+        clearTimeout(this._magMeldTimer);
+        this._magMeldTimer = setTimeout(() => { el.className = 'mag-cam-melding'; }, 1800);
+    },
+
+    // ---- het codevak en een handscanner (PDA: tikt de code + Enter) ----
+    magCodeToets(e) {
+        if (e && (e.key === 'Enter' || e.keyCode === 13)) { e.preventDefault(); this.magCodeOk(); }
+    },
+    magCodeOk() {
+        const inp = document.getElementById('magCode');
+        if (!inp) return;
+        const v = inp.value;
+        inp.value = '';
+        if (this._magSchoon(v)) this._magCode(v, true);
+    },
+    /** Een handscanner zonder codevak in focus: snelle toetsen (minder dan 80 ms ertussen) + Enter = een code. Een mens typt trager. */
+    _magToetsenAan() {
+        if (this._magToetsFn) return;
+        this._magToetsBuf = '';
+        this._magToetsT = 0;
+        this._magToetsFn = (e) => {
+            if (this.currentScreen !== 'screenMagazijn') return;
+            const doel = e.target;
+            if (doel && doel.id === 'magCode') return;
+            if (doel && (doel.tagName === 'INPUT' || doel.tagName === 'TEXTAREA' || doel.tagName === 'SELECT' || doel.isContentEditable)) return;
+            if (document.getElementById('magKoppelSheet') || document.getElementById('magWerfSheet')) return;
+            const nu = Date.now();
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                const buf = this._magToetsBuf;
+                this._magToetsBuf = '';
+                if (buf.length >= 3 && nu - this._magToetsT < 400) { e.preventDefault(); this._magCode(buf, false); }
+                return;
+            }
+            if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                if (nu - this._magToetsT > 80) this._magToetsBuf = '';
+                this._magToetsBuf += e.key;
+                this._magToetsT = nu;
+            }
+        };
+        document.addEventListener('keydown', this._magToetsFn, true);
+    },
+
+    // ---- de camera (blijft open; zelfde herkenning als de etiketscanner: BarcodeDetector → ZXing → jsQR) ----
+    _magCamToon(stand, extra) {
+        const t = document.getElementById('magCamTekst'), vak = document.getElementById('magVak'), video = document.getElementById('magVideo');
+        if (!t || !vak) return;
+        vak.dataset.stand = stand;
+        if (video) video.style.visibility = stand === 'loopt' ? 'visible' : 'hidden';
+        const teksten = {
+            start: 'Camera starten…',
+            loopt: 'De camera blijft open: scan het ene vak na het andere',
+            pauze: 'Camera gepauzeerd · tik om verder te scannen',
+            fout: 'Geen live camera in deze app-versie. Gebruik de scanner van de gsm of typ de code.',
+            herkenning: 'Codes lezen lukt niet op deze gsm. Gebruik de scanner van de gsm of typ de code.',
+        };
+        t.textContent = extra || teksten[stand] || '';
+    },
+    magCamTik() {
+        const c = this._magCam;
+        if (c && (c.stream || c.start)) return;
+        const m = this._magState();
+        if (m.klaar) return;
+        this._magCamStart();
+    },
+    magCamPauze() {
+        if (this._magCam && (this._magCam.stream || this._magCam.start)) { this._magCamStop(); this._magCamToon('pauze'); }
+        else this._magCamStart();
+    },
+    _magCamStop() {
+        const c = this._magCam;
+        this._magCam = null;
+        if (!c) return;
+        if (c.timer) clearTimeout(c.timer);
+        if (c.stream) { try { c.stream.getTracks().forEach((t) => t.stop()); } catch (_) {} }
+        const video = document.getElementById('magVideo');
+        if (video) { try { video.srcObject = null; } catch (_) {} video.style.visibility = 'hidden'; }
+    },
+    async _magCamStart() {
+        if (this.currentScreen !== 'screenMagazijn') return;
+        if (this._magCam && (this._magCam.stream || this._magCam.start)) return;
+        const video = document.getElementById('magVideo');
+        if (!video) return;
+        const c = { start: true, stream: null, timer: null, laatste: '', laatsteT: 0, rustTot: 0, sinds: Date.now(), lastHit: Date.now() };
+        this._magCam = c;
+        this._magCamToon('start');
+        try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('geen camera-API');
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+            if (this._magCam !== c || this.currentScreen !== 'screenMagazijn' || !document.getElementById('magVideo')) { try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {} return; }
+            c.stream = stream;
+            c.start = false;
+            video.srcObject = stream;
+            const toon = () => { if (this._magCam === c) this._magCamToon('loopt'); };
+            video.addEventListener('playing', toon, { once: true });
+            await video.play().catch(() => {});
+            if (video.readyState >= 2) toon();
+            let detector = null, zx = false;
+            if (window.BarcodeDetector) {
+                try { detector = new BarcodeDetector({ formats: this.GAS_SCAN_FORMATEN }); }
+                catch (_) { try { detector = new BarcodeDetector({ formats: ['qr_code', 'code_128', 'ean_13'] }); } catch (_2) { detector = null; } }
+            }
+            if (!detector) { try { await this._gfLaadZxing(); zx = true; } catch (_) { zx = false; } }
+            if (!detector && !zx) { try { await this._qrLaadJsqr(); } catch (_) {} }
+            if (this._magCam !== c) return;
+            if (!detector && !zx && !window.jsQR) { this._magCamStop(); this._magCamToon('herkenning'); return; }
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            let bezig = false, detFouten = 0;
+            const stap = async () => {
+                if (this._magCam !== c || !c.stream) return;
+                const nu = Date.now();
+                if (nu - c.lastHit > this.MAG_PAUZE_MS) { this._magCamStop(); this._magCamToon('pauze'); return; }
+                const blad = document.getElementById('magKoppelSheet') || document.getElementById('magWerfSheet');
+                if (!bezig && !blad && nu >= c.rustTot && video.readyState >= 2 && (video.videoWidth || 0) > 0) {
+                    bezig = true;
+                    try {
+                        const k = this._magKader(video);
+                        canvas.width = k.dw; canvas.height = k.dh;
+                        ctx.drawImage(video, k.sx, k.sy, k.sw, k.sh, 0, 0, k.dw, k.dh);
+                        let tekst = null;
+                        if (detector) {
+                            const res = await detector.detect(canvas);
+                            if (res && res[0]) tekst = res[0].rawValue;
+                        } else if (zx) {
+                            tekst = this._gfZxingDecode(canvas);
+                        } else if (window.jsQR) {
+                            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            const q = jsQR(img.data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+                            if (q && q.data) tekst = q.data;
+                        }
+                        if (tekst) this._magTreffer(tekst);
+                    } catch (_) {
+                        if (detector && ++detFouten >= 5) { detector = null; try { await this._gfLaadZxing(); zx = true; } catch (_2) {} }
+                    }
+                    bezig = false;
+                }
+                if (this._magCam === c) c.timer = setTimeout(stap, detector ? 150 : 220);
+            };
+            stap();
+        } catch (e) {
+            if (this._magCam === c) this._magCam = null;
+            // geweigerd (toestemming) of geen camera: een andere uitleg dan een app-versie zonder camera in de app
+            const naam = String((e && e.name) || '');
+            if (naam === 'NotAllowedError' || naam === 'SecurityError') this._magCamToon('fout', 'De app mag de camera niet gebruiken. Geef toestemming bij Profiel → App bijwerken → Toestel & toestemmingen, of typ de code.');
+            else if (naam === 'NotFoundError' || naam === 'OverconstrainedError' || naam === 'NotReadableError') this._magCamToon('fout', 'De camera is niet beschikbaar. Tik hier om het opnieuw te proberen, of typ de code.');
+            else this._magCamToon('fout');
+        }
+    },
+    /** Het zichtbare deel van het beeld (object-fit: cover) = wat de decoder ziet. */
+    _magKader(video) {
+        const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+        let sx = 0, sy = 0, sw = vw, sh = vh;
+        try {
+            const b = document.getElementById('magVak').getBoundingClientRect();
+            if (b.width > 0 && b.height > 0) {
+                const schaal = Math.max(b.width / vw, b.height / vh);
+                sw = Math.min(vw, Math.round(b.width / schaal));
+                sh = Math.min(vh, Math.round(b.height / schaal));
+                sx = Math.max(0, Math.round((vw - sw) / 2));
+                sy = Math.max(0, Math.round((vh - sh) / 2));
+            }
+        } catch (_) {}
+        const dw = Math.min(1024, sw), dh = Math.max(1, Math.round(sh * dw / sw));
+        return { sx, sy, sw, sh, dw, dh };
+    },
+    /** Een gelezen code. Dezelfde code die in beeld blijft, telt maar één keer (eerst 2,5 s iets anders of niets in beeld). */
+    _magTreffer(tekst) {
+        const t = this._magSchoon(tekst);
+        const c = this._magCam;
+        if (!t || !c) return;
+        const nu = Date.now();
+        if (t === c.laatste && nu - c.laatsteT < 2500) { c.laatsteT = nu; return; }
+        c.laatste = t; c.laatsteT = nu; c.lastHit = nu; c.rustTot = nu + 900;
+        this._magCode(t, false);
+    },
+    /** De scanner van de gsm (Google, uit de APK): één code, daarna terug naar de lijst. */
+    magNatief() {
+        if (!this._gfScanNatiefKan() || this._gfScanNatiefKapot) { this.toast('De scanner van de gsm werkt hier niet: richt de camera hierboven op de code of typ ze', true); return; }
+        this._magCamStop();
+        this._gfScanDoel = 'magazijn';
+        this._gfScanNatiefBezig = true;
+        try { QEBridge.scanBarcode(); }
+        catch (_) { this._gfScanNatiefBezig = false; this._gfScanDoel = 'fiche'; this._magCamStart(); }
+    },
+    _magNatiefTerug(tekst, fout) {
+        if (fout && fout !== 'geannuleerd') { this._gfScanNatiefKapot = true; this.toast('Scanner van de gsm niet beschikbaar (' + fout + ')', true); }
+        if (tekst) this._magCode(String(tekst), false);
+        if (this.currentScreen === 'screenMagazijn' && this._mag && !this._mag.klaar) this._magCamStart();
+    },
+
+    // ---- meenemen: naar welke werf? ----
+    async _magWervenLaden(vers) {
+        if (!vers && this._magWerven && Date.now() - this._magWerven.t < 10 * 60e3) { this._magWerfRender(); return; }
+        if (this._magWervenBezig) return;
+        this._magWervenBezig = true;
+        this._magWerfRender();
+        let ctx = null;
+        try { ctx = await this._mbCtx(null); } catch (_) { ctx = null; }
+        this._magWervenBezig = false;
+        this._magWerven = { t: Date.now(), werven: (ctx && Array.isArray(ctx.werven)) ? ctx.werven : [], projecten: (ctx && Array.isArray(ctx.projecten)) ? ctx.projecten : [] };
+        this._magWerfRender();
+    },
+    _magWerfSleutel(w) { return w ? (w.projectId ? 'p' + w.projectId : (w.orderId ? 'o' + w.orderId : (w.planningId ? 'pl' + w.planningId : 'v' + String(w.naam || '').toLowerCase()))) : ''; },
+    _magWerfRender() {
+        const box = document.getElementById('magWerf');
+        if (!box) return;
+        const m = this._magState();
+        if (m.modus !== 'mee') { box.innerHTML = ''; return; }
+        const e = (s) => this._magEsc(s);
+        const lijst = (this._magWerven && this._magWerven.werven) || [];
+        const gekozen = m.werf ? this._magWerfSleutel(m.werf) : '';
+        const chips = lijst.slice(0, 8).map((w, i) => {
+            const aan = this._magWerfSleutel(w) === gekozen;
+            return '<button type="button" class="mag-chip' + (aan ? ' aan' : '') + '" aria-pressed="' + (aan ? 'true' : 'false') + '" onclick="app.magWerfKies(' + i + ')">' + e(w.naam) + (w.projectNr ? ' <small>' + e(w.projectNr) + '</small>' : '') + '</button>';
+        });
+        if (m.werf && !lijst.slice(0, 8).some((w) => this._magWerfSleutel(w) === gekozen)) {
+            chips.unshift('<button type="button" class="mag-chip aan" aria-pressed="true" onclick="app.magWerfZoek()">' + e(m.werf.naam) + (m.werf.projectNr ? ' <small>' + e(m.werf.projectNr) + '</small>' : '') + '</button>');
+        }
+        chips.push('<button type="button" class="mag-chip ander" onclick="app.magWerfZoek()">Andere werf…</button>');
+        const laden = this._magWervenBezig && !lijst.length ? '<span class="mag-werf-laden">Werven laden…</span>' : '';
+        box.innerHTML = '<div class="mag-werf' + (m.werf ? '' : ' leeg') + '" id="magWerfBlok"><span class="mag-werf-kop">Alles in deze reeks gaat naar</span>' +
+            '<div class="mag-chips">' + chips.join('') + laden + '</div></div>';
+    },
+    _magWerfZet(w) {
+        const m = this._magState();
+        if (!w || !w.naam) return;
+        m.werf = { key: this._magWerfSleutel(w), naam: String(w.naam).slice(0, 120), projectId: w.projectId ? String(w.projectId) : '', projectNr: w.projectNr || '', orderId: w.orderId ? String(w.orderId) : '', orderNr: w.orderNr || '', planningId: w.planningId ? String(w.planningId) : '', t: Date.now() };
+        m.kid = null;
+        this._magBewaar();
+        this._magWerfRender();
+    },
+    magWerfKies(i) {
+        const w = ((this._magWerven && this._magWerven.werven) || [])[i];
+        if (w) this._magWerfZet(w);
+    },
+    magWerfZoek() {
+        this.magWerfSluit();
+        const ov = document.createElement('div');
+        ov.id = 'magWerfSheet';
+        ov.className = 'mag-sheet-ov';
+        ov.innerHTML = '<div class="mag-sheet" role="dialog" aria-modal="true" aria-labelledby="magWerfKop"><span class="mag-greep" aria-hidden="true"></span>' +
+            '<h2 id="magWerfKop">Naar welke werf?</h2>' +
+            '<label for="magWerfZoekVak" class="mag-sr">Zoek een werf</label>' +
+            '<input id="magWerfZoekVak" type="search" autocomplete="off" placeholder="Naam, projectnummer of gemeente" oninput="app.magWerfFilter(this.value)">' +
+            '<div id="magWerfLijst" class="mag-kieslijst"></div>' +
+            '<button type="button" class="btn btn-outline btn-full" onclick="app.magWerfSluit()">Annuleren</button></div>';
+        ov.onclick = (e) => { if (e.target === ov) this.magWerfSluit(); };
+        document.body.appendChild(ov);
+        if (!this._magWerven) this._magWervenLaden();
+        this.magWerfFilter('');
+    },
+    magWerfSluit() { const s = document.getElementById('magWerfSheet'); if (s) s.remove(); },
+    magWerfFilter(q) {
+        const box = document.getElementById('magWerfLijst');
+        if (!box) return;
+        const e = (s) => this._magEsc(s);
+        const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[^a-z0-9 ]/g, ' ');
+        const woorden = norm(q).split(/\s+/).filter(Boolean);
+        const bron = [].concat((this._magWerven && this._magWerven.werven) || [], (this._magWerven && this._magWerven.projecten) || []);
+        const gezien = new Set();
+        const lijst = [];
+        for (const w of bron) {
+            const sl = this._magWerfSleutel(w);
+            if (gezien.has(sl)) continue;
+            const t = norm([w.naam, w.projectNr, w.orderNr, w.plaats, w.adres].join(' '));
+            if (woorden.length && !woorden.every((x) => t.indexOf(x) >= 0)) continue;
+            gezien.add(sl);
+            lijst.push(w);
+            if (lijst.length >= 30) break;
+        }
+        this._magWerfKeuzes = lijst;
+        const typ = this._magSchoon(q);
+        let h = lijst.map((w, i) => '<button type="button" class="mag-kies" onclick="app.magWerfKiesUit(' + i + ')"><span class="mag-kies-naam">' + e(w.naam) + '</span><span class="mag-kies-info">' +
+            e([w.projectNr || w.orderNr, w.plaats, w.wanneer].filter(Boolean).join(' · ') || 'werf') + '</span></button>').join('');
+        if (typ.length >= 3) h += '<button type="button" class="mag-kies ander" onclick="app.magWerfVrij()"><span class="mag-kies-naam">Andere werf: ' + e(typ) + '</span><span class="mag-kies-info">staat niet in de lijst</span></button>';
+        if (!h) h = '<div class="mag-leeg">' + (this._magWervenBezig ? 'Werven laden…' : 'Typ de naam van de werf.') + '</div>';
+        box.innerHTML = h;
+    },
+    magWerfKiesUit(i) {
+        const w = (this._magWerfKeuzes || [])[i];
+        if (!w) return;
+        this._magWerfZet(w);
+        this.magWerfSluit();
+    },
+    magWerfVrij() {
+        const inp = document.getElementById('magWerfZoekVak');
+        const naam = this._magSchoon(inp && inp.value).slice(0, 120);
+        if (naam.length < 3) return;
+        this._magWerfZet({ naam });
+        this.magWerfSluit();
+    },
+
+    // ---- een onbekende code koppelen ----
+    magKoppel(k) {
+        const r = this._magState().lijst.find((x) => x.k === k && x.onbekend);
+        if (!r) return;
+        this.magKoppelSluit();
+        this._magKoppelK = k;
+        this._magKoppelZoekNr = 0;
+        const e = (s) => this._magEsc(s);
+        const ov = document.createElement('div');
+        ov.id = 'magKoppelSheet';
+        ov.className = 'mag-sheet-ov';
+        ov.innerHTML = '<div class="mag-sheet" role="dialog" aria-modal="true" aria-labelledby="magKoppelKop"><span class="mag-greep" aria-hidden="true"></span>' +
+            '<h2 id="magKoppelKop">Deze code kennen we nog niet</h2>' +
+            '<p class="mag-sheet-tekst">' + (r.ean ? 'EAN ' : 'Code ') + '<b>' + e(r.code) + '</b>. Kies het artikel; de app onthoudt de code voor de volgende keer.</p>' +
+            '<label for="magKoppelZoekVak" class="mag-sr">Zoek het artikel</label>' +
+            '<input id="magKoppelZoekVak" type="search" autocomplete="off" placeholder="Zoek op naam, nummer of vak, bv. flexcon" oninput="app.magKoppelZoek(this.value)">' +
+            '<div id="magKoppelLijst" class="mag-kieslijst"></div>' +
+            '<button type="button" class="btn btn-outline btn-full" onclick="app.magKoppelSluit()">Annuleren</button></div>';
+        ov.onclick = (ev) => { if (ev.target === ov) this.magKoppelSluit(); };
+        document.body.appendChild(ov);
+        this._magKoppelToon({ arts: r.cand || [], web: r.web || [], eerste: true });
+    },
+    magKoppelSluit() {
+        const s = document.getElementById('magKoppelSheet');
+        if (s) s.remove();
+        clearTimeout(this._magKoppelTimer);
+        this._magKoppelK = null;
+        // een open vraag "waar ligt het?" = geannuleerd
+        if (this._magPlaatsOk) { const ok = this._magPlaatsOk; this._magPlaatsOk = null; try { ok(null); } catch (_) {} }
+    },
+    /** Lijst in het koppelblad: eerst wat al in de stock staat, dan de webshop. Een nieuw stockartikel maken mag alleen het bureel. */
+    _magKoppelToon(res) {
+        const box = document.getElementById('magKoppelLijst');
+        if (!box) return;
+        const e = (s) => this._magEsc(s);
+        const bureel = this._adminIsBureel();
+        const arts = (res.arts || []).filter((a) => a && a.id);
+        const web = (res.web || []).filter((w) => w && w.lev && w.c);
+        this._magKoppelKeuzes = { arts, web };
+        let h = '';
+        if (arts.length) {
+            h += '<div class="mag-kies-kop">' + (res.eerste ? 'Hoort de code bij een van deze?' : 'In de stock') + '</div>';
+            h += arts.map((a, i) => '<button type="button" class="mag-kies" onclick="app.magKoppelKies(\'a\',' + i + ')"><span class="mag-kies-naam">' + e(a.naam) + '</span><span class="mag-kies-info">' + e(this._magInfo(a)) + '</span></button>').join('');
+        }
+        const inStock = web.filter((w) => w.art || w.mag), nieuw = web.filter((w) => !w.art && !w.mag);
+        if (inStock.length) {
+            h += '<div class="mag-kies-kop">In de stock (uit de webshop)</div>';
+            h += inStock.map((w) => { const i = web.indexOf(w); return '<button type="button" class="mag-kies" onclick="app.magKoppelKies(\'w\',' + i + ')"><span class="mag-kies-naam">' + e(this._magWebNaam(w)) + '</span><span class="mag-kies-info">' + e([this.MAG_LEV[w.lev] || w.lev, w.c, w.mag && w.mag.vak ? 'vak ' + w.mag.vak : (w.mag && w.mag.plaats) || ''].filter(Boolean).join(' · ')) + '</span></button>'; }).join('');
+        }
+        if (nieuw.length) {
+            h += '<div class="mag-kies-kop">Nog niet in de stock</div>';
+            if (bureel) {
+                h += nieuw.map((w) => { const i = web.indexOf(w); return '<button type="button" class="mag-kies nieuw" onclick="app.magKoppelKies(\'w\',' + i + ')"><span class="mag-kies-naam">' + e(this._magWebNaam(w)) + '</span><span class="mag-kies-info">' + e([w.m, this.MAG_LEV[w.lev] || w.lev, w.c].filter(Boolean).join(' · ')) + ' · nieuw in de stock</span></button>'; }).join('');
+            } else {
+                h += '<div class="mag-leeg">Staat het artikel niet in de stock? Vraag het bureel om het toe te voegen.</div>';
+            }
+        }
+        if (!h) h = '<div class="mag-leeg">' + (res.eerste ? 'Zoek het artikel hierboven.' : (res.fout ? e(res.fout) : 'Niets gevonden. Probeer een ander woord of het nummer.')) + '</div>';
+        box.innerHTML = h;
+    },
+    magKoppelZoek(q) {
+        clearTimeout(this._magKoppelTimer);
+        const t = this._magSchoon(q);
+        if (t.length < 2) {
+            const r = this._magState().lijst.find((x) => x.k === this._magKoppelK);
+            this._magKoppelToon({ arts: (r && r.cand) || [], web: (r && r.web) || [], eerste: true });
+            return;
+        }
+        const nr = ++this._magKoppelZoekNr;
+        this._magKoppelTimer = setTimeout(async () => {
+            const box = document.getElementById('magKoppelLijst');
+            if (box && !box.querySelector('.mag-kies')) box.innerHTML = '<div class="mag-leeg">Zoeken…</div>';
+            let j = null, fout = null;
+            try { j = await this._magApi('shop-app-stk-zoek?q=' + encodeURIComponent(t), { ms: 12000 }); } catch (e) { fout = e; }
+            if (nr !== this._magKoppelZoekNr || !document.getElementById('magKoppelSheet')) return;
+            if (fout) { this._magKoppelToon({ arts: [], web: [], fout: fout.code === 'net' ? 'Geen verbinding' : fout.message }); return; }
+            this._magKoppelToon({ arts: j.arts || [], web: j.web || [] });
+        }, 300);
+    },
+    async magKoppelKies(soort, i) {
+        const k = this._magKoppelK;
+        const m = this._magState();
+        const r = m.lijst.find((x) => x.k === k && x.onbekend);
+        const kz = this._magKoppelKeuzes || { arts: [], web: [] };
+        if (!r) { this.magKoppelSluit(); return; }
+        const body = { code: r.code, per: 1, naam: String((this.currentUser && this.currentUser.name) || '').slice(0, 60) };
+        let nieuwArt = false;
+        if (soort === 'a') {
+            const a = kz.arts[i];
+            if (!a) return;
+            body.art = a.id;
+        } else {
+            const w = kz.web[i];
+            if (!w) return;
+            body.web = { lev: w.lev, c: w.c };
+            if (!w.art && !w.mag) {
+                if (!this._adminIsBureel()) { this.toast('Alleen het bureel kan een nieuw artikel in de stock zetten', true); return; }
+                nieuwArt = true;
+                const plaats = await this._magPlaatsVraag(w);
+                if (plaats == null) return;
+                if (plaats) body.plaats = plaats;
+            } else if (w.art) {
+                delete body.web;
+                body.art = w.art;
+            }
+        }
+        if (this._magKoppelBezig) return;
+        this._magKoppelBezig = true;
+        const box = document.getElementById('magKoppelLijst');
+        if (box) box.classList.add('bezig');
+        let j = null, fout = null;
+        try { j = await this._magApi('shop-app-stk-koppel', { body }); } catch (e) { fout = e; }
+        this._magKoppelBezig = false;
+        if (box) box.classList.remove('bezig');
+        if (fout) { this.toast(fout.code === 'net' ? 'Geen verbinding: koppelen lukte niet' : (fout.message || 'Koppelen lukte niet'), true); return; }
+        this.magKoppelSluit();
+        if (m !== this._mag || m.lijst.indexOf(r) < 0 || !j || !j.art) return;
+        this._magArtZet(r, j.art, 1);
+        this.toast(j.nieuw ? 'Nieuw in de stock: ' + j.art.naam : (nieuwArt ? 'Dit artikel stond al in de stock: de code hoort er nu bij' : 'Gekoppeld: de app herkent deze code voortaan'));
+    },
+    /** Een nieuw stockartikel zonder vak (bv. een pomp op een rek): waar ligt het? null = geannuleerd. */
+    _magPlaatsVraag(w) {
+        return new Promise((ok) => {
+            const box = document.getElementById('magKoppelLijst');
+            if (!box) { ok(null); return; }
+            const e = (s) => this._magEsc(s);
+            this._magPlaatsOk = ok;
+            box.innerHTML = '<div class="mag-kies-kop">Nieuw in de stock</div><div class="mag-nieuw-naam">' + e(this._magWebNaam(w)) + '</div>' +
+                '<label for="magPlaats" class="mag-veldlab">Waar ligt het? (bv. pompenrek)</label>' +
+                '<input id="magPlaats" type="text" maxlength="60" autocomplete="off" placeholder="Laat leeg als het in een vak komt">' +
+                '<div class="mag-rij-knoppen"><button type="button" class="btn btn-outline" onclick="app._magPlaatsAntw(null)">Terug</button>' +
+                '<button type="button" class="btn btn-primary" onclick="app._magPlaatsAntw(document.getElementById(\'magPlaats\').value)">Toevoegen aan de stock</button></div>';
+        });
+    },
+    _magPlaatsAntw(v) {
+        const ok = this._magPlaatsOk;
+        this._magPlaatsOk = null;
+        if (v == null) {
+            const r = this._magState().lijst.find((x) => x.k === this._magKoppelK);
+            this._magKoppelToon({ arts: (r && r.cand) || [], web: (r && r.web) || [], eerste: true });
+            if (ok) ok(null);
+            return;
+        }
+        if (ok) ok(this._magSchoon(v).slice(0, 60));
+    },
+
+    // ---- klaar: één boeking ----
+    async magKlaar() {
+        const m = this._magState();
+        if (this._magBezig || m.klaar) return;
+        const rijen = m.lijst.filter((r) => r.art && !r.onbekend && !r.wacht);
+        if (!rijen.length) { this.toast('Scan eerst een artikel', true); return; }
+        if (m.modus === 'mee' && !m.werf) {
+            this.toast('Kies eerst naar welke werf het materiaal gaat', true);
+            const w = document.getElementById('magWerfBlok');
+            if (w) { try { w.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {} w.classList.remove('flits'); void w.offsetWidth; w.classList.add('flits'); }
+            return;
+        }
+        const open = m.lijst.filter((r) => r.wacht).length, onb = m.lijst.filter((r) => r.onbekend).length;
+        if (open || onb) {
+            const delen = [];
+            if (open) delen.push(open + (open === 1 ? ' code is' : ' codes zijn') + ' nog niet opgezocht');
+            if (onb) delen.push(onb + (onb === 1 ? ' code is' : ' codes zijn') + ' nog niet gekoppeld');
+            const ok = await QEClock._showConfirmModal('Toch bewaren?', this._magEsc(delen.join(' en ')) + '. Die tellen niet mee en blijven in de lijst.', 'Bewaren zonder die codes', 'Terug');
+            if (!ok) return;
+        }
+        const modus = m.modus;
+        const was = {};
+        rijen.forEach((r) => { was[r.art.id] = { n: Number(r.art.n) || 0, geteld: !!r.art.geteld, naam: r.art.naam, eh: r.art.eh || 'st' }; });
+        const regels = rijen.map((r) => ({ art: r.art.id, n: this._magRond(r.n) })).filter((x) => modus === 'tel' ? x.n >= 0 : x.n > 0);
+        const werf = modus === 'mee' && m.werf ? { naam: m.werf.naam, projectNr: m.werf.projectNr || '', orderNr: m.werf.orderNr || '', projectId: m.werf.projectId || '', planningId: m.werf.planningId || '' } : null;
+        if (!m.kid) m.kid = this._magNieuwKid();
+        this._magBewaar();
+        this._magBezig = true;
+        this._magVoetBij();
+        const delen = [];
+        for (let i = 0; i < regels.length; i += 100) delen.push(regels.slice(i, i + 100));
+        const uit = { regels: [], arts: [], fouten: [], werf: '' };
+        let fout = null;
+        try {
+            for (let i = 0; i < delen.length; i++) {
+                const body = { modus, regels: delen[i], kid: delen.length > 1 ? m.kid + '-' + (i + 1) : m.kid, naam: String((this.currentUser && this.currentUser.name) || '').slice(0, 60) };
+                if (werf) body.werf = werf;
+                const j = await this._magApi('shop-app-stk-actie', { body, ms: 20000 });
+                uit.regels.push(...(Array.isArray(j.regels) ? j.regels : delen[i]));
+                uit.arts.push(...(Array.isArray(j.arts) ? j.arts : []));
+                uit.fouten.push(...(Array.isArray(j.fouten) ? j.fouten : []));
+                if (j.werf) uit.werf = j.werf;
+            }
+        } catch (e) { fout = e; }
+        this._magBezig = false;
+        if (fout) {
+            this._magVoetBij();
+            this._magTril('error');
+            if (fout.code === 'sessie' || fout.code === 'uit' || fout.code === 'oud') this._magBanner(fout.message, fout.code);
+            this.toast(fout.code === 'net' ? 'Niet bewaard: geen verbinding. Tik opnieuw op Klaar: er wordt niets dubbel geboekt.' : ('Niet bewaard: ' + (fout.message || 'er ging iets mis')), true);
+            return;
+        }
+        // wat geboekt is, gaat uit de lijst; onbekende en niet opgezochte codes blijven staan
+        const geboekt = new Set(uit.regels.map((x) => x.art));
+        const naArt = {};
+        uit.arts.forEach((a) => { if (a && a.id) naArt[a.id] = a; });
+        m.lijst = m.lijst.filter((r) => !(r.art && !r.onbekend && !r.wacht && geboekt.has(r.art.id)));
+        m.kid = null;
+        const kop = { bij: 'Op de bijbestellijst gezet', mee: 'Afgeboekt op de werf', ont: 'Op stock gezet', tel: 'Telling bewaard' }[modus];
+        const kopSub = modus === 'mee' ? (uit.werf || (werf && werf.naam) || '') : '';
+        const foutVan = {};
+        uit.fouten.forEach((f) => { if (f && f.art) foutVan[f.art] = f.fout || 'niet bewaard'; });
+        const lijnen = uit.regels.filter((x) => !foutVan[x.art]).map((x) => {
+            const w = was[x.art] || {}, na = naArt[x.art] || {};
+            const f = (v) => this._magFmt(v);
+            let sub = '';
+            if (modus === 'mee') sub = na.geteld ? 'nog ' + f(na.n) + ' op stock' : '';
+            else if (modus === 'ont') sub = na.geteld ? 'nu ' + f(na.n) + ' op stock' : 'nog niet geteld';
+            else if (modus === 'tel') sub = w.geteld ? 'was ' + f(w.n) : 'eerste telling';
+            return { tekst: f(x.n) + ' × ' + (w.naam || na.naam || x.art), sub };
+        });
+        const fouten = uit.fouten.map((f) => ({ tekst: ((was[f.art] && was[f.art].naam) || f.art) + ': ' + (f.fout || 'niet bewaard') }));
+        if (modus === 'mee') m.werf = null;   // de volgende reeks kiest opnieuw zijn werf
+        m.klaar = { modus, kop, kopSub, lijnen, fouten, rest: m.lijst.length };
+        this._magBewaar();
+        this._magCamStop();
+        this._magRender();
+        try { window.scrollTo(0, 0); } catch (_) {}
+        this._magTril(fouten.length ? 'error' : 'success');
+    },
+    _magKlaarRender() {
+        const box = document.getElementById('magKlaarScherm');
+        const m = this._magState();
+        if (!box || !m.klaar) return;
+        const e = (s) => this._magEsc(s), k = m.klaar;
+        box.innerHTML = '<div class="mag-ok' + (k.fouten.length && !k.lijnen.length ? ' fout' : '') + '" aria-hidden="true">' +
+            (k.fouten.length && !k.lijnen.length ? '!' : '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>') + '</div>' +
+            '<h2>' + e(k.lijnen.length ? k.kop : 'Niets bewaard') + '</h2>' +
+            (k.kopSub && k.lijnen.length ? '<div class="mag-klaar-sub">' + e(k.kopSub) + '</div>' : '') +
+            k.lijnen.map((l) => '<div class="mag-res"><span>' + e(l.tekst) + '</span>' + (l.sub ? '<small>' + e(l.sub) + '</small>' : '') + '</div>').join('') +
+            k.fouten.map((l) => '<div class="mag-res fout"><span>' + e(l.tekst) + '</span></div>').join('') +
+            (k.rest ? '<div class="mag-res-noot">' + k.rest + (k.rest === 1 ? ' code staat' : ' codes staan') + ' nog in de lijst (niet gekoppeld of niet opgezocht).</div>' : '') +
+            '<button type="button" class="btn btn-primary btn-full mag-nieuw" onclick="app.magNieuweReeks()">Nieuwe reeks</button>';
+    },
+    magNieuweReeks() {
+        const m = this._magState();
+        m.klaar = null;
+        this._magBewaar();
+        this._magRender();
+        this._magCamStart();
+        if (m.modus === 'mee') this._magWervenLaden();
     },
 
     openVoertuigen() {
@@ -12863,6 +14363,7 @@ const app = {
         }
         this._matKoppelRender();
         if (k.stap === 'ok' && this.currentScreen === 'screenGereedschap') this.loadGereedschap();
+        if (k.stap === 'ok' && this.currentScreen === 'screenNfcTags') this.loadNfcTags();   // v431
     },
     _matKoppelFout(r) {
         const k = this._matKoppel;
@@ -14103,6 +15604,7 @@ const app = {
      *  code; fout = 'geannuleerd' (gebruiker sloot de scanner) of een reden. */
     _gfScanNatief(tekst, fout) {
         this._gfScanNatiefBezig = false;
+        if (this._gfScanDoel === 'magazijn') { this._gfScanDoel = 'fiche'; this._magNatiefTerug(tekst, fout); return; }   // v429
         if (tekst) { this._gfScanVerwerk(String(tekst)); return; }
         if (fout && fout !== 'geannuleerd') {
             this._gfScanNatiefKapot = true;   // deze sessie niet meer proberen (module niet beschikbaar)
@@ -15260,7 +16762,7 @@ const app = {
                         + '<div style="font-size:13.5px;font-weight:600;color:var(--ink)">' + esc(e.name || em) + '</div>'
                         + '<div style="font-size:11.5px;color:var(--g3);margin-bottom:7px">' + esc(em) + '</div>'
                         + extraRij
-                        + '<div style="font-size:11.5px;font-weight:600;color:var(--g1);margin:2px 0 4px">Logistiek' + (g.rol === 'bureel' ? '' : ' <span style="font-weight:400">(alleen bekijken)</span>') + (std ? ' <span style="font-weight:400;color:var(--g3)">· standaard</span>' : '') + '</div>'
+                        + '<div style="font-size:11.5px;font-weight:600;color:var(--g1);margin:2px 0 4px">Logistiek' + (g.rol === 'bureel' ? '' : ' <span style="font-weight:400">(alleen bekijken; het magazijn scannen wel)</span>') + (std ? ' <span style="font-weight:400;color:var(--g3)">· standaard</span>' : '') + '</div>'
                         + '<div style="display:flex;gap:16px;flex-wrap:wrap">' + logVinkjes + '</div>' + voertuigRegel + '</div>';
                 }).join('');
             }
@@ -23566,6 +25068,611 @@ const app = {
     },
 
     // ============================================================
+    // v428: "WAT IS ER NIEUW?" — na een update toont de app bij het aanmelden één venster met wat er voor DEZE werknemer
+    // veranderd is (inhoud: js/nieuw.js, per rol). Eén keer per werknemer per update (localStorage
+    // qe_nieuw_gezien_<fiche>); wie op dit toestel nog niets zag, krijgt alles sinds de versie van vóór de update
+    // (qe_nieuw_vorige, gezet bij de update in init). Teruglezen: Profiel → App bijwerken → Wat is er nieuw?
+    // ============================================================
+    _nieuwSleutel() {
+        const u = this.currentUser || {};
+        const e = u.robawsEmployeeId || u.employeeId;
+        return e ? 'qe_nieuw_gezien_' + e : null;
+    },
+    _nieuwRollen() {
+        const r = [];
+        try { const u = RobawsAPI.getLoggedInUser(); if (u && u.role) r.push(u.role); } catch (_e) {}
+        if (this.currentUser && this.currentUser.role) r.push(this.currentUser.role);
+        try { const a = this._activeRole(); if (a) r.push(a); } catch (_e) {}
+        return r.filter((x, i) => r.indexOf(x) === i);
+    },
+    async _nieuwHuidigeVersie() {
+        if (this._wwwVersie > 0) return this._wwwVersie;
+        try { const d = await (await fetch('version.json?_=' + Date.now())).json(); this._wwwVersie = Number(d.version) || 0; } catch (_e) {}
+        return this._wwwVersie || 0;
+    },
+    _nieuwZetGezien(v) {
+        const s = this._nieuwSleutel();
+        if (s && v > 0) { try { localStorage.setItem(s, String(v)); } catch (_e) {} }
+    },
+    _nieuwPlan() {
+        clearTimeout(this._nieuwT);
+        this._nieuwT = setTimeout(() => { this._nieuwControle(0).catch(() => {}); }, 1500);
+    },
+    async _nieuwControle(poging) {
+        if (!window.QENieuw || !this.currentUser || document.getElementById('nieuwVenster')) return;
+        let wissel = false;
+        try { wissel = !!(RobawsAPI.wisselStand && RobawsAPI.wisselStand()); } catch (_e) {}
+        if (wissel) return;          // profiel van een collega bekijken: zijn venster niet opgebruiken
+        const sleutel = this._nieuwSleutel();
+        if (!sleutel) return;
+        const tot = await this._nieuwHuidigeVersie();
+        if (!(tot > 0)) return;
+        let gezien = 0, vorige = 0;
+        try { gezien = Number(localStorage.getItem(sleutel)) || 0; } catch (_e) {}
+        try { vorige = Number(localStorage.getItem('qe_nieuw_vorige')) || 0; } catch (_e) {}
+        // Alleen wat nieuw is sinds de versie die vóór de update op dit toestel stond (vraag Levi 12 okt 2026: "elke keer enkel
+        // al de updates ... die nieuw zijn sinds de huidig geïnstalleerde versie"), en niets wat deze werknemer al zag.
+        if (!gezien && !vorige) { this._nieuwZetGezien(tot); return; }  // nieuw toestel of nieuwe werknemer zonder update: niets inhalen
+        const vanaf = Math.max(gezien, vorige);
+        if (vanaf >= tot) return;
+        const res = QENieuw.voor({ vanaf, tot, rollen: this._nieuwRollen(), max: 12 });
+        if (!res.aantal) { this._nieuwZetGezien(tot); return; }
+        // wacht tot er niets anders open staat (de overgang na het aanmelden, een melding, een venster, een gescande tag, ...)
+        const bezig = document.hidden || this._pullRefreshOverlayOpen() || (this.currentUser && !document.getElementById('loginScreen').classList.contains('hidden'));
+        if (bezig) {
+            if (poging < 300) this._nieuwT = setTimeout(() => { this._nieuwControle(poging + 1).catch(() => {}); }, 1000);
+            return;
+        }
+        this.openNieuw({ res, gezienTot: tot });
+    },
+    /** Open het venster. opts.res = vooraf berekend (na een update); opts.alles = alles teruglezen (vanuit Profiel). */
+    async openNieuw(opts) {
+        opts = opts || {};
+        if (!window.QENieuw) return;
+        let res = opts.res;
+        if (!res) {
+            const tot = await this._nieuwHuidigeVersie();
+            res = QENieuw.voor({ vanaf: 0, tot: tot || Infinity, rollen: this._nieuwRollen(), max: 60 });
+        }
+        this._nieuwOpen = { gezienTot: opts.gezienTot || 0, alles: !!opts.alles, res };
+        const oud = document.getElementById('nieuwVenster');
+        if (oud) oud.remove();
+        const el = document.createElement('div');
+        el.id = 'nieuwVenster';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        el.setAttribute('aria-labelledby', 'nwTitel');
+        el.setAttribute('data-overlay', '1');
+        el.className = 'nw nw-c';
+        el.innerHTML = this._nieuwHtml();
+        document.body.appendChild(el);
+        try { const k = el.querySelector('.nw-c-kaart'); if (k) { k.setAttribute('tabindex', '-1'); k.focus({ preventScroll: true }); } } catch (_e) {}   // focus op het venster (schermlezer), geen rand op de knop
+    },
+    /** Sluiten = gelezen (alleen het venster na een update telt mee; teruglezen verandert niets). */
+    nieuwSluit() {
+        const o = this._nieuwOpen;
+        const el = document.getElementById('nieuwVenster');
+        if (el) el.remove();
+        if (o && o.gezienTot) this._nieuwZetGezien(o.gezienTot);
+        this._nieuwOpen = null;
+    },
+    nieuwLees(slug) {
+        this.nieuwSluit();
+        try { this.hlOpen(slug); } catch (_e) {}
+    },
+    /** Een regel open- of dichtklappen (de uitleg staat onder de titel). */
+    nieuwKlap(i) {
+        const el = document.querySelector('#nieuwVenster [data-nw-i="' + i + '"]');
+        if (!el) return;
+        const open = el.classList.toggle('open');
+        const knop = el.querySelector('.nw-c-rij');
+        if (knop) knop.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) { try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_e) {} }
+    },
+    _nieuwHtml() {
+        const o = this._nieuwOpen || {};
+        const res = o.res || { groepen: [], aantal: 0 };
+        const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+        const n = res.aantal;
+        const datums = res.groepen.map((g) => g.datumTekst);
+        const kopDatum = o.alles ? 'Alle updates' : (datums.length === 1 ? 'Update van ' + datums[0] : 'Sinds je vorige update');
+        const titel = o.alles ? 'Wat is er nieuw?' : (n === 1 ? 'Er is iets nieuw' : 'Er zijn ' + n + ' nieuwigheden');
+        let rol = 'technieker';
+        try { rol = this._hlRol(); } catch (_e) {}
+        // "Lees meer" alleen als het hoofdstuk voor deze werknemer echt bestaat (anders een knop die niets doet)
+        const meer = (it) => {
+            let ok = false;
+            try { ok = !!(it.hoofdstuk && window.QEHandleiding && QEHandleiding.vind(it.hoofdstuk, rol)); } catch (_e) {}
+            return ok ? '<button type="button" class="nw-meer" onclick="app.nieuwLees(\'' + esc(it.hoofdstuk) + '\')">Lees meer</button>' : '';
+        };
+        const eenOpen = n === 1;        // één nieuwigheid: de uitleg staat meteen open
+        let i = 0;
+        const item = (it) => {
+            const k = i++;
+            return '<div class="nw-c-item' + (eenOpen ? ' open' : '') + '" data-nw-i="' + k + '">'
+                + '<button type="button" class="nw-c-rij" onclick="app.nieuwKlap(' + k + ')" aria-expanded="' + (eenOpen ? 'true' : 'false') + '">'
+                + '<span class="nw-pil nw-' + esc(it.s) + '">' + esc(it.label) + '</span>'
+                + '<span class="nw-c-titel">' + esc(it.titel) + '</span>'
+                + '<span class="nw-c-pijl">' + this.icon('chevron-right', { size: 16 }) + '</span></button>'
+                + '<div class="nw-c-uitleg"><div class="nw-it-tekst">' + esc(it.tekst) + '</div>' + meer(it) + '</div></div>';
+        };
+        const lijst = !n ? '<div class="nw-leeg">Nog niets te melden.</div>'
+            : res.groepen.map((g) => (res.groepen.length > 1 || o.alles ? '<div class="nw-datum">' + esc(g.datumTekst) + '</div>' : '')
+                + g.items.map(item).join('')).join('');
+        const verborgen = res.verborgen ? '<div class="nw-nog">En nog ' + res.verborgen + ' oudere. Teruglezen kan in je Profiel, bij App bijwerken.</div>' : '';
+        return '<div class="nw-scrim" onclick="app.nieuwSluit()"></div>'
+            + '<div class="nw-c-kaart"><div class="nw-lijn"></div>'
+            + '<div class="nw-c-kop"><div class="nw-label">' + esc(kopDatum) + '</div>'
+            + '<h2 id="nwTitel" class="nw-titel">' + esc(titel) + '</h2>'
+            + (n ? '<div class="nw-sub">' + (eenOpen ? 'Dit is er veranderd.' : 'Tik op een regel voor de uitleg.') + '</div>' : '') + '</div>'
+            + '<div class="nw-c-lijst">' + lijst + verborgen + '</div>'
+            + '<div class="nw-voet"><button type="button" class="btn btn-primary btn-full" data-nw-focus onclick="app.nieuwSluit()">'
+            + (o.alles ? 'Sluiten' : 'Begrepen') + '</button></div></div>';
+    },
+
+    // ============================================================
+    // v428 + Worker v502: MELDINGEN VAN HET BUREEL (vraag Levi 12 okt 2026: "Ik wil ook zelf meldingen kunnen laten
+    // verschijnen vanuit mijn account in de app ... zoals bv "Iedereen binnenkomen vanavond" zodat iedereen dat weet.")
+    // Ontvangen: bij het opstarten, als de app terug op de voorgrond komt en elke 3 minuten vraagt de app de actieve
+    // meldingen op (GET /bel-api/app-meldingen, kop X-App-Sessie). Een nieuwe verschijnt in het kaartje #medVenster
+    // (zelfde vorm als "Wat is er nieuw?", de tekst meteen volledig) en staat tot de einddatum bovenaan de planning
+    // (#medBalk). Gelezen = lokaal (qe_med_gelezen_<fiche>) én in de Worker (de afzender ziet wie las); lukt dat laatste
+    // niet, dan blijft het in qe_med_rij_<fiche> tot de volgende controle. Versturen: Organisatie → Meldingen, alleen
+    // voor wie de Worker als afzender kent (MELDING_AFZENDERS, nu enkel Levi). Niet tijdens een profielwissel.
+    // ============================================================
+    _medActief: [],
+    _medAfzender: null,
+    _MED_POLL_MS: 180000,
+    /**
+     * v433 + APK 1.248 (vraag Levi 15 okt 2026: "Ik zou ook een melding willen op de app wanneer er een mededeling wordt
+     * gemaakt", variant A): de gsm kijkt elk kwartier zelf bij de Worker (MededelingWorker, ook met de app dicht) en toont
+     * een nieuwe melding als melding op de gsm. Hij krijgt hiervoor dezelfde route, sessie en rol als hierboven. Alleen
+     * voor de eigen aanmelding (_medKanVragen: niet tijdens een profielwissel); afmelden wist het (logout).
+     */
+    _medNativeZet() {
+        try {
+            if (!window.QENative || QENative.versie() < 5 || !this._medKanVragen()) return;
+            const s = RobawsAPI.sessieLees();
+            const o = { url: RobawsAPI.WORKER_AUTH_URL, sessie: s.token, rol: this._nieuwRollen().join(','), fiche: this._medFiche() };
+            const sleutel = JSON.stringify(o);
+            if (sleutel === this._medNativeLaatst) return;
+            if (QENative.zetMededelingen(o)) this._medNativeLaatst = sleutel;
+        } catch (_e) {}
+    },
+    _medFiche() {
+        const u = this.currentUser || {};
+        return String(u.robawsEmployeeId || u.employeeId || '');
+    },
+    _medLijstLees(soort) {
+        const f = this._medFiche();
+        if (!f) return [];
+        try { const a = JSON.parse(localStorage.getItem('qe_med_' + soort + '_' + f) || '[]'); return Array.isArray(a) ? a.map(String) : []; }
+        catch (_e) { return []; }
+    },
+    _medLijstZet(soort, ids) {
+        const f = this._medFiche();
+        if (!f) return;
+        try { localStorage.setItem('qe_med_' + soort + '_' + f, JSON.stringify(ids.slice(-100))); } catch (_e) {}
+    },
+    _medKanVragen() {
+        let wissel = false;
+        try { wissel = !!(RobawsAPI.wisselStand && RobawsAPI.wisselStand()); } catch (_e) {}
+        let sessie = null;
+        try { sessie = RobawsAPI.sessieLees(); } catch (_e) {}
+        return !!(this.currentUser && !wissel && sessie);
+    },
+    /** Vanuit showApp: eerst de meldingen (hoogstens 8 s), dan "Wat is er nieuw?"; daarna elke 3 minuten en bij terugkeer. */
+    _medStart() {
+        if (!this._medLuistert) {
+            this._medLuistert = true;
+            // v433: tik op een melding van het bureel op de gsm (APK 1.248) = meteen kijken en het kaartje tonen
+            try { if (window.QENative) QENative.op('melding', (d) => { if (d && d.data && d.data.soort === 'mededeling') this._medControle().catch(() => {}); }); } catch (_e) {}
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden || Date.now() - (this._medLaatst || 0) < 20000) return;
+                this._medControle().catch(() => {});
+            });
+        }
+        clearInterval(this._medInterval);
+        this._medInterval = setInterval(() => { if (!document.hidden) this._medControle().catch(() => {}); }, this._MED_POLL_MS);
+        clearTimeout(this._medT);
+        this._medT = setTimeout(() => {
+            let gedaan = false;
+            const verder = () => { if (gedaan) return; gedaan = true; try { this._nieuwPlan(); } catch (_e) {} };
+            setTimeout(verder, 8000);
+            this._medControle().then(verder, verder);
+        }, 1200);
+    },
+    async _medControle() {
+        if (!this._medKanVragen()) { this._medActief = []; this._medBalkTekenen(); return; }
+        if (this._medVraagt) return;
+        this._medVraagt = true;
+        this._medLaatst = Date.now();
+        let j = null;
+        try {
+            const s = RobawsAPI.sessieLees();
+            const rol = this._nieuwRollen().join(',');
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-meldingen?rol=' + encodeURIComponent(rol),
+                { headers: { 'X-App-Sessie': s.token } }, 10000);
+            try { j = await r.json(); } catch (_e) {}
+            if (!r.ok || !j || !j.ok || !Array.isArray(j.items)) j = null;   // oude Worker (404) of verlopen sessie (401): niets tonen
+        } catch (_e) { j = null; }
+        finally { this._medVraagt = false; }
+        if (!j || !this._medKanVragen()) return;
+        this._medAfzender = !!j.afzender;
+        this._medNativeZet();
+        this._medKaartBij();
+        this._medActief = j.items;
+        // al gelezen op een ander toestel: ook hier onthouden
+        const gelezen = this._medLijstLees('gelezen');
+        let bij = false;
+        j.items.forEach((m) => { if (m.l && gelezen.indexOf(String(m.id)) < 0) { gelezen.push(String(m.id)); bij = true; } });
+        if (bij) this._medLijstZet('gelezen', gelezen);
+        this._medBalkTekenen();
+        this._medBevestig();
+        const nieuw = j.items.filter((m) => gelezen.indexOf(String(m.id)) < 0);
+        if (nieuw.length) this._medToon(0);
+    },
+    /** Een nieuwe melding tonen zodra er niets anders open staat (en niet midden in het typen). */
+    _medToon(poging) {
+        clearTimeout(this._medToonT);
+        if (!this._medKanVragen() || document.getElementById('medVenster')) return;
+        if (this._medBezigScherm()) {
+            if (poging < 300) this._medToonT = setTimeout(() => this._medToon(poging + 1), 2000);   // hoogstens 10 minuten wachten
+            return;
+        }
+        const gelezen = this._medLijstLees('gelezen');
+        const nu = Date.now();
+        const nog = (this._medActief || []).filter((m) => gelezen.indexOf(String(m.id)) < 0 && Number(m.tot) > nu);
+        if (nog.length) this.openMelding({ items: nog });
+    },
+    _medBezigScherm() {
+        if (document.hidden) return true;
+        const login = document.getElementById('loginScreen');
+        if (login && !login.classList.contains('hidden')) return true;
+        if (this._gsm) return true;                                  // de webshop in de app
+        if (this._pullRefreshOverlayOpen()) return true;             // een venster, het km-formulier, een betaling, ...
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable)) return true;
+        return false;
+    },
+    /** opts.items = de meldingen; opts.alles = vanuit de strook op de planning (knop "Sluiten"). */
+    openMelding(opts) {
+        opts = opts || {};
+        const items = (opts.items || []).filter((m) => m && m.id);
+        if (!items.length) return;
+        const oud = document.getElementById('medVenster');
+        if (oud) oud.remove();
+        this._medOpen = { items, alles: !!opts.alles };
+        const el = document.createElement('div');
+        el.id = 'medVenster';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        el.setAttribute('aria-labelledby', 'medTitel');
+        el.setAttribute('data-overlay', '1');
+        el.className = 'nw nw-c nw-med';
+        el.innerHTML = this._medHtml();
+        document.body.appendChild(el);
+        try { const k = el.querySelector('.nw-c-kaart'); if (k) { k.setAttribute('tabindex', '-1'); k.focus({ preventScroll: true }); } } catch (_e) {}   // focus op het venster (schermlezer), geen rand op de knop
+        if (!opts.alles) { try { if (window.QEMarble && QEMarble.haptic) QEMarble.haptic('success'); } catch (_e) {} }
+    },
+    /** Sluiten = gelezen (ook via de terugknop); tikken naast het kaartje sluit bewust niet. */
+    medSluit() {
+        const o = this._medOpen;
+        const el = document.getElementById('medVenster');
+        if (el) el.remove();
+        this._medOpen = null;
+        if (o && o.items) this._medGelezen(o.items.map((m) => String(m.id)));
+        this._medBalkTekenen();
+        try { this._nieuwPlan(); } catch (_e) {}   // moest "Wat is er nieuw?" nog komen, dan kan het nu
+    },
+    _medGelezen(ids, zonderWorker) {
+        const gelezen = this._medLijstLees('gelezen');
+        const rij = this._medLijstLees('rij');
+        ids.forEach((id) => {
+            if (gelezen.indexOf(id) >= 0) return;
+            gelezen.push(id);
+            if (!zonderWorker) rij.push(id);
+        });
+        this._medLijstZet('gelezen', gelezen);
+        this._medLijstZet('rij', rij);
+        this._medBevestig();
+        // v433: gelezen = ook de melding op de gsm weg (APK 1.248, tag med_<id>)
+        try { if (window.QENative && QENative.versie() >= 5) ids.forEach((id) => QENative.annuleerMelding('med_' + id)); } catch (_e) {}
+    },
+    /** Wat gelezen is maar nog niet bij de Worker staat, doorsturen (de afzender ziet wie las). */
+    async _medBevestig() {
+        const rij = this._medLijstLees('rij');
+        if (!rij.length || this._medBevestigt || !this._medKanVragen()) return;
+        this._medBevestigt = true;
+        const deel = rij.slice(0, 20);
+        try {
+            const s = RobawsAPI.sessieLees();
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-melding-gelezen', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-App-Sessie': s.token }, body: JSON.stringify({ ids: deel }),
+            }, 10000);
+            if (r.ok || r.status === 400) this._medLijstZet('rij', this._medLijstLees('rij').filter((id) => deel.indexOf(id) < 0));
+        } catch (_e) {}
+        finally { this._medBevestigt = false; }
+    },
+    _medHtml() {
+        const o = this._medOpen || { items: [] };
+        const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+        const n = o.items.length;
+        const label = n === 1 ? 'Melding · ' + this._medTijd(o.items[0].t) : n + ' meldingen';
+        const groot = n === 1 && String(o.items[0].tekst || '').length <= 90;
+        const items = o.items.map((m) => '<div class="nw-med-item">'
+            + '<p class="nw-med-tekst' + (groot ? ' groot' : '') + '">' + esc(m.tekst) + '</p>'
+            + '<div class="nw-med-van">' + esc(m.door || 'Het bureel') + (n > 1 ? ' · ' + esc(this._medTijd(m.t)) : '') + '</div></div>').join('');
+        return '<div class="nw-scrim"></div>'
+            + '<div class="nw-c-kaart"><div class="nw-lijn"></div>'
+            + '<div class="nw-c-kop"><h2 id="medTitel" class="nw-label">' + esc(label) + '</h2></div>'
+            + '<div class="nw-c-lijst">' + items + '</div>'
+            + '<div class="nw-voet"><button type="button" class="btn btn-primary btn-full" data-nw-focus onclick="app.medSluit()">'
+            + (o.alles ? 'Sluiten' : 'Begrepen') + '</button></div></div>';
+    },
+    _medDag(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); },
+    /** "vandaag 14:02", "gisteren 09:15", "ma 6 okt 14:02" */
+    _medTijd(ms) {
+        const d = new Date(Number(ms) || 0);
+        if (!(d.getTime() > 0)) return '';
+        const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        const v = Math.round((this._medDag(new Date()) - this._medDag(d)) / 86400000);
+        if (v === 0) return 'vandaag ' + hm;
+        if (v === 1) return 'gisteren ' + hm;
+        return ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'][d.getDay()] + ' ' + d.getDate() + ' '
+            + ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'][d.getMonth()] + ' ' + hm;
+    },
+    /** "vandaag", "morgen", "vrijdag 17 oktober" */
+    _medTotTekst(ms) {
+        const d = new Date(Number(ms) || 0);
+        const v = Math.round((this._medDag(d) - this._medDag(new Date())) / 86400000);
+        if (v === 0) return 'vandaag';
+        if (v === 1) return 'morgen';
+        return ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'][d.getDay()] + ' ' + d.getDate() + ' '
+            + ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'][d.getMonth()];
+    },
+    /** De strook bovenaan de planning: de actieve meldingen (hoogstens twee, nieuwste eerst). */
+    _medBalkTekenen() {
+        const el = document.getElementById('medBalk');
+        if (!el) return;
+        const nu = Date.now();
+        const lijst = (this._medKanVragen() ? (this._medActief || []) : []).filter((m) => Number(m.tot) > nu);
+        if (!lijst.length) { el.classList.remove('aan'); el.innerHTML = ''; return; }
+        const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+        const gelezen = this._medLijstLees('gelezen');
+        let h = lijst.slice(0, 2).map((m) => '<button type="button" class="med-rij" onclick="app.medBalkOpen()">'
+            + '<span class="med-icoon">' + this.icon('megafoon', { size: 20 }) + '</span>'
+            + '<span class="med-inhoud"><span class="med-tekst">' + esc(m.tekst) + '</span>'
+            + '<span class="med-van">' + esc(m.door || 'Het bureel') + ' · ' + esc(this._medTijd(m.t)) + '</span></span>'
+            + (gelezen.indexOf(String(m.id)) < 0 ? '<span class="med-stip" title="Nieuw"></span>' : '')
+            + '</button>').join('');
+        if (lijst.length > 2) {
+            const rest = lijst.length - 2;
+            h += '<button type="button" class="med-rij" onclick="app.medBalkOpen()"><span class="med-inhoud"><span class="med-van">En nog '
+                + rest + (rest === 1 ? ' melding' : ' meldingen') + '</span></span></button>';
+        }
+        el.innerHTML = h;
+        el.classList.add('aan');
+    },
+    medBalkOpen() {
+        const nu = Date.now();
+        const lijst = (this._medActief || []).filter((m) => Number(m.tot) > nu);
+        if (lijst.length) this.openMelding({ items: lijst, alles: true });
+    },
+
+    // ---------- versturen (Organisatie → Meldingen, alleen een afzender) ----------
+    _MED_TOT: [['vandaag', 'Vandaag', 0], ['morgen', 'Morgen', 1], ['3d', '3 dagen', 2], ['week', '1 week', 6]],
+    _MED_DOEL: [['iedereen', 'Iedereen'], ['monteur', 'Monteurs'], ['technieker', 'Techniekers'], ['bureel', 'Bureel']],
+    openMeldingen() { this.navigate('screenMeldingen', true); },
+    _medKaartBij() {
+        const k = document.getElementById('orgKaartMeldingen');
+        if (k) k.style.display = this._medAfzender ? '' : 'none';
+    },
+    /** Einde van de gekozen dag (23:59:59), in de tijd van het toestel. */
+    _medTotMs(k) {
+        const r = this._MED_TOT.find((x) => x[0] === k) || this._MED_TOT[0];
+        const d = new Date();
+        d.setHours(23, 59, 59, 999);
+        d.setDate(d.getDate() + r[2]);
+        return d.getTime();
+    },
+    _medDoelTekst(doel) {
+        const d = Array.isArray(doel) && doel.length ? doel : ['iedereen'];
+        if (d.indexOf('iedereen') >= 0) return 'iedereen';
+        const naam = { monteur: 'de monteurs', technieker: 'de techniekers', bureel: 'het bureel' };
+        const l = d.map((x) => naam[x] || x);
+        return l.length > 1 ? l.slice(0, -1).join(', ') + ' en ' + l[l.length - 1] : l[0];
+    },
+    loadMeldingen() {
+        if (!this._medForm) this._medForm = { doel: ['iedereen'], tot: 'vandaag', kid: '' };
+        this._medFormTekenen();
+        this.medTekstTel(true);
+        this._medBeheerLaden();
+    },
+    _medFormTekenen() {
+        const f = this._medForm;
+        if (!f) return;
+        const chip = (aan, actie, tekst) => '<button type="button" class="dp-chip' + (aan ? ' aan' : '') + '" aria-pressed="' + (aan ? 'true' : 'false') + '" onclick="' + actie + '">' + tekst + '</button>';
+        const doel = document.getElementById('medDoel');
+        if (doel) doel.innerHTML = this._MED_DOEL.map((d) => chip(f.doel.indexOf(d[0]) >= 0, "app.medDoelKies('" + d[0] + "')", d[1])).join('');
+        const tot = document.getElementById('medTot');
+        if (tot) tot.innerHTML = this._MED_TOT.map((t) => chip(f.tot === t[0], "app.medTotKies('" + t[0] + "')", t[1])).join('');
+        const tt = document.getElementById('medTotTekst');
+        if (tt) tt.textContent = 'Zichtbaar tot en met ' + this._medTotTekst(this._medTotMs(f.tot)) + ', 23:59.';
+    },
+    medDoelKies(d) {
+        const f = this._medForm;
+        if (!f) return;
+        if (d === 'iedereen') f.doel = ['iedereen'];
+        else {
+            let l = f.doel.filter((x) => x !== 'iedereen');
+            l = l.indexOf(d) >= 0 ? l.filter((x) => x !== d) : l.concat([d]);
+            if (!l.length || l.length >= 3) l = ['iedereen'];
+            f.doel = this._MED_DOEL.map((x) => x[0]).filter((x) => l.indexOf(x) >= 0);
+        }
+        f.kid = '';
+        this._medFormTekenen();
+    },
+    medTotKies(k) {
+        if (!this._medForm) return;
+        this._medForm.tot = k;
+        this._medForm.kid = '';
+        this._medFormTekenen();
+    },
+    medTekstTel(alleenTellen) {
+        const t = document.getElementById('medTekst');
+        const n = document.getElementById('medTeller');
+        if (t && n) n.textContent = t.value.length + ' / 500';
+        if (!alleenTellen && this._medForm) this._medForm.kid = '';   // andere tekst = een nieuwe melding
+    },
+    async medVerstuur() {
+        const f = this._medForm;
+        if (!f || this._medVerstuurt) return;
+        const t = document.getElementById('medTekst');
+        const fout = document.getElementById('medFout');
+        const knop = document.getElementById('btnMedVerstuur');
+        const zetFout = (x) => { if (fout) { fout.textContent = x || ''; fout.style.display = x ? '' : 'none'; } };
+        const tekst = String((t && t.value) || '').trim();
+        if (!tekst) { zetFout('Typ eerst wat je wil laten weten.'); try { t.focus(); } catch (_e) {} return; }
+        zetFout('');
+        const tot = this._medTotMs(f.tot);
+        const ja = await QEClock._showConfirmModal('Melding versturen?',
+            'Voor <b>' + this.escapeHtml(this._medDoelTekst(f.doel)) + '</b>, zichtbaar tot en met ' + this.escapeHtml(this._medTotTekst(tot)) + ':<br><br>'
+            + this.escapeHtml(tekst).replace(/\n/g, '<br>'), 'Versturen', 'Annuleren');
+        if (!ja || this._medVerstuurt) return;
+        if (!f.kid) f.kid = 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        this._medVerstuurt = true;
+        if (knop) { knop.disabled = true; knop.textContent = 'Versturen…'; }
+        let res = null;
+        try {
+            const s = RobawsAPI.sessieLees();
+            if (!s) zetFout('Je aanmelding is verlopen. Meld je opnieuw aan en probeer het dan nog eens.');
+            else {
+                const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-melding-zet', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-App-Sessie': s.token },
+                    body: JSON.stringify({ tekst, doel: f.doel, tot, kid: f.kid }),
+                }, 15000);
+                let j = null;
+                try { j = await r.json(); } catch (_e) {}
+                if (r.ok && j && j.ok && j.item) res = j;
+                else if (r.status === 401) zetFout('Je aanmelding is verlopen. Meld je opnieuw aan en probeer het dan nog eens.');
+                else if (r.status === 404) zetFout('De Worker kent de meldingen nog niet: plak eerst Worker v502.');
+                else zetFout((j && j.error) || ('Versturen mislukte (' + r.status + '). Probeer opnieuw.'));
+            }
+        } catch (_e) {
+            zetFout('Geen verbinding: je melding is niet verstuurd. Probeer opnieuw.');
+        } finally {
+            this._medVerstuurt = false;
+            if (knop) { knop.disabled = false; knop.textContent = 'Melding versturen'; }
+        }
+        if (!res) return;
+        // terug naar de standaard (iedereen, vandaag): een volgende melding gaat nooit per ongeluk naar een kleinere groep
+        f.kid = '';
+        f.doel = ['iedereen'];
+        f.tot = 'vandaag';
+        this._medFormTekenen();
+        if (t) t.value = '';
+        this.medTekstTel(true);
+        this._medGelezen([String(res.item.id)], true);   // de afzender las ze al (de Worker weet dat)
+        this.toast(res.dubbel ? 'Deze melding was al verstuurd' : 'Melding verstuurd');
+        this._medBeheerLaden();
+        this._medControle().catch(() => {});             // de strook bovenaan de planning bijwerken
+    },
+    async _medBeheerLaden() {
+        const box = document.getElementById('medLijst');
+        if (!box) return;
+        if (!this._medBeheer) box.innerHTML = '<div class="spinner"></div>';
+        let j = null, fout = '';
+        try {
+            const s = RobawsAPI.sessieLees();
+            if (!s) fout = 'Je aanmelding is verlopen. Meld je opnieuw aan.';
+            else {
+                const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-meldingen-beheer', { headers: { 'X-App-Sessie': s.token } }, 12000);
+                try { j = await r.json(); } catch (_e) {}
+                if (r.status === 403) fout = (j && j.error) || 'Meldingen sturen kan alleen vanuit het account dat dat mag.';
+                else if (r.status === 404) fout = 'De Worker kent de meldingen nog niet: plak eerst Worker v502.';
+                else if (!r.ok || !j || !j.ok || !Array.isArray(j.items)) fout = 'De lijst kon niet geladen worden. Tik op Vernieuwen.';
+            }
+        } catch (_e) { fout = 'Geen verbinding. Tik op Vernieuwen.'; }
+        if (fout) { this._medBeheer = null; box.innerHTML = '<div class="med-leeg">' + this.escapeHtml(fout) + '</div>'; return; }
+        this._medBeheer = j.items;
+        let emps = [];
+        try { emps = await RobawsAPI.getActiveEmployees(); } catch (_e) {}
+        this._medEmps = (emps || []).filter((e) => e && e.email && e.employeeId != null);
+        this._medBeheerTekenen();
+    },
+    _medBeheerTekenen() {
+        const box = document.getElementById('medLijst');
+        if (!box) return;
+        const lijst = this._medBeheer || [];
+        if (!lijst.length) { box.innerHTML = '<div class="med-leeg">Nog geen meldingen verstuurd.</div>'; return; }
+        const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+        const nu = Date.now();
+        box.innerHTML = lijst.map((m) => {
+            const actief = !m.weg && Number(m.tot) > nu;
+            const stand = m.weg ? ['weg', 'Ingetrokken'] : (actief ? ['actief', 'Actief'] : ['voorbij', 'Verlopen']);
+            const wanneer = m.weg ? 'ingetrokken ' + this._medTijd(m.weg) : (actief ? 'zichtbaar tot en met ' : 'zichtbaar tot ') + this._medTotTekst(m.tot);
+            const meta = 'Voor ' + this._medDoelTekst(m.doel) + ' · ' + wanneer + ' · verstuurd ' + this._medTijd(m.t) + (m.door ? ' door ' + m.door : '');
+            const lz = this._medLezersInfo(m);
+            return '<div class="card med-kaart">'
+                + '<div class="med-k-tekst">' + esc(m.tekst) + '</div>'
+                + '<div class="med-k-meta">' + esc(meta) + '</div>'
+                + '<div class="med-k-stand"><span class="med-k-pil ' + stand[0] + '">' + stand[1] + '</span>'
+                + (lz ? '<button type="button" class="med-k-gelezen" aria-expanded="false" onclick="app.medLezersKlap(this)">' + esc(lz.kop) + '</button>' : '')
+                + '</div>'
+                + (lz ? '<div class="med-k-lezers">' + lz.html + '</div>' : '')
+                + (actief ? '<div class="med-k-knoppen"><button type="button" class="med-k-weg" onclick="app.medIntrekken(\'' + esc(m.id) + '\')">Intrekken</button></div>' : '')
+                + '</div>';
+        }).join('');
+    },
+    /** "Gelezen door 3 van 20" + wie wel en wie nog niet (de doelgroep = actieve werknemers met een e-mailadres, zonder de afzender). */
+    _medLezersInfo(m) {
+        if (!Array.isArray(m.lezers)) return null;
+        const doel = Array.isArray(m.doel) && m.doel.length ? m.doel : ['iedereen'];
+        const iedereen = doel.indexOf('iedereen') >= 0;
+        const afz = String(m.f || '');
+        const las = {};
+        m.lezers.forEach((x) => { if (x && x.f != null) las[String(x.f)] = Number(x.t) || 1; });
+        const doelEmps = (this._medEmps || []).filter((e) => String(e.employeeId) !== afz && (iedereen || doel.indexOf(e.role) >= 0));
+        const esc = (x) => this.escapeHtml(String(x == null ? '' : x));
+        if (!doelEmps.length) {
+            const n = Object.keys(las).filter((f) => f !== afz).length;
+            return { kop: 'Gelezen door ' + n + (n === 1 ? ' collega' : ' collega\'s'), html: '<div>De lijst van de werknemers kon niet geladen worden.</div>' };
+        }
+        const wel = doelEmps.filter((e) => las[String(e.employeeId)]).sort((a, b) => las[String(a.employeeId)] - las[String(b.employeeId)]);
+        const niet = doelEmps.filter((e) => !las[String(e.employeeId)]);
+        const html = (wel.length ? '<div><b>Gelezen:</b> ' + wel.map((e) => esc(e.name) + ' (' + esc(this._medTijd(las[String(e.employeeId)])) + ')').join(', ') + '</div>' : '<div>Nog niemand heeft ze gelezen.</div>')
+            + (niet.length ? '<div style="margin-top:4px"><b>Nog niet gelezen:</b> ' + niet.map((e) => esc(e.name)).join(', ') + '</div>' : '<div style="margin-top:4px">Iedereen heeft ze gelezen.</div>');
+        return { kop: 'Gelezen door ' + wel.length + ' van ' + doelEmps.length, html };
+    },
+    medLezersKlap(knop) {
+        const box = knop && knop.parentElement && knop.parentElement.nextElementSibling;
+        if (!box || !box.classList.contains('med-k-lezers')) return;
+        const open = box.classList.toggle('open');
+        knop.classList.toggle('open', open);
+        knop.setAttribute('aria-expanded', open ? 'true' : 'false');
+    },
+    async medIntrekken(id) {
+        const m = (this._medBeheer || []).find((x) => x.id === id);
+        if (!m) return;
+        const ja = await QEClock._showConfirmModal('Melding intrekken?',
+            'Je collega\'s zien ze daarna niet meer:<br><br>' + this.escapeHtml(m.tekst).replace(/\n/g, '<br>'), 'Intrekken', 'Annuleren');
+        if (!ja) return;
+        try {
+            const s = RobawsAPI.sessieLees();
+            const r = await RobawsAPI._fetchWithTimeout(RobawsAPI.WORKER_AUTH_URL + '/bel-api/app-melding-weg', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'X-App-Sessie': s ? s.token : '' }, body: JSON.stringify({ id }),
+            }, 12000);
+            let j = null;
+            try { j = await r.json(); } catch (_e) {}
+            if (!r.ok || !j || !j.ok) { this.toast((j && j.error) || 'Intrekken mislukte. Probeer opnieuw.', true); return; }
+            this.toast('Melding ingetrokken');
+        } catch (_e) { this.toast('Geen verbinding. Probeer opnieuw.', true); return; }
+        this._medBeheerLaden();
+        this._medControle().catch(() => {});
+    },
+
+    // ============================================================
     // MAANDRECAP (v285 / 1.x v280) — "Spotify-Wrapped"-stories.
     // Data + opslag zit in window.QERecap (js/maand-recap.js); hier
     // enkel de trigger + de UI. De stories zijn zelfstandig (inline
@@ -23967,6 +26074,8 @@ const app = {
         const mag = this._orgMagProjecten();
         const kp = document.getElementById('orgKaartProjecten');
         if (kp) kp.style.display = mag ? '' : 'none';
+        // v428: Meldingen alleen voor wie de Worker als afzender kent (antwoord van de laatste controle)
+        try { this._medKaartBij(); if (this._medAfzender == null) this._medControle({ stil: true }); } catch (_e) {}
         const sub = document.getElementById('orgProjectenSub');
         if (!sub || !mag) return;
         Promise.all([RobawsAPI.getProjectenOverzicht(), RobawsAPI.getActiveEmployees().catch(() => [])]).then(([lijst, emps]) => {
