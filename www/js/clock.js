@@ -47,6 +47,8 @@ window.QEClock = {
 
     /** Fallback starttijd als er ECHT niets te vinden is in Robaws */
     DEFAULT_START_TIME: '07:00',
+    // v439: een vergeten uitklok wordt bij de volgende scan op dit uur afgesloten (was 23:45; beleid Levi 27 okt 2026)
+    VERGETEN_UITKLOK: '15:30',
 
     /**
      * Verschil (in ms) tussen internet-tijd en lokale klok.
@@ -681,6 +683,9 @@ window.QEClock = {
                 // uitklokken onmogelijk werd en de uren van die dag verloren
                 // gingen. Nu: detecteren, bevestigen, afsluiten op 23:45
                 // (kwartierafronding), en daarna gewoon doorgaan met vandaag.
+                // v439 (beleid Levi 27 okt 2026): afsluiten op VERGETEN_UITKLOK = 15:30 i.p.v. 23:45, ook in het
+                // weekend en voor het bureel ("23u45 vinden ze allemaal goed; bij 15u30 vragen ze wel snel hun
+                // uren aanpassing"). Ingeklokt op of na 15:30 = geen uren (de guard "blok te kort" in _clockOut).
                 if (!session.active) {
                     try {
                         // v251: servertijd i.p.v. toesteltijd (zoals de rest van
@@ -762,15 +767,15 @@ window.QEClock = {
                                 const sluiten = await this._showConfirmModal(
                                     'Nog ingeklokt van ' + oldOpen.dStr,
                                     'Je stond nog ingeklokt sinds ' + (oldOpen.session.startTime || '?') +
-                                    ' (' + oldOpen.dStr + '). Die dag wordt afgesloten om 23:45; daarna gaat de scan van vandaag gewoon door.',
+                                    ' (' + oldOpen.dStr + '). Die dag wordt afgesloten om ' + this.VERGETEN_UITKLOK + '. Werkte je langer? Vraag dan een aanpassing van je uren. Daarna gaat de scan van vandaag gewoon door.',
                                     'Afsluiten',
                                     'Niet nu'
                                 );
                                 if (!sluiten) return;
                                 showLoad();
                                 const yRes = await this._clockOut(oldOpen.session,
-                                    { name: 'Automatische afsluiting (middernacht)' },
-                                    { forcedEndTime: '23:45', skipKilometers: true });
+                                    { name: 'Niet uitgeklokt, automatisch afgesloten' },
+                                    { forcedEndTime: this.VERGETEN_UITKLOK, skipKilometers: true });
                                 if (!yRes.ok) {
                                     if (/\b423\b/.test(String(yRes.message || ''))) {
                                         // v383: intussen vergrendeld door bureel → niets meer te boeken;
@@ -782,7 +787,7 @@ window.QEClock = {
                                         return;
                                     }
                                 } else {
-                                if (window.app) app.toast(oldOpen.dStr + ' afgesloten om 23:45');
+                                if (window.app) app.toast(oldOpen.dStr + ' afgesloten om ' + this.VERGETEN_UITKLOK + '. Werkte je langer? Vraag een aanpassing van je uren.');
                                 }
                             }
                         }
@@ -906,6 +911,7 @@ window.QEClock = {
                     // terug ({ bevestigd, opmerking }); annuleren blijft false.
                     let uitklokOpmerking = '';
                     let uitklokRegels = [];   // v417: km-regel + woon-werk-regel (in dezelfde afsluit-PUT)
+                    let uitklokVoertuig = '';   // v440: de gebruikte camionet (extraveld "Gebruikte voertuig")
                     if (window.app && typeof app.promptKilometers === 'function') {
                         try {
                             let hint = null;
@@ -915,6 +921,7 @@ window.QEClock = {
                             if (kmRes && typeof kmRes === 'object') {
                                 uitklokOpmerking = String(kmRes.opmerking || '');
                                 if (Array.isArray(kmRes.extraRegels)) uitklokRegels = kmRes.extraRegels;
+                                uitklokVoertuig = String(kmRes.voertuig || '');
                             }
                         } catch (e) {
                             console.warn('[Clock] km-formulier faalde:', e && e.message);
@@ -928,7 +935,7 @@ window.QEClock = {
                     }
 
                     showLoad();
-                    scanResult = await this._clockOut(session, tag, { gps: gpsUit, opmerking: uitklokOpmerking, extraRegels: uitklokRegels, eindTijd: uitklokCtx.eindTijd || null });
+                    scanResult = await this._clockOut(session, tag, { gps: gpsUit, opmerking: uitklokOpmerking, extraRegels: uitklokRegels, eindTijd: uitklokCtx.eindTijd || null, voertuig: uitklokVoertuig });
                     // v394: uitklok gelukt = de opmerking staat in Robaws → klad weg.
                     // Mislukt? Dan blijft het klad staan en is het bij de volgende
                     // scan meteen weer ingevuld.
@@ -1647,7 +1654,7 @@ window.QEClock = {
     async _clockOut(session, tag, opts) {
         const opts2 = opts || {};
         const now = await this._getNow();
-        // v215: forcedEndTime → een gisteren-sessie afsluiten op 23:45
+        // v215: forcedEndTime → een gisteren-sessie afsluiten (v439: op VERGETEN_UITKLOK = 15:30)
         // v422: eindTijd = de uitkloktijd waarmee de uren al naar de werkbon(nen) gingen (overname bij het
         // uitklokken): de klok boekt dan exact dezelfde uren, ook als het kilometerscherm even openstond.
         const eindTijd = (opts2.eindTijd && /^\d{1,2}:\d{2}$/.test(String(opts2.eindTijd))) ? String(opts2.eindTijd) : null;
@@ -1751,7 +1758,7 @@ window.QEClock = {
                 // boeken — alleen netjes afsluiten zodat vandaag verder kan.
                 try {
                     await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw,
-                        'klok-uit: automatische afsluiting — blok te kort voor uren');
+                        'klok-uit: Niet uitgeklokt, automatisch afgesloten — ingeklokt na ' + this.VERGETEN_UITKLOK + ', geen uren');
                 } catch (e) {
                     return { ok: false, message: 'Afsluiten van gisteren mislukte:\n' + (e && e.message), refresh: false };
                 }
@@ -2052,8 +2059,12 @@ window.QEClock = {
             // v417: de km-regel en (op het bureau) de woon-werk-regel gaan mee in dezelfde PUT
             const _regels = (opmRegel ? [opmRegel] : [])
                 .concat((opts2.extraRegels || []).map(r => String(r || '').trim()).filter(Boolean));
+            // v440: de gebruikte camionet in hetzelfde afsluit-PUT (extraveld "Gebruikte voertuig")
+            const _velden = opts2.voertuig
+                ? { [RobawsAPI.VOERTUIG_VELD]: { type: 'TEXT', group: 'Tijdsregistratie', stringValue: String(opts2.voertuig).slice(0, 60) } }
+                : null;
             await RobawsAPI.setTimeRegistrationUitgeklokt(session.workOrderId, endTimeRaw, klokUitLine,
-                _regels.length ? _regels : null);
+                _regels.length ? _regels : null, _velden);
         } catch(e) {
             console.warn('[Clock] Uitgeklokt update faalde:', e.message);
             return {
@@ -2264,7 +2275,9 @@ window.QEClock = {
             this._saveSession(session);
         }
 
-        const round5 = (mins) => Math.round(mins / 5) * 5;
+        // v441 (keuze Levi 30 okt 2026: "We rekenen per kwartier"): laden en lossen rondt begin en einde af op het
+        // DICHTSTE KWARTIER (was 5 min sinds v338), minimum één kwartier zodat een scan altijd iets oplevert.
+        const round15 = (mins) => Math.round(mins / 15) * 15;
         const toMinutes = (hhmm) => {
             const m = String(hhmm || '').match(/^(\d{1,2}):(\d{1,2})/);
             if (!m) return 0;
@@ -2279,24 +2292,19 @@ window.QEClock = {
         // Geval 1: lopende L&L → afsluiten via PUT op de open time-entry.
         if (session.llActive) {
             const llStart = session.llStartTime;
-            // v338 (vraag Levi): L&L rondt af op 5 MINUTEN i.p.v. een kwartier.
-            // Duur nog steeds naar BOVEN (7 min laden = 10 min betaald), met
-            // een minimum van 5 min zodat een scan altijd iets oplevert.
-            // (v76-regel was: naar boven op 15, minimum 15.)
+            // v441: begin en einde elk naar het dichtste kwartier (v338 rondde af op 5 min, v76 naar boven op 15).
+            // Vallen ze op hetzelfde kwartier, dan telt toch één kwartier.
             const startMinRaw = toMinutes(llStart);
-            const endMinRaw = toMinutes(time);
-            const actualDuration = Math.max(0, endMinRaw - startMinRaw);
-            const billableDuration = Math.max(5, Math.ceil(actualDuration / 5) * 5);
-            // Start blijft op 5 min afgerond (dichtbij de werkelijkheid).
-            // End = start + billable_duration (zo blijft het 5-min-veelvoud).
-            let startMinForDisplay = round5(startMinRaw);
-            let endMinForDisplay = startMinForDisplay + billableDuration;
+            const endMinRaw = Math.max(toMinutes(time), startMinRaw);
+            let startMinForDisplay = round15(startMinRaw);
+            let endMinForDisplay = Math.max(round15(endMinRaw), startMinForDisplay + 15);
+            const billableDuration = endMinForDisplay - startMinForDisplay;
             // v251: over middernacht → binnen de dag houden. fromMinutes wrapte
             // ≥1440 naar 00:xx waardoor closeOpenLLTimeEntry hours=0 rekende en
             // het gegarandeerde kwartier L&L verloren ging. Cap op 23:55 en
             // schuif de start zo nodig terug zodat de duur behouden blijft.
             if (endMinForDisplay >= 1440) {
-                endMinForDisplay = 1435;  // 23:55 (5-min-raster)
+                endMinForDisplay = 1425;  // 23:45 (kwartier-raster, v441)
                 startMinForDisplay = Math.max(0, endMinForDisplay - billableDuration);
             }
             const llEnd = fromMinutes(endMinForDisplay);
@@ -2444,7 +2452,7 @@ window.QEClock = {
         }
 
         // v73: POST direct een open L&L time-entry met afgeronde startTime
-        const llStartRounded = fromMinutes(round5(toMinutes(time)));
+        const llStartRounded = fromMinutes(round15(toMinutes(time)) % 1440);   // v441: dichtste kwartier
         let teId = null;
         try {
             teId = await RobawsAPI.postOpenLLTimeEntry({

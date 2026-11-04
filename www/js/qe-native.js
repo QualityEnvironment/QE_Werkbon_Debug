@@ -114,6 +114,9 @@
         annuleerMelding: function (tag) { direct('annuleerMelding', [tag]); },
         /* v1.248: meldingen van het bureel ook met de app dicht: {url, sessie, rol, fiche}; {} = stoppen (afmelden) */
         zetMededelingen: function (o) { return !!direct('zetMededelingen', [JSON.stringify(o || {})], false); },
+        /* v1.249: stille uren van deze gsm: {weekend, avond, van:"18:00", tot:"07:00"} */
+        zetStilte: function (o) { return !!direct('zetStilte', [JSON.stringify(o || {})], false); },
+        leesStilte: function () { return json('leesStilte', [], null); },
 
         spraak: function (taal, prompt) { return roep('spraak', [taal || 'nl-BE', prompt || ''], 120000); },
         biometrieStatus: function () { return direct('biometrieStatus', [], 'niet-beschikbaar'); },

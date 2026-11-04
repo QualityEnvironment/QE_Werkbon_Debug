@@ -1254,6 +1254,18 @@ body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 
 .nw.nw-med .nw-med-tekst { margin: 0; font-size: 18px; font-weight: 400; line-height: 1.4; color: var(--ink); white-space: pre-line; overflow-wrap: break-word; }
 .nw.nw-med .nw-med-tekst.groot { font-size: 24px; line-height: 1.25; letter-spacing: -0.4px; }
 .nw.nw-med .nw-med-van { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--g2); }
+/* v435: bevestigen of Ja/Nee onder een melding */
+.nw.nw-med .med-antw { margin-top: 14px; }
+.nw.nw-med .med-antw-vraag { font-size: 13.5px; line-height: 1.45; color: var(--txt2); margin-bottom: 10px; }
+.nw.nw-med .med-antw-vraag b { color: var(--ink); }
+.nw.nw-med .med-antw-ok { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--gwash); color: var(--green2); font-size: 13.5px; font-weight: 700; }
+.nw.nw-med .med-jn-rij { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.nw.nw-med .med-jn { min-height: 48px; border: 1.5px solid var(--b1); border-radius: 12px; background: var(--card); font: 700 16px var(--font); color: var(--ink); cursor: pointer; }
+.nw.nw-med .med-jn.aan { background: var(--btn); border-color: var(--btn); color: var(--btnfg); }
+.nw.nw-med .med-jn:disabled, .nw.nw-med .med-bevestig:disabled { opacity: 0.6; }
+.nw.nw-med .med-opm { margin-top: 10px; }
+.nw.nw-med .med-antw-hint { margin-top: 6px; font-size: 12.5px; color: var(--g2); }
+.nw.nw-med .med-antw-fout { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--red2); }
 
 /* v428: meldingen bovenaan de planning (#medBalk, app._medBalkTekenen) */
 #medBalk { display: none; margin-bottom: 14px; }
@@ -1265,6 +1277,7 @@ body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 
 #medBalk .med-inhoud { display: block; flex: 1 1 auto; min-width: 0; }
 #medBalk .med-tekst { font-size: 14.5px; font-weight: 600; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: break-word; }
 #medBalk .med-van { display: block; margin-top: 3px; font-size: 12px; color: var(--g1); }
+#medBalk .med-vraagt { font-weight: 700; color: var(--amber2); }
 #medBalk .med-stip { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
 
 /* v428: Organisatie → Meldingen (alleen een afzender; app.loadMeldingen) */
@@ -1283,6 +1296,8 @@ body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 
 #screenMeldingen .med-k-lezers { display: none; margin-top: 6px; font-size: 13px; line-height: 1.55; color: var(--txt2); }
 #screenMeldingen .med-k-lezers.open { display: block; }
 #screenMeldingen .med-k-lezers b { color: var(--ink); font-weight: 600; }
+#screenMeldingen .med-k-rij + .med-k-rij { margin-top: 4px; }
+#screenMeldingen .med-k-opm { color: var(--g2); }
 #screenMeldingen .med-k-knoppen { display: flex; justify-content: flex-end; margin-top: 8px; }
 #screenMeldingen .med-k-weg { border: 1px solid var(--b1); background: none; border-radius: 10px; padding: 9px 14px; font: 600 13px var(--font); color: var(--g2); cursor: pointer; }
 #screenMeldingen .med-leeg { font-size: 13.5px; color: var(--g1); text-align: center; padding: 18px 8px; }
@@ -1439,3 +1454,74 @@ body.wissel-actief .offline-bar { top: calc(var(--header-h) + var(--safe-top) + 
 .detail-kluis { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding: 10px 12px;
   border-radius: 12px; background: rgba(249,157,62,.12); border-left: 3px solid var(--accent); font-size: 13px; color: var(--ink); }
 .detail-kluis b { font-family: 'Roboto Mono', ui-monospace, monospace; font-size: 20px; letter-spacing: .1em; word-break: break-all; text-align: right; }
+
+/* v436: Organisatie → Vrijdagmuziekje (alleen het bureel; ontwerp A "lijst met paneel"; app._vmzRender / _vmzSheetRender) */
+#screenVrijdagmuziek .vmz-sub { margin: 2px 2px 12px; font-size: 14px; line-height: 1.45; color: var(--g2); }
+#screenVrijdagmuziek .vmz-nu { padding: 18px; margin-bottom: 0; }
+#screenVrijdagmuziek .vmz-boven { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--g1); }
+#screenVrijdagmuziek .vmz-boven::before { content: ''; width: 18px; height: 2px; background: var(--accent); }
+#screenVrijdagmuziek .vmz-hoofd { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+#screenVrijdagmuziek .vmz-hoofd-t { flex: 1; min-width: 0; }
+#screenVrijdagmuziek .vmz-groot { font-size: 22px; font-weight: 400; letter-spacing: -.5px; color: var(--ink); overflow-wrap: anywhere; }
+.vmz-hint { font-size: 12.5px; line-height: 1.45; color: var(--g1); }
+#screenVrijdagmuziek .vmz-balk { height: 3px; margin-top: 8px; border-radius: 2px; background: var(--l1); overflow: hidden; }
+#screenVrijdagmuziek .vmz-balk i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .25s linear; }
+#screenVrijdagmuziek .vmz-daarna { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--l2); font-size: 13.5px; color: var(--g2); }
+#screenVrijdagmuziek .vmz-daarna b { color: var(--ink); font-weight: 600; }
+#screenVrijdagmuziek .vmz-sectie { display: flex; justify-content: space-between; margin: 22px 2px 8px; font-size: 12px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--g1); }
+#screenVrijdagmuziek .vmz-lijst { padding: 0; overflow: hidden; margin-bottom: 12px; }
+#screenVrijdagmuziek .vmz-rij { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 14px; cursor: pointer; }
+#screenVrijdagmuziek .vmz-rij + .vmz-rij { border-top: 1px solid var(--l2); }
+#screenVrijdagmuziek .vmz-rij:active { background: var(--wash); }
+#screenVrijdagmuziek .vmz-rij-t { flex: 1; min-width: 0; }
+#screenVrijdagmuziek .vmz-naam { font-size: 15px; font-weight: 600; letter-spacing: -.2px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#screenVrijdagmuziek .vmz-meta { margin-top: 2px; font-size: 12.5px; color: var(--g1); font-variant-numeric: tabular-nums; }
+#screenVrijdagmuziek .vmz-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+#screenVrijdagmuziek .vmz-chip { padding: 3px 7px; border: 1px solid; border-radius: 6px; font-size: 11px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#screenVrijdagmuziek .vmz-chip.std { color: var(--green2); background: var(--gwash); border-color: color-mix(in srgb, var(--green2) 35%, transparent); }
+#screenVrijdagmuziek .vmz-chip.per { color: var(--purple2); background: var(--pwash); border-color: var(--pborder); }
+#screenVrijdagmuziek .vmz-chip.nu { color: var(--amber2); background: var(--awash2); border-color: var(--aborder2); }
+#screenVrijdagmuziek .vmz-pijl { flex: 0 0 auto; font-size: 22px; color: var(--g3); }
+#screenVrijdagmuziek .vmz-op { margin-top: 4px; }
+.vmz-speel { flex: 0 0 44px; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 1px solid var(--b2); border-radius: 24px; background: var(--card); color: var(--ink); cursor: pointer; }
+.vmz-speel.groot { flex-basis: 56px; width: 56px; height: 56px; border-radius: 28px; background: var(--btn); border-color: var(--btn); color: var(--btnfg); }
+.vmz-speel.aan { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(249,157,62,.18); }
+/* de opslaan-balk blijft boven de navigatie staan zolang er wijzigingen zijn */
+#screenVrijdagmuziek .vmz-bewaar { display: none; position: sticky; bottom: calc(var(--nav-h, 64px) + var(--safe-bottom, 0px) + 8px); z-index: 4; margin-top: 16px; align-items: center; gap: 10px;
+  padding: 12px 14px; border: 1px solid var(--cb); border-radius: 14px; background: var(--card); box-shadow: var(--shadow-lg); }
+#screenVrijdagmuziek .vmz-bewaar.toon { display: flex; }
+#screenVrijdagmuziek .vmz-bewaar-t { flex: 1; min-width: 0; font-size: 13.5px; color: var(--g2); }
+#screenVrijdagmuziek .vmz-bewaar-t b { display: block; color: var(--ink); font-variant-numeric: tabular-nums; }
+#screenVrijdagmuziek .vmz-ongedaan { padding: 4px 0; border: 0; background: none; font: 500 13.5px var(--font); color: var(--g2); text-decoration: underline; cursor: pointer; }
+#screenVrijdagmuziek .vmz-bewaar .btn { width: auto; min-height: 44px; padding: 10px 20px; }
+/* het paneel van één muziekje (in #modalContent) */
+.vmz-sheet .modal-header h2 { overflow-wrap: anywhere; }
+.vmz-sheet .vmz-luister { margin-top: 14px; }
+.vmz-sheet .vmz-luister.aan { border-color: var(--accent); }
+.vmz-keuze { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--l2); cursor: pointer; font-size: 15px; color: var(--ink); }
+.vmz-keuze:first-of-type { border-top: 0; }
+.vmz-keuze input { flex: 0 0 auto; width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--ink); }
+body.dark-mode .vmz-keuze input, body.dark-mode .vmz-datum select { color-scheme: dark; }
+.vmz-keuze b { display: block; font-weight: 500; }
+.vmz-keuze small { display: block; margin-top: 2px; font-size: 12.5px; color: var(--g1); }
+.vmz-keuze.uit { opacity: .55; cursor: default; }
+.vmz-twee { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 0 14px 32px; }
+.vmz-twee > div { min-width: 0; }
+.vmz-lbl { margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--txt2); }
+.vmz-datum { display: flex; gap: 6px; }
+.vmz-datum select { min-width: 0; padding-left: 8px; padding-right: 4px; }
+.vmz-datum select:first-child { flex: 0 0 60px; }
+.vmz-datum select:last-child { flex: 1 1 auto; }
+.vmz-let-op { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--aborder2); border-radius: 10px; background: var(--awash2); color: var(--amber2); font-size: 13px; line-height: 1.4; }
+.vmz-knoppen { display: flex; gap: 10px; margin-top: 18px; }
+.vmz-knoppen .btn { flex: 1; }
+.vmz-knoppen .vmz-weg { background: none; color: var(--red2); border: 1px solid color-mix(in srgb, var(--red2) 40%, transparent); }
+.vmz-knoppen .vmz-weg:disabled { opacity: .4; }
+
+/* v437: stille uren (Meldingen op de gsm) */
+.stilte-uur { flex: 1; padding: 9px 10px; border: 1px solid var(--b1); border-radius: 10px; background: none; font: 500 14px var(--font); color: var(--ink); outline: none; }
+.stilte-uur:disabled, #screenStilte .toggle-switch input:disabled + .toggle-slider { opacity: .45; }
+
+/* v438: een weekenddag in de datumbalk (alleen als er iets gepland staat) */
+.date-chip.weekend .d-day, .date-chip.weekend .d-label { color: var(--amber2); }
+.date-chip.weekend.active .d-day, .date-chip.weekend.active .d-label { color: var(--ink); }

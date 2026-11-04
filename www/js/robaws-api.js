@@ -1009,6 +1009,24 @@ const RobawsAPI = {
      *  Zonder myUserId: fail-closed (lege lijst).
      *  excludeEmployeeId: sluit de eigen aanvragen uit (vier-ogen — je keurt
      *  je eigen verlof niet goed; voorkomt ook een vastlopende 4xx). */
+    /** v441 (melding Levi 4 nov 2026: "rolf heeft 84 aanvragen maar ziet er geen in de app"): de open aanvragen die op MIJ
+     *  wachten, via de Worker (route app-goedkeuringen, X-App-Sessie). Gemeten: de algemene sleutel (het API-account) krijgt
+     *  0 aanvragen terug, de Worker ziet ze wel en filtert per werknemer (nooit andermans). 20 s onthouden (verlof en
+     *  facturen vragen kort na elkaar). null = geen sessie, oude Worker of geen verbinding → de oude weg. */
+    async _goedkViaWorker() {
+        const nu = Date.now();
+        if (this._goedkMem && nu - this._goedkMem.t < 20000) return this._goedkMem.items;
+        try {
+            const s = this.sessieLees && this.sessieLees();
+            if (!s || !s.token) return null;
+            const r = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/bel-api/app-goedkeuringen', { headers: { 'X-App-Sessie': s.token } }, 15000);
+            if (!r.ok) return null;
+            const j = await r.json();
+            if (!j || !j.ok || !Array.isArray(j.items)) return null;
+            this._goedkMem = { t: nu, items: j.items };
+            return j.items;
+        } catch (e) { return null; }
+    },
     async getPendingLeaveApprovals(excludeEmployeeId, myUserId) {
         const uid = (myUserId != null && myUserId !== '') ? String(myUserId) : null;
         if (!uid) { console.warn('[Goedkeuring] geen userId meegegeven — geen verlof-goedkeuringen getoond'); return []; }
@@ -1016,6 +1034,9 @@ const RobawsAPI = {
         const seen = new Set();
         const SIZE = 100, MAX_PAGES = 20;
         let page = 0, totalPages = 1;
+        // v441: eerst via de Worker (de algemene sleutel van de app ziet de aanvragen niet meer: gemeten 4 nov 2026)
+        const viaWorker = await this._goedkViaWorker();
+        if (viaWorker) { for (const a of viaWorker) { const id = String(a.id); if (!seen.has(id)) { seen.add(id); all.push(a); } } totalPages = 0; }
         while (page < totalPages && page < MAX_PAGES) {
             const r = await this.get('approval-requests?open=true&include=userStates&page=' + page + '&size=' + SIZE, { bypassCache: true });
             if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
@@ -1090,6 +1111,7 @@ const RobawsAPI = {
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
+        this._goedkMem = null;   // v441: de lijst opnieuw vragen na een beslissing
         // Naverificatie: een accept door wie al besliste is een stille 204-no-op —
         // check dat de BESLISSER (eigen user of Rolf) nu écht beslist heeft.
         const verwachtUid = (eigenKey && uid) ? uid : String(this.KEY_OWNER_USER_ID);
@@ -1198,6 +1220,9 @@ const RobawsAPI = {
         const seen = new Set();
         const SIZE = 100, MAX_PAGES = 20;
         let page = 0, totalPages = 1;
+        // v441: eerst via de Worker (de algemene sleutel van de app ziet de aanvragen niet meer: gemeten 4 nov 2026)
+        const viaWorker = await this._goedkViaWorker();
+        if (viaWorker) { for (const a of viaWorker) { const id = String(a.id); if (!seen.has(id)) { seen.add(id); all.push(a); } } totalPages = 0; }
         while (page < totalPages && page < MAX_PAGES) {
             const r = await this.get('approval-requests?open=true&include=userStates,supplier&page=' + page + '&size=' + SIZE, { bypassCache: true });
             if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
@@ -1221,6 +1246,14 @@ const RobawsAPI = {
     /** Detail van één approval-request incl. de goedkeurders
      *  (userStates: [{userId, status: ACCEPTED|AWAITING_DECISION|REJECTED}]). */
     async getApprovalDetail(approvalId) {
+        // v441: eerst via de Worker (alleen als je zelf bij de aanvraag staat); lukt dat niet, de oude weg
+        try {
+            const s = this.sessieLees && this.sessieLees();
+            if (s && s.token) {
+                const w = await this._fetchWithTimeout(this.WORKER_AUTH_URL + '/bel-api/app-goedkeuring?id=' + encodeURIComponent(String(approvalId)), { headers: { 'X-App-Sessie': s.token } }, 15000);
+                if (w.ok) { const j = await w.json(); if (j && j.ok && j.item) return j.item; }
+            }
+        } catch (_e) {}
         const r = await this.get('approval-requests/' + approvalId + '?include=supplier,userStates', { bypassCache: true });
         if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
         return r.data || null;
@@ -1525,6 +1558,64 @@ const RobawsAPI = {
             offset += SIZE;
         }
         return all;
+    },
+
+    // =============================================
+    // v440: GEBRUIKTE CAMIONET BIJ HET UITKLOKKEN (vraag Levi 28 okt 2026: "We gaan binnenkort de uren automatisch laten
+    // verlopen doormiddel van API toegang van de camionet tracking. Maar dan is het wel super belangrijk dat de monteurs
+    // moeten aanduiden met welke camionet ze gereden hebben. Dit MOET ingevuld worden bij het uitklokken. Standaard moet hun
+    // eigen camionet ingevuld zijn." + "deze waarde in de tijdsregistratie zetten bij het veld 'Gebruikte voertuig'").
+    // Het veld = extraveld TEXT "Gebruikte voertuig", groep Tijdsregistratie, op de klok-werkbon (gemeten 28 okt). De waarde =
+    // de naam van het voertuig in Robaws Materieel (bv. "1-XVX-814"), zodat de tracking het exact kan koppelen;
+    // "Geen camionet" als er bewust geen camionet gebruikt werd.
+    // EIGEN_CAMIONET = de lijst van Levi (28 okt), op fichenummer (nooit op naam). Niet in de lijst = het voertuig dat in
+    // Robaws aan de werknemer toegewezen is (assignedEmployeeId), anders niets voorgekozen.
+    // =============================================
+    VOERTUIG_VELD: 'Gebruikte voertuig',
+    VOERTUIG_GEEN: 'Geen camionet',
+    EIGEN_CAMIONET: {
+        '9': '1-XVX-814',  '5': '1-XVX-814',    // Sascha, Jens
+        '10': '1-XXD-141',                        // Dax
+        '7': '1-YXT-129',                         // Glycera
+        '8': '1-XUD-635',                         // Hervé
+        '13': '1-WSW-605', '16': '1-WSW-605',   // Joshua, Vince
+        '11': '2-BQE-946',                        // Keng
+        '1': '2-ABA-191',                         // Levi
+        '12': '1-YXT-151',                        // Olivier
+        '3': '1-WSW-636',  '2': '1-WSW-636',    // Jelle, Stefan
+    },
+    /** "1-XVX-814" → "XVX 814" (zoals op de nummerplaat zonder het eerste cijfer) */
+    voertuigLabel(naam) {
+        const n = String(naam || '').trim();
+        const m = /^[0-9]-([A-Z]{2,3})-([0-9]{3})$/.exec(n);
+        return m ? m[1] + ' ' + m[2] : n;
+    },
+    /** De voertuigen voor de keuze bij het uitklokken: Materieel met Type "1. Bestelwagens"/"2. Personenwagens" (zelfde regel
+     *  als de klok-camionetten). Lukt Robaws niet, dan de voertuigen uit EIGEN_CAMIONET (de keuze mag nooit leeg blijven).
+     *  → [{ naam, label, toegewezen }] gesorteerd op label */
+    async klokVoertuigen() {
+        let lijst = [];
+        try {
+            const mats = await this.getMaterials();
+            for (const m of mats) {
+                const t = m.extraFields && m.extraFields['Type'];
+                const typeVal = t ? String(t.stringValue ?? t.value ?? '') : '';
+                if (!/^(1|2)[.]/.test(typeVal.trim()) || !m.name) continue;
+                if (/verkocht|buiten gebruik/i.test(String(m.status || ''))) continue;
+                lijst.push({ naam: String(m.name).trim(), label: this.voertuigLabel(m.name), toegewezen: m.assignedEmployeeId != null ? String(m.assignedEmployeeId) : '' });
+            }
+        } catch (e) {
+            console.warn('[RobawsAPI] voertuigen niet geladen, terugval op de vaste lijst:', e && e.message);
+        }
+        if (!lijst.length) lijst = [...new Set(Object.values(this.EIGEN_CAMIONET))].map(n => ({ naam: n, label: this.voertuigLabel(n), toegewezen: '' }));
+        return lijst.sort((a, b) => a.label.localeCompare(b.label));
+    },
+    /** De eigen camionet van een werknemer (fichenummer): de lijst van Levi, anders wat Robaws toewijst. '' = niets. */
+    eigenCamionet(employeeId, voertuigen) {
+        const id = String(employeeId || '');
+        if (this.EIGEN_CAMIONET[id]) return this.EIGEN_CAMIONET[id];
+        const t = (voertuigen || []).find(x => x.toegewezen && x.toegewezen === id);
+        return t ? t.naam : '';
     },
 
     // =============================================
@@ -5282,6 +5373,33 @@ const RobawsAPI = {
         return dayItems.filter(it => !met.has(String(it.id))).length;
     },
 
+    /** v438 (vraag Levi 23 okt 2026: "dat de werknemers de weekenddagen in de app zien wanneer er iets gepland staat op deze
+     *  dagen"): op welke dagen tussen van en tot (YYYY-MM-DD) staat er iets gepland voor deze werknemer? Verlof telt niet.
+     *  Zelfde lijst en zelfde adres als getPlanning (de cache deelt ze: meestal geen extra vraag aan Robaws). */
+    async geplandeDagen(employeeId, van, tot) {
+        const uit = new Set(), seen = new Set();
+        if (!employeeId || !van || !tot) return uit;
+        let offset = 0; const PAGE = 100;
+        for (let p = 0; p < 10; p++) {
+            const r = await this.get(`planning-items?employeeId=${employeeId}&limit=${PAGE}&offset=${offset}&sort=startDate:desc`);
+            if (r.code !== 200) break;
+            const items = (r.data && r.data.items) || [];
+            if (!items.length) break;
+            let added = 0;
+            for (const it of items) {
+                const k = String(it.id);
+                if (seen.has(k)) continue;
+                seen.add(k); added++;
+                const d = ((it.startDate || '') + '').split('T')[0];
+                if (d >= van && d <= tot && !it.timeOffCategoryId && !it.unavailableReason) uit.add(d);
+            }
+            const last = ((items[items.length - 1].startDate || '') + '').split('T')[0];
+            if (last < van || added === 0 || items.length < PAGE) break;
+            offset += PAGE;
+        }
+        return uit;
+    },
+
     /** opts.vers (v423): de werkbonnen LIVE lezen i.p.v. de replica — bij het uitklokken telt ook een werkbon die een
      *  collega net verstuurde. */
     async getPlanning(employeeId, date, userId = null, opts = null) {
@@ -8204,7 +8322,7 @@ const RobawsAPI = {
      */
     // v394: extraRegels = extra regels (bv. uitklokOpmerkingRegel) die in
     // dezelfde PUT meegaan; een opmerking die er al staat komt er niet dubbel op.
-    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark, extraRegels) {
+    async setTimeRegistrationUitgeklokt(workOrderId, uitgeklokt, appendRemark, extraRegels, velden) {
         const getRes = await this.get(`work-orders/${workOrderId}`, { bypassCache: true });  // v223: vers vóór full-replace-PUT
         if (getRes.code !== 200 || !getRes.data) {
             throw new Error('GET /work-orders/' + workOrderId + ' faalde (' + getRes.code + ')');
@@ -8212,6 +8330,10 @@ const RobawsAPI = {
         const wo = getRes.data;
         wo.extraFields = wo.extraFields || {};
         wo.extraFields['Uitgeklokt'] = { stringValue: uitgeklokt || '' };
+        // v440: extra velden in DEZELFDE PUT (bv. "Gebruikte voertuig"): { naam: { type, group, stringValue } }
+        if (velden && typeof velden === 'object') {
+            for (const [naam, waarde] of Object.entries(velden)) if (naam && waarde) wo.extraFields[naam] = waarde;
+        }
         if (appendRemark) {
             const existing = String(wo.remark || '').trim();
             wo.remark = existing ? (existing + '\n' + appendRemark) : appendRemark;

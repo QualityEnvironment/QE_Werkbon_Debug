@@ -1013,6 +1013,17 @@
         </div>
         <span class="org-pijl">→</span>
     </div>
+    <!-- v436: het vrijdagmuziekje kiezen (alleen het bureel; app.loadOrganisatie toont de kaart) -->
+    <div class="card card-clickable org-kaart" id="orgKaartVrijdag" onclick="app.openVrijdagmuziek()" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
+            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+        </svg>
+        <div style="flex:1;min-width:0">
+            <div class="org-kaart-t">Vrijdagmuziekje</div>
+            <div class="org-kaart-s">Kies wat iedereen hoort bij de laatste uitklok op vrijdag</div>
+        </div>
+        <span class="org-pijl">→</span>
+    </div>
     <!-- v408: rekenmachine voor verwarming, sanitair, elektriciteit en ventilatie (iedereen) -->
     <div class="card card-clickable org-kaart" id="orgKaartReken" onclick="app.openReken()">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;flex-shrink:0">
@@ -1044,12 +1055,25 @@
         <div class="dp-groep" style="margin-top:12px">Zichtbaar tot en met</div>
         <div class="dp-chips" id="medTot"></div>
         <div class="dp-hint" id="medTotTekst"></div>
+        <div class="dp-groep" style="margin-top:12px">Bevestiging vragen?</div>
+        <div class="dp-chips" id="medBev"></div>
+        <div class="dp-hint" id="medBevTekst"></div>
         <div class="dp-fout" id="medFout" style="display:none;margin-top:10px"></div>
         <button class="btn btn-primary btn-full" id="btnMedVerstuur" onclick="app.medVerstuur()" style="margin-top:14px">Melding versturen</button>
         <div class="dp-hint">Wie de app opent, krijgt de melding meteen te zien. Staat de app al open, dan verschijnt ze binnen enkele minuten. Tot de einddatum staat ze ook bovenaan de planning.</div>
     </div>
     <div class="section-header"><h2>Verstuurd</h2><button type="button" onclick="app.loadMeldingen()" style="background:none;border:0;padding:6px 2px;font:inherit;font-size:13px;font-weight:600;color:var(--g2);cursor:pointer">Vernieuwen</button></div>
     <div id="medLijst"></div>
+</div>
+
+<!-- ========== SCREEN: VRIJDAGMUZIEKJE (v436 + Worker v566; alleen het bureel, ontwerp A) ========== -->
+<div class="screen" id="screenVrijdagmuziek">
+    <div id="vmzHost"><div class="spinner"></div></div>
+    <input type="file" id="vmzBestand" accept="audio/mpeg,.mp3" style="display:none" onchange="app._vmzOplaad(this)">
+    <div class="vmz-bewaar" id="vmzBewaar">
+        <div class="vmz-bewaar-t"><b id="vmzTeller">0 wijzigingen</b><button type="button" class="vmz-ongedaan" onclick="app.vmzOngedaan()">Ongedaan maken</button></div>
+        <button type="button" class="btn btn-primary" id="btnVmzOpslaan" onclick="app.vmzOpslaan()">Opslaan</button>
+    </div>
 </div>
 
 <!-- ========== SCREEN: PROJECTEN (v391, bureel) ========== -->
@@ -1174,6 +1198,17 @@
             <span id="pgChevInstel" class="pg-group-chev">▾</span>
         </button>
         <div id="pgBodyInstel" class="pg-group-body" style="display:none">
+
+        <!-- v437: stille uren voor de meldingen op de gsm (APK 1.249) -->
+        <div class="card mb-prowcard" style="margin-bottom:14px;padding:4px 18px">
+            <div class="mb-prow" style="border-bottom:none" onclick="app.openStilte()">
+                <div style="flex:1;min-width:0">
+                    <div class="mb-prow-t">Meldingen op de gsm</div>
+                    <div class="mb-prow-s" id="pgStilteSub">Stil in het weekend of 's avonds</div>
+                </div>
+                <span class="mb-prow-arrow">→</span>
+            </div>
+        </div>
 
         <!-- v273: standaard terminal voor Terminal-betalingen (per toestel) -->
         <div class="card mb-prowcard monteur-hide" id="defaultTerminalCard" style="margin-bottom:14px;padding:4px 18px">
@@ -1485,6 +1520,43 @@
 </div>
 
 <!-- ========== SCREEN: TAAK-ONTVANGERS (v381 — bureel) ========== -->
+<!-- ========== SCREEN: MELDINGEN OP DE GSM (v437 + APK 1.249: stille uren) ========== -->
+<div class="screen" id="screenStilte">
+    <div class="section-header"><h2>Meldingen op de gsm</h2></div>
+    <div class="card" style="margin-bottom:12px">
+        <div style="font-size:13px;color:var(--qe-grey);line-height:1.5">
+            Kies wanneer je gsm geen meldingen van de QE-app geeft. Wat er in die tijd binnenkomt, krijg je daarna alsnog.
+            In de app zelf zie je alles zoals altijd.
+        </div>
+    </div>
+    <div id="stilteMelding" class="card" style="display:none;margin-bottom:12px;font-size:13px;line-height:1.5;color:var(--amber2);font-weight:500"></div>
+    <div class="card mb-prowcard" style="margin-bottom:12px;padding:4px 18px">
+        <div class="mb-prow">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Niet in het weekend</div>
+                <div class="mb-prow-s">Zaterdag en zondag de hele dag stil</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="stilteWeekend" onchange="app._stilteGewijzigd()"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="mb-prow" style="border-bottom:none">
+            <div style="flex:1;min-width:0">
+                <div class="mb-prow-t">Niet 's avonds en 's nachts</div>
+                <div class="mb-prow-s">Elke dag stil tussen twee uren</div>
+            </div>
+            <label class="toggle-switch"><input type="checkbox" id="stilteAvond" onchange="app._stilteGewijzigd()"><span class="toggle-slider"></span></label>
+        </div>
+        <div id="stilteUren" style="display:none;align-items:center;gap:10px;padding:0 0 14px;font-size:13.5px;color:var(--ink)">
+            <span>van</span>
+            <select id="stilteVan" onchange="app._stilteGewijzigd()" class="stilte-uur"></select>
+            <span>tot</span>
+            <select id="stilteTot" onchange="app._stilteGewijzigd()" class="stilte-uur"></select>
+        </div>
+    </div>
+    <div id="stilteSamen" style="font-size:12.5px;color:var(--qe-grey);margin:0 4px 12px;line-height:1.5"></div>
+    <button class="btn btn-primary" id="stilteOpslaan" style="width:100%" onclick="app.stilteOpslaan()" disabled>Opslaan</button>
+    <button id="stilteTerug" style="display:none;width:100%;margin-top:8px;background:none;border:1px solid var(--b1);border-radius:10px;padding:11px;color:var(--ink);font:500 13.5px var(--font)" onclick="app.openStilte()">Wijziging ongedaan maken</button>
+</div>
+
 <div class="screen" id="screenTaakOntvangers">
     <div class="section-header"><h2>Taak-ontvangers</h2></div>
     <div class="card" style="margin-bottom:12px">
@@ -1829,7 +1901,7 @@
 
     <div class="rb-deel">Wat altijd geldt</div>
     <div class="rb-kaart">
-        <div class="rb-regel"><span class="rb-nr">14</span><div>Je tijd wordt afgerond op <b>kwartieren</b>, met 4 minuten speling. Laden en lossen rondt af op 5 minuten.</div></div>
+        <div class="rb-regel"><span class="rb-nr">14</span><div>Je tijd wordt afgerond op <b>kwartieren</b>, met 4 minuten speling. Laden en lossen rondt af op het dichtste kwartier (minstens één kwartier).</div></div>
         <div class="rb-regel"><span class="rb-nr">15</span><div>Klok je in <b>ná je startuur</b>, dan staat die dag als "te laat".</div></div>
         <div class="rb-regel"><span class="rb-nr">16</span><div>Je <b>pauze</b> gaat er automatisch af, één keer per dag.</div></div>
         <div class="rb-regel"><span class="rb-nr">17</span><div>Meer dan <b>8 uur</b> op één dag zijn <b>overuren</b>. Zaterdag en zondag zijn altijd overuren.</div></div>
@@ -1942,7 +2014,7 @@
     </button>
     <!-- v391: "Aanvragen" is een compartiment van het onderdeel Organisatie geworden -->
     <button class="nav-item" data-screen="screenOrganisatie" id="navOrganisatie"
-        data-screens="screenAanvragen,screenVerlofDetail,screenGoedkeuren,screenFactuurDetail,screenMaterieelDetail,screenMaterieelAanvragen,screenProjecten,screenProjectDetail,screenDagplanningNieuw,screenReken,screenMeldingen"
+        data-screens="screenAanvragen,screenVerlofDetail,screenGoedkeuren,screenFactuurDetail,screenMaterieelDetail,screenMaterieelAanvragen,screenProjecten,screenProjectDetail,screenDagplanningNieuw,screenReken,screenMeldingen,screenVrijdagmuziek"
         onclick="app.openOrganisatie()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>

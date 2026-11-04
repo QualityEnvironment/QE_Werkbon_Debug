@@ -14,6 +14,33 @@
 (function (root) {
     'use strict';
     var LIJST = [
+        { v: 442, datum: '2026-11-04', items: [
+            { s: 'beter', rol: ['bureel'], titel: 'Je goedkeuringen staan er weer', tekst: 'Facturen en verlof die op jouw goedkeuring wachten, zie je weer onder Aanvragen. Goedkeuren en afkeuren gaat zoals vroeger.' },
+        ] },
+        { v: 441, datum: '2026-10-30', items: [
+            { s: 'beter', titel: 'Laden en lossen per kwartier', tekst: 'Laden en lossen wordt nu afgerond op het dichtste kwartier, net als je andere uren. Een korte scan telt altijd minstens een kwartier.' },
+        ] },
+        { v: 440, datum: '2026-10-28', items: [
+            { s: 'nieuw', rol: ['monteur', 'technieker'], titel: 'Met welke camionet reed je?', tekst: 'Bij het uitklokken vraagt de app met welke camionet je vandaag reed. Je eigen camionet staat al klaar. Reed je met een andere, kies die dan. Scande je de tag van een camionet, dan staat die klaar.' },
+        ] },
+        { v: 439, datum: '2026-10-27', items: [
+            { s: 'nieuw', titel: 'Zie of je uren nagekeken zijn', tekst: 'Bij Mijn uren staat nu onder elke dag of het bureel je uren al nakeek. Een groen vinkje betekent: klaar.', hoofdstuk: 'uren-nakijken' },
+            { s: 'beter', titel: 'Vergeten uit te klokken', tekst: 'Vergeet je uit te klokken, dan sluit de app die dag bij je volgende scan af om 15:30. Werkte je langer? Tik bij Mijn uren op die dag en vraag een aanpassing.', hoofdstuk: 'aanpassing' },
+        ] },
+        { v: 438, datum: '2026-10-23', items: [
+            { s: 'nieuw', titel: 'Werk in het weekend', tekst: 'Staat er voor jou iets gepland op zaterdag of zondag? Dan zie je die dag nu ook bovenaan in de planning. Tik erop om te zien wat er gepland is.' },
+        ] },
+        { v: 437, datum: '2026-10-19', items: [
+            { s: 'nieuw', titel: 'Stille uren voor je gsm', tekst: 'Wil je geen meldingen van de app in het weekend of ’s avonds? Ga naar Profiel, Instellingen, Meldingen op de gsm. Zet Niet in het weekend aan, of Niet ’s avonds en ’s nachts met je eigen uren, of allebei. Wat in die tijd binnenkomt, krijg je daarna alsnog. Hiervoor heb je app-versie 1.249 nodig.' },
+            { s: 'beter', rol: ['bureel'], titel: 'Goedkeuringen blijven weg', tekst: 'Veeg je de melding met de goedkeuringen weg, dan komt ze pas terug als er een nieuwe aanvraag bij komt. Ook met app-versie 1.249.' },
+        ] },
+        { v: 436, datum: '2026-10-16', items: [
+            { s: 'nieuw', rol: ['bureel'], titel: 'Het vrijdagmuziekje kiezen', tekst: 'Bij Organisatie staat nu Vrijdagmuziekje. Laad een mp3 op vanaf je gsm, beluister het en kies wat iedereen hoort bij de laatste uitklok op vrijdag. Koppel een muziekje aan een periode, bijvoorbeeld kerstmuziek van 1 tot 31 december. Daarna speelt vanzelf weer het standaardmuziekje. Niets verandert tot je op Opslaan tikt.' },
+        ] },
+        { v: 435, datum: '2026-10-16', items: [
+            { s: 'nieuw', titel: 'Meldingen met een vraag', tekst: 'Soms vraagt het bureel om een melding te bevestigen, of om Ja of Nee te antwoorden. Tik dan op Ik bevestig, of op Ja of Nee. Een opmerking erbij mag. Van gedacht veranderen kan: tik op het andere antwoord. Met Later komt de vraag terug als je de app opnieuw opent.', hoofdstuk: 'meldingen' },
+            { s: 'nieuw', rol: ['bureel'], titel: 'Bevestiging vragen bij een melding', tekst: 'Bij Organisatie, Meldingen kies je nu ook of je een bevestiging vraagt of een Ja/Nee-vraag stelt. Bij Verstuurd zie je wie bevestigde of wat iedereen antwoordde, met de opmerkingen.' },
+        ] },
         { v: 434, datum: '2026-10-16', items: [
             { s: 'nieuw', rol: ['bureel'], titel: 'Gsm’s en tablets in Logistiek', tekst: 'In Logistiek staat nu Gsm’s & tablets. Je ziet wie welk toestel heeft, sinds wanneer, de IMEI, het nummer en het abonnement. Tik op een toestel om het aan te passen of aan iemand anders te geven. Het is dezelfde lijst als in de hub.' },
         ] },
