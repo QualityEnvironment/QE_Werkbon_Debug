@@ -1804,14 +1804,14 @@ const RobawsAPI = {
         legeDrempel: 4,
         leverancier: 'Air Liquide',
         gassen: [
-            { key: 'acetyleen', naam: 'Acetyleen', prefix: 'Acetyleen', eenheid: '', vuldruk: 18, leegOnder: 5, huur: false, maten: ['Klein', 'Groot'], sub: {} },
-            { key: 'zuurstof', naam: 'Zuurstof', prefix: 'Zuurstof', eenheid: '', vuldruk: 200, leegOnder: 20, huur: false, maten: ['Klein', 'Groot'], sub: {} },
-            { key: 'stikstof', naam: 'Stikstof', prefix: 'Stikstof', eenheid: '', vuldruk: 200, leegOnder: 20, huur: false, maten: ['Groot'], sub: {} },
-            { key: 'menggas', naam: 'Menggas', prefix: 'Menggas', eenheid: '', vuldruk: 200, leegOnder: 20, huur: false, maten: ['Groot'], sub: {} },
+            { key: 'acetyleen', naam: 'Acetyleen', prefix: 'Acetyleen', eenheid: '', vuldruk: 18, leegOnder: 5, kleur: '#7A2E2A', huur: false, maten: ['Klein', 'Groot'], sub: {} },
+            { key: 'zuurstof', naam: 'Zuurstof', prefix: 'Zuurstof', eenheid: '', vuldruk: 200, leegOnder: 20, kleur: '#FFFFFF', huur: false, maten: ['Klein', 'Groot'], sub: {} },
+            { key: 'stikstof', naam: 'Stikstof', prefix: 'Stikstof', eenheid: '', vuldruk: 200, leegOnder: 20, kleur: '#1E1E1E', huur: false, maten: ['Groot'], sub: {} },
+            { key: 'menggas', naam: 'Menggas', prefix: 'Menggas', eenheid: '', vuldruk: 200, leegOnder: 20, kleur: '#5BA84A', huur: false, maten: ['Groot'], sub: {} },
             // v404: propaan voor de dakwerken = omruilfles, buiten het huurcontract. Een manometer zegt
             // niets: de druk blijft gelijk tot de fles bijna leeg is.
-            { key: 'propaan', naam: 'Propaan', prefix: 'Propaan', eenheid: 'kg', vuldruk: null, leegOnder: null, huur: false,
-              maten: ['10,5 kg', '35 kg'], sub: {} },
+            { key: 'propaan', naam: 'Propaan', prefix: 'Propaan', eenheid: '', vuldruk: null, leegOnder: null, huur: false,
+              maten: ['Klein', 'Groot'], sub: {} },
         ],
     },
     GAS_CONFIG_SLEUTEL: 'qe_gas_config',
@@ -1923,6 +1923,22 @@ const RobawsAPI = {
         const res = { facturen: uit, leverancier: 'Messer Belgium' };
         this._gasHuurCache = { at: nu, data: res };
         return res;
+    },
+    _gasKeyVan(naam) { return String(naam || '').toLowerCase().replace(/[^a-z0-9]/g, ''); },
+    /** v445: de flessen tegenover het contract, per gas en maat. Zelfde telling als de tegels in de hub. */
+    gasContractTelling(flessen) {
+        const c = this.gasConfig().contract;
+        if (!c || !Array.isArray(c.regels)) return null;
+        const regels = c.regels.filter((r) => Number(r.aantal) > 0).map((r) => ({ gas: r.gas, maat: r.maat, aantal: Number(r.aantal), key: this._gasKeyVan(r.gas), totaal: 0, vol: 0, halfvol: 0, leeg: 0, onbekend: 0 }));
+        let buiten = 0;
+        (flessen || []).forEach((m) => {
+            const key = this.gasSoortKey(m), maat = String(this.gasMaat(m) || '').toLowerCase();
+            const r = regels.find((x) => x.key === key && String(x.maat).toLowerCase() === maat);
+            if (!r) { buiten++; return; }
+            r.totaal++;
+            r[this.gasVulstand(m) || 'onbekend']++;
+        });
+        return { leverancier: c.leverancier, regels, buiten, totaal: regels.reduce((s, r) => s + r.totaal, 0), contract: regels.reduce((s, r) => s + r.aantal, 0) };
     },
     /** v443: de leverancier van het huurcontract (komt van de Worker). */
     gasLeverancier() { return this.gasConfig().leverancier || this.GAS_LEVERANCIER_STANDAARD; },
@@ -2366,7 +2382,9 @@ const RobawsAPI = {
         const lijst = Object.keys(per).map((k) => per[k]).sort((a, b) => a.soort.localeCompare(b.soort));
         lijst.forEach((r) => {
             r.tekort = r.min > 0 ? Math.max(0, r.min - r.beschikbaar) : 0;
-            r.stand = r.min <= 0 ? 'uit' : (r.beschikbaar <= 0 ? 'rood' : (r.beschikbaar <= c.amber ? 'amber' : 'ok'));
+            // v445: nog niet alle flessen van dit gas ingevoerd = nog geen oordeel; precies het minimum = in orde
+            const nodig = ((c.contract && c.contract.regels) || []).reduce((s, x) => s + (this._gasKeyVan(x.gas) === r.key ? (Number(x.aantal) || 0) : 0), 0);
+            r.stand = (r.min <= 0 || r.totaal < nodig) ? 'uit' : (r.beschikbaar <= 0 ? 'rood' : (r.beschikbaar < r.min ? 'amber' : 'ok'));
         });
         return { magazijn: mag, perSoort: lijst, leeg: leegTotaal,
             tekorten: lijst.filter((r) => r.stand === 'rood' || r.stand === 'amber'),

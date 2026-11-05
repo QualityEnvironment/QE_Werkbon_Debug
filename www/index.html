@@ -1632,7 +1632,7 @@
         </svg>
         <div style="flex:1;min-width:0">
             <div style="font-size:15px;font-weight:600;color:var(--ink)">Gasflessen</div>
-            <div id="logGasSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Zuurstof &amp; acetyleen in huur — waar, wie, hoe lang</div>
+            <div id="logGasSub" style="font-size:12.5px;color:var(--qe-grey);margin-top:2px">Waar elke fles is en wie ze heeft</div>
         </div>
         <span style="font-size:16px;color:var(--g3)">→</span>
     </div>
@@ -1770,10 +1770,9 @@
     <div id="gfFilters" style="display:flex;gap:8px;margin-bottom:10px">
         <select id="gfWeergave" class="form-input" style="flex:1" onchange="app.gfZet('weergave', this.value)">
             <option value="mijn">Bij mij</option>
-            <option value="project">Per project / plaats</option>
+            <option value="project">Per plaats</option>
             <option value="wie">Per verantwoordelijke</option>
-            <option value="soort">Per gassoort</option>
-            <option value="oud">Langst in huur eerst</option>
+            <option value="soort">Per gas</option>
         </select>
         <select id="gfSoort" class="form-input" style="flex:1" onchange="app.gfZet('soort', this.value)">
             <option value="">Alle gassen</option>

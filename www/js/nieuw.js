@@ -14,6 +14,9 @@
 (function (root) {
     'use strict';
     var LIJST = [
+        { v: 445, datum: '2026-11-05', items: [
+            { s: 'beter', rol: ['bureel'], titel: 'Gasflessen volgens het contract', tekst: 'Bij de gasflessen zie je bovenaan per gas en maat hoeveel flessen er zijn tegenover het contract. Bij elke fles staat waar ze is en wie ze heeft. De dagen in huur zijn weg: de huur ligt nu vast.' },
+        ] },
         { v: 444, datum: '2026-11-05', items: [
             { s: 'beter', rol: ['monteur', 'technieker'], titel: 'Met de camionet via het bureau', tekst: 'Reed je als chauffeur met de camionet van thuis naar het bureau en daarna naar de werf? Dan telt dat hele stuk nu bij je heenrit. De heenrit telt die dag niet meer als woon-werkverkeer.' },
         ] },
