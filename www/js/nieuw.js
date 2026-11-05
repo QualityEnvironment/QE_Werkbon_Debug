@@ -14,6 +14,12 @@
 (function (root) {
     'use strict';
     var LIJST = [
+        { v: 444, datum: '2026-11-05', items: [
+            { s: 'beter', rol: ['monteur', 'technieker'], titel: 'Met de camionet via het bureau', tekst: 'Reed je als chauffeur met de camionet van thuis naar het bureau en daarna naar de werf? Dan telt dat hele stuk nu bij je heenrit. De heenrit telt die dag niet meer als woon-werkverkeer.' },
+        ] },
+        { v: 443, datum: '2026-11-05', items: [
+            { s: 'beter', rol: ['bureel', 'monteur', 'technieker'], titel: 'Nieuwe gasflessen van Air Liquide', tekst: 'De gasflessen van Air Liquide staan in de app. Bij een nieuwe fles kies je het gas en klein of groot. Is een fles niet meer vol maar ook nog niet leeg, dan duid je In gebruik aan.' },
+        ] },
         { v: 442, datum: '2026-11-04', items: [
             { s: 'beter', rol: ['bureel'], titel: 'Je goedkeuringen staan er weer', tekst: 'Facturen en verlof die op jouw goedkeuring wachten, zie je weer onder Aanvragen. Goedkeuren en afkeuren gaat zoals vroeger.' },
         ] },

@@ -14606,7 +14606,8 @@ const app = {
             this._gfRender();
             // v388b: huurcontrole tegen de Messer-factuur — apart geladen, blokkeert de lijst niet
             // v395: kostprijzen = bureel
-            if (beheer && !this._gfHuur) RobawsAPI.gasHuurcontrole().then(h => { this._gfHuur = h; this._gfRender(); }).catch(() => {});
+            // v443: met het huurcontract ligt de huur vast, geen controle op facturen meer (oude config = nog de oude weg)
+            if (beheer && !this._gfHuur && !RobawsAPI.gasConfig().contract) RobawsAPI.gasHuurcontrole().then(h => { this._gfHuur = h; this._gfRender(); }).catch(() => {});
             const sub = document.getElementById('logGasSub');
             if (sub && beheer) {
                 const inHuur = this._gfItems.filter(m => !RobawsAPI.gasIsIngeleverd(m));
@@ -14650,7 +14651,7 @@ const app = {
             : '';
         const p = groot ? '4px 12px' : '2px 8px';
         const f = groot ? '13px' : '11.5px';
-        return '<span style="display:inline-block;padding:' + p + ';border-radius:99px;background:' + info.wash + ';color:' + info.kleur + ';font-size:' + f + ';font-weight:700;white-space:nowrap">' + info.emoji + ' ' + (meting.bar != null ? meting.label : info.label) + '</span>';
+        return '<span style="display:inline-block;padding:' + p + ';border-radius:99px;background:' + info.wash + ';color:' + info.kleur + ';font-size:' + f + ';font-weight:700;white-space:nowrap">' + info.emoji + ' ' + (meting.bar != null ? meting.label : (info.toon || info.label)) + '</span>';
     },
     /** v403: hoeveel flessen staan er BESCHIKBAAR (vol of halfvol) en vrij in
      *  het groot magazijn? Een fles zonder meting telt niet mee maar wordt
@@ -14901,7 +14902,7 @@ const app = {
         if (!f) return [];
         return this._gfGewijzigd().filter(k => !alleen || alleen.indexOf(k) >= 0).map(k => {
             const v = String(f.concept[k] || '');
-            if (k === 'vulstand') { if (/bar/i.test(v)) return 'vulstand ' + v; const i = RobawsAPI.gasVulstandInfo(v); return 'vulstand ' + (i ? i.label.toLowerCase() : 'niet ingevuld'); }
+            if (k === 'vulstand') { if (/bar/i.test(v)) return 'vulstand ' + v; const i = RobawsAPI.gasVulstandInfo(v); return 'vulstand ' + (i ? (i.toon || i.label).toLowerCase() : 'niet ingevuld'); }
             if (k === 'waar') return 'plaats ' + this._gfWaarNaam(v);
             if (k === 'emp') return 'verantwoordelijke ' + (v ? (this._gfEmpNaam(v) || '#' + v) : 'niemand');
             return 'huur sinds ' + this._gfDat(v);
@@ -14959,7 +14960,7 @@ const app = {
                 const aan = cMeting.key === v.key && !cBar;
                 return '<button onclick="app.gfVul(\'' + id + '\',\'' + v.key + '\')" style="flex:1;padding:14px 4px;border-radius:12px;cursor:pointer;font-size:15px;font-weight:700;border:2px solid ' +
                     (aan ? v.kleur : 'var(--l2,#EBE8E0)') + ';background:' + (aan ? v.wash : 'var(--card,#FFF)') + ';color:' + (aan ? v.kleur : 'var(--g2,#5F5E56)') + '">' +
-                    '<div style="font-size:20px;line-height:1.1">' + v.emoji + '</div>' + v.label + '</button>';
+                    '<div style="font-size:20px;line-height:1.1">' + v.emoji + '</div>' + (v.toon || v.label) + '</button>';
             }).join('') + '</div>' +
             // de manometer: nauwkeuriger dan de drie knoppen (niet bij propaan, v404)
             (!RobawsAPI.gasMetBar(gInfo.key) ? '<div style="font-size:11.5px;color:var(--g1,#85847C);margin-top:6px;line-height:1.4">Bij propaan zegt de manometer niets: de druk blijft gelijk tot de fles bijna leeg is. Til of weeg de fles.</div>' : (
@@ -15166,7 +15167,7 @@ const app = {
         const titel = this._gfNaamDelen(m).titel || 'De fles';
         const tekst = this._gfWijzTekst();
         const vul = RobawsAPI.gasVulstandInfo(f.concept.vulstand);
-        const ok = alleenVul && vul ? (titel + ' is nu ' + vul.label.toLowerCase()) : ('Opgeslagen: ' + tekst.join(', '));
+        const ok = alleenVul && vul ? (titel + ' is nu ' + (vul.toon || vul.label).toLowerCase()) : ('Opgeslagen: ' + tekst.join(', '));
         const knop = document.getElementById('gfBewaarKnop');
         if (knop && !this._gfBusy) { knop.disabled = true; knop.textContent = 'Bezig met opslaan…'; }
         this._gfLogOpen = false;
@@ -15390,7 +15391,7 @@ const app = {
             '    <input type="text" id="gfNwNr" class="form-input" placeholder="Flesnummer (staat op het etiket)" style="flex:1" inputmode="numeric" value="' + esc(voorNr || '') + '">' +
             '    <button class="btn btn-outline" style="flex:none" onclick="app.openGasScan(\'nummer\')">\uD83D\uDCF7 Scan</button>' +
             '  </div>' +
-            '  <input type="text" id="gfNwLev" class="form-input" list="gfMerken" placeholder="Leverancier" value="' + esc(RobawsAPI.GAS_LEVERANCIER_STANDAARD) + '" style="width:100%;margin-bottom:8px">' +
+            '  <input type="text" id="gfNwLev" class="form-input" list="gfMerken" placeholder="Leverancier" value="' + esc(RobawsAPI.gasLeverancier()) + '" style="width:100%;margin-bottom:8px">' +
             '  <datalist id="gfMerken">' + merken.map(b => '<option value="' + esc(b) + '">').join('') + '</datalist>' +
             '  <label style="display:block;font-size:12px;font-weight:600;color:var(--g2,#5F5E56);margin:6px 0 5px">In huur sinds</label>' +
             '  <input type="date" id="gfNwHuur" class="form-input" style="width:100%;margin-bottom:8px" value="' + vandaag + '" max="' + vandaag + '">' +
@@ -15565,7 +15566,7 @@ const app = {
         h += kopje('Welk gas?') + '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
             cfg.gassen.map(x => knop(k.gasKey === x.key, x.naam, null, 'app.gfKiesGas(\'' + x.key + '\')')).join('') + '</div>';
         if (g) {
-            h += kopje('Welke grootte? (' + (g.eenheid === 'kg' ? 'kg' : 'F = liter waterinhoud') + ')') +
+            h += kopje('Welke grootte?' + (g.eenheid === 'kg' ? ' (kg)' : '')) +
                 '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
                 g.maten.map(mt => knop(k.maat === mt, mt, (g.sub || {})[mt] || null, 'app.gfKiesMaat(\'' + esc(String(mt).replace(/'/g, '\\\'')) + '\')')).join('') + '</div>';
         }
@@ -15620,7 +15621,7 @@ const app = {
                 return await RobawsAPI.gasflesBewaar(k.bestaandId, { vulstand: vul, waar: mag ? { locId: mag.id, naam: mag.naam } : {} }, this._gfWie(), null);
             }
             const id = await RobawsAPI.createGasfles({
-                gasKey: k.gasKey, maat: k.maat, flesnr: k.nr, leverancier: RobawsAPI.GAS_LEVERANCIER_STANDAARD,
+                gasKey: k.gasKey, maat: k.maat, flesnr: k.nr, leverancier: RobawsAPI.gasLeverancier(),
                 huurSinds: new Date().toISOString().slice(0, 10), locId: mag ? mag.id : null, typeNaam,
             });
             return await RobawsAPI.gasflesBewaar(id, { vulstand: vul }, this._gfWie(), 'nieuw');
@@ -23416,7 +23417,7 @@ const app = {
     // =====================================================================
     // v417 (beslissing Levi 5 okt 2026): KILOMETERS BEREKEND + WOON-WERKVERKEER
     // De werknemer tikt geen kilometers meer in. De app berekent ze uit de tikken:
-    //   heen  = (bureau of thuis) → eerste werf van de dagplanning
+    //   heen  = (bureau of thuis) → eerste werf van de dagplanning (v444: promptKilometers telt thuis → bureau erbij als de ritten dat tonen)
     //   terug = laatste werf → (bureau of thuis)
     // Begin = de eerste inklok van de dag: op het bureau (bureau-tag, of camionet
     // binnen 500 m) = bureau, anders thuis = de plek van die inklok (GPS), met als
@@ -23909,12 +23910,28 @@ const app = {
                 + '<div style="font:500 22px var(--font,inherit);letter-spacing:-0.4px;color:var(--ink);white-space:nowrap">' + esc(km) + '<small style="font:400 13px var(--font,inherit);color:var(--g1);margin-left:2px">km</small></div></div>';
             const tekstRij = (titel, sub) => '<div style="padding:14px 0"><div style="font:500 15px var(--font,inherit);color:var(--ink)">' + esc(titel) + '</div>'
                 + (sub ? '<div style="font:400 13px/1.4 var(--font,inherit);color:var(--g1);margin-top:2px">' + esc(sub) + '</div>' : '') + '</div>';
+            // v444 (keuze Levi 5 nov 2026): reed de chauffeur met de camionet van thuis naar het bureau, dan hoort dat stuk bij de heenrit.
+            // Alleen de ritten van de camionet zeggen dat (de Worker kijkt het na). Een passagier reed niet; het bureel krijgt de vraag niet.
+            const heenMem = {};
+            let heenExtra = 0;
+            const heenVraag = (plaat) => {
+                if (!heenMem[plaat]) {
+                    heenMem[plaat] = RobawsAPI.thuisBureauKm(plaat).then((x) => { if (x == null) delete heenMem[plaat]; return x; });
+                }
+                return heenMem[plaat];
+            };
+            const heenKan = (k) => {
+                const mob = document.querySelector('input[name="kmMobility"]:checked');
+                const v = voertuigEl ? String(voertuigEl.value || '').trim() : '';
+                return !!(k && !k.al && k.km && k.km.ok && k.km.vanLabel === 'bureau' && v && v !== RobawsAPI.VOERTUIG_GEEN && (!mob || mob.value !== '-2'));
+            };
             const toon = (k) => {
                 if (!kaartEl) return;
                 if (k.al) {
                     kaartEl.innerHTML = tekstRij('Kilometers van vandaag staan al geboekt', 'Bij je eerste uitklok van vandaag.');
                 } else if (k.km && k.km.ok) {
-                    kaartEl.innerHTML = rij('Heen', cap(k.km.vanLabel) + ' → ' + k.km.eersteWerf, k.km.heen)
+                    const kmNu = RobawsAPI.kmMetThuisBureau(k.km, heenExtra);
+                    kaartEl.innerHTML = rij('Heen', cap(kmNu.vanLabel) + ' → ' + kmNu.eersteWerf, kmNu.heen)
                         + rij('Terug', k.km.laatsteWerf + ' → ' + k.km.naarLabel
                             + (eindeBureau ? '' : ' · wordt herrekend als je aan het bureau laden en lossen afsluit of de woon-werkverkeer-tag scant'), k.km.terug);
                     const eersteRij = kaartEl.firstElementChild;
@@ -23953,7 +23970,19 @@ const app = {
             const kmMetLimiet = Promise.race([kmBelofte, new Promise((r) => setTimeout(() => r({ al: false,
                 km: { ok: false, heen: 0, terug: 0, fout: 'de berekening duurde te lang' } }), 15000))]);
             let kmUitslag = null;
-            kmMetLimiet.then((k) => { kmUitslag = k; toon(k); });
+            const heenKijk = async () => {
+                if (!kmUitslag) return;
+                let x = 0;
+                if (heenKan(kmUitslag)) {
+                    const plaat = String(voertuigEl.value).trim();
+                    x = (await heenVraag(plaat)) || 0;
+                    if (String(voertuigEl.value).trim() !== plaat) return;   // intussen een andere camionet gekozen
+                }
+                if (x !== heenExtra) { heenExtra = x; toon(kmUitslag); }
+            };
+            kmMetLimiet.then((k) => { kmUitslag = k; toon(k); heenKijk(); });
+            if (voertuigEl) voertuigEl.addEventListener('change', heenKijk);
+            document.querySelectorAll('input[name="kmMobility"]').forEach((el) => el.addEventListener('change', heenKijk));
 
             const submit = async () => {
                 // v251: re-entry-guard — twee keer tikken op traag 4G gaf dubbele kilometerregels
@@ -23999,6 +24028,12 @@ const app = {
                     const k = await kmMetLimiet;
                     btn.textContent = 'Bevestigen…';
                     const regels = [];
+                    let kmBoek = k.km;
+                    if (heenKan(k)) {
+                        const x = await heenVraag(voertuigKeuze);
+                        if (x > 0) { kmBoek = RobawsAPI.kmMetThuisBureau(k.km, x); regels.push(RobawsAPI.heenViaBureauRegel(x, voertuigKeuze)); }
+                        else if (x == null) regels.push('heen via het bureau: niet nagekeken (geen antwoord van de tracking)');
+                    }
                     const mobRadio = document.querySelector('input[name="kmMobility"]:checked');
                     const mobilityTypeId = mobRadio ? parseInt(mobRadio.value, 10) : -3;
                     if (k.al) {
@@ -24006,12 +24041,12 @@ const app = {
                     } else if (k.km && k.km.ok) {
                         const r = await RobawsAPI.addCommuteEntry({
                             workOrderId, employeeId,
-                            distance: k.km.heen, returnDistance: k.km.terug, mobilityTypeId: mobilityTypeId,
+                            distance: kmBoek.heen, returnDistance: kmBoek.terug, mobilityTypeId: mobilityTypeId,
                         });
                         if (r.code !== 200 && r.code !== 201) throw new Error('Robaws (' + r.code + ')');
                         // v324: vlag direct na de POST — mislukt de uitklok hierna, dan boekt een retry niet dubbel
                         try { localStorage.setItem(kmFlagKey, new Date().toISOString()); } catch (_) {}
-                        regels.push(RobawsAPI.kmRegel(k.km));
+                        regels.push(RobawsAPI.kmRegel(kmBoek));
                     } else {
                         regels.push((k.km && k.km.geenWerf) ? 'km: geen werf vandaag' : RobawsAPI.kmRegel(k.km));
                     }
@@ -24025,7 +24060,7 @@ const app = {
                         }
                     }
                     m.remove();
-                    const kmTxt = (!k.al && k.km && k.km.ok) ? (k.km.heen + k.km.terug) + ' km' : '';
+                    const kmTxt = (!k.al && k.km && k.km.ok) ? (kmBoek.heen + kmBoek.terug) + ' km' : '';
                     self.toast(eindeBureau
                         ? 'Uitklokken bevestigd' + (kmTxt ? ' · ' + kmTxt : '') + ' · ' + RobawsAPI.WOONWERK_VERVOER[vervoer]
                         : (kmTxt ? 'Kilometers opgeslagen: ' + kmTxt : 'Uitklokken bevestigd'));
