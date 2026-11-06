@@ -1108,6 +1108,7 @@ const RobawsAPI = {
         const res = eigenKey
             ? await this._personalFetch('POST', 'approval-requests/' + approvalId + '/' + action, { reason: reason || '' })
             : await this.post('approval-requests/' + approvalId + '/' + action, { reason: reason || '' });
+        if (res.code === 404) throw new Error(this._AANVRAAG_404);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
@@ -1116,7 +1117,7 @@ const RobawsAPI = {
         // check dat de BESLISSER (eigen user of Rolf) nu écht beslist heeft.
         const verwachtUid = (eigenKey && uid) ? uid : String(this.KEY_OWNER_USER_ID);
         try {
-            const chk = await this.get('approval-requests/' + approvalId + '?include=userStates', { bypassCache: true });
+            const chk = await this._aanvraagLees(approvalId, 'userStates');
             const st = ((chk.data && chk.data.userStates) || []).find(s => String(s.userId) === verwachtUid);
             if (st && String(st.status) === 'AWAITING_DECISION') {
                 throw new Error('Robaws registreerde de beslissing niet');
@@ -1254,10 +1255,18 @@ const RobawsAPI = {
                 if (w.ok) { const j = await w.json(); if (j && j.ok && j.item) return j.item; }
             }
         } catch (_e) {}
-        const r = await this.get('approval-requests/' + approvalId + '?include=supplier,userStates', { bypassCache: true });
+        const r = await this._aanvraagLees(approvalId, 'supplier,userStates');
         if (r.code !== 200) throw new Error('Robaws gaf status ' + r.code);
         return r.data || null;
     },
+
+    /** v447 (melding Levi 6 nov 2026: Rolf krijgt een 404; gemeten: de algemene sleutel krijgt 404 op elke aanvraag, de eigen
+     *  sleutel van wie erop staat 200): één aanvraag lezen gaat met de eigen sleutel als die er is. */
+    async _aanvraagLees(approvalId, include) {
+        const pad = 'approval-requests/' + approvalId + '?include=' + include;
+        return this.hasOwnKey() ? await this._personalFetch('GET', pad) : await this.get(pad, { bypassCache: true });
+    },
+    _AANVRAAG_404: 'Robaws vindt deze aanvraag niet (404). Ze is niet meer open of staat niet op jouw naam. Ververs de lijst.',
 
     /** De document-id (meestal de PDF) van een aankoopfactuur ophalen. */
     async getPurchaseInvoiceDocumentId(invoiceId) {
@@ -1267,12 +1276,22 @@ const RobawsAPI = {
     },
 
     /** Voeg een extra goedkeurder (Robaws userId) toe aan een approval-request
-     *  (POST .../add-approver, geverifieerd → 204). */
+     *  (POST .../add-approver, geverifieerd → 204). v447: met de eigen sleutel, net als goedkeuren;
+     *  de algemene sleutel krijgt hier altijd 404. */
     async addApprovalApprover(approvalId, userId) {
-        const res = await this.post('approval-requests/' + approvalId + '/add-approver', { userId: String(userId) });
+        const eigenKey = this.hasOwnKey();
+        if (!eigenKey && this.isApiAccountActief()) {
+            throw new Error('er is nog geen eigen API-key actief voor jouw login. Voeg de goedkeurder toe in Robaws of vraag een kluis-key aan.');
+        }
+        const body = { userId: String(userId) };
+        const res = eigenKey
+            ? await this._personalFetch('POST', 'approval-requests/' + approvalId + '/add-approver', body)
+            : await this.post('approval-requests/' + approvalId + '/add-approver', body);
+        if (res.code === 404) throw new Error(this._AANVRAAG_404);
         if (res.code !== 200 && res.code !== 201 && res.code !== 204) {
             throw new Error('Robaws gaf status ' + res.code);
         }
+        this._goedkMem = null;   // de lijst opnieuw vragen: de aanvraag kan nu bij iemand anders staan
         return true;
     },
 
